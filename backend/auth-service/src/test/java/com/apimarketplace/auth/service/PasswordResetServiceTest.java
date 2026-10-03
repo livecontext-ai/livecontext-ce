@@ -532,7 +532,7 @@ class PasswordResetServiceTest {
         @Test
         @DisplayName("a rejected password leaves the token usable, so a typo does not cost the link")
         void weakPasswordDoesNotBurnTheToken() {
-            doThrow(new IllegalArgumentException("New password must be at least 8 characters"))
+            doThrow(new IllegalArgumentException("New password must be at least 12 characters"))
                     .when(passwordAuthService).validateNewPassword("short");
 
             assertThatThrownBy(() -> service.resetPassword("raw-token", "short"))
@@ -550,7 +550,7 @@ class PasswordResetServiceTest {
         @DisplayName("a bad password answers the same way for a VALID token as for a bogus one, so "
                 + "the endpoint is not a token-validity oracle")
         void aBadPasswordTellsNothingAboutTheToken() {
-            doThrow(new IllegalArgumentException("New password must be at least 8 characters"))
+            doThrow(new IllegalArgumentException("New password must be at least 12 characters"))
                     .when(passwordAuthService).validateNewPassword("short");
             when(tokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(liveRow()));
 

@@ -106,7 +106,11 @@ class McpProtocolServiceAggregationTest {
     @DisplayName("callTool routes a remote tool through the gateway and wraps its success")
     void callToolRoutesRemoteToolThroughGateway() throws Exception {
         when(registry.hasTool("table")).thenReturn(false);
-        when(remoteGateway.execute(eq("table"), anyMap(), eq("tenant-1"), eq("org-1"), eq("ADMIN")))
+        // Six-arg overload: the last argument carries the per-tool access modes derived from
+        // the caller's API-key scopes (LC-055). This call has no scopes (full access), so the
+        // map is empty, which is what unrestricted means.
+        when(remoteGateway.execute(eq("table"), anyMap(), eq("tenant-1"), eq("org-1"), eq("ADMIN"),
+                eq(Map.of())))
                 .thenReturn(ToolsProvider.ToolExecutionResult.success(Map.of("rows", 3)));
 
         Map<String, Object> result = withAggregation()
@@ -124,7 +128,7 @@ class McpProtocolServiceAggregationTest {
     @DisplayName("callTool reports a remote tool failure in-band with isError true")
     void callToolReportsRemoteFailure() throws Exception {
         when(registry.hasTool("table")).thenReturn(false);
-        when(remoteGateway.execute(eq("table"), anyMap(), any(), any(), any()))
+        when(remoteGateway.execute(eq("table"), anyMap(), any(), any(), any(), anyMap()))
                 .thenReturn(ToolsProvider.ToolExecutionResult.failure(
                         com.apimarketplace.agent.tools.ToolErrorCode.EXECUTION_FAILED, "datasource down"));
 

@@ -14,7 +14,8 @@ import type { NodeTypeSetting } from "@/lib/api/orchestrator/node-type-settings.
 import { NodeTypeCard, NodeTypeCategorySelect, IntegrationPlanList } from "./components";
 import { CapabilityPlanList } from "./components/CapabilityPlanList";
 import { planFeaturesService } from "@/lib/api/services/plan-features.service";
-import { nodeTypeCategory, countByCategory, type NodeCategory } from "./categories";
+import { nodeTypeCategory, countByCategory, NODE_CATEGORY_ORDER, type NodeCategory } from "./categories";
+import { urlEnum, urlNullable, useUrlSearchState, useUrlState } from "@/hooks/useUrlState";
 
 export default function NodeTypeSettingsPage() {
   const { isAuthenticated, isAuthChecking } = useAuthGuard();
@@ -30,8 +31,11 @@ export default function NodeTypeSettingsPage() {
   const [togglingTypes, setTogglingTypes] = useState<Set<string>>(new Set());
 
   // Filters
-  const [selectedCategory, setSelectedCategory] = useState<NodeCategory | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
+  // In the address, like the tab below, so a reload reopens the list as it was.
+  const [selectedCategory, setSelectedCategory] = useUrlState<NodeCategory | null>("category", null, {
+    codec: urlNullable(urlEnum(NODE_CATEGORY_ORDER)),
+  });
+  const [searchQuery, setSearchQuery] = useUrlSearchState("q");
 
   // Per-plan availability. Stored as one flat map (featureKey -> minPlan) holding
   // ONLY the exceptions: a key that is absent is available on every plan, which is
@@ -39,7 +43,12 @@ export default function NodeTypeSettingsPage() {
   const [requirements, setRequirements] = useState<Record<string, string>>({});
   const [planOptions, setPlanOptions] = useState<string[]>([]);
   const [savingPlanKeys, setSavingPlanKeys] = useState<Set<string>>(new Set());
-  const [tab, setTab] = useState<"nodes" | "integrations" | "capabilities">("nodes");
+  // The search, category and page under a tab describe that tab's list and leave with it.
+  const [tab, setTab] = useUrlState<"nodes" | "integrations" | "capabilities">("tab", "nodes", {
+    codec: urlEnum(["nodes", "integrations", "capabilities"]),
+    history: "push",
+    clears: ["q", "category", "page"],
+  });
 
   const { hasRole } = useAuth();
 
@@ -204,7 +213,7 @@ export default function NodeTypeSettingsPage() {
       )}
 
       {/* Header - matches the style of other settings pages (Credentials, etc.) */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <PageHeader icon={Blocks} title={t("title")} subtitle={t("subtitle")} />
         <div className="flex items-center gap-2">
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs font-medium">

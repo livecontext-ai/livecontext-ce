@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.common.web.UrlSafetyValidator;
 import com.apimarketplace.orchestrator.services.template.ReportedParams;
 
 import com.apimarketplace.credential.client.CredentialClient;
@@ -183,8 +184,17 @@ public class SendEmailNode extends BaseNode {
                 throw new IllegalArgumentException("Email subject is required");
             }
 
+            // SSRF (LC-075): the relay host and port come from a stored credential and go straight
+            // to a socket, so they get the shared outbound filter (private ranges allowed only on a
+            // self-hosted install, loopback and metadata never). The relay NAME stays in
+            // mail.smtp.host for certificate verification and SNI; the vetted ADDRESS is what the
+            // socket dials through the pinning factory, so a second DNS answer cannot redirect the
+            // send (LC-073).
+            java.net.InetAddress vettedRelay = UrlSafetyValidator.resolveOutboundHostSafe(smtpHost, smtpPort);
+
             // 4. Build SMTP session
             Properties props = buildSmtpProperties(smtpHost, smtpPort, smtpUsername, smtpUseTls, mailTimeouts);
+            UrlSafetyValidator.applyJavaMailAddressPinning(props, "mail.smtp", vettedRelay);
 
             Session session;
             if (smtpUsername != null && !smtpUsername.isBlank()) {
@@ -208,7 +218,7 @@ public class SendEmailNode extends BaseNode {
                     fromEmail, fromName, smtpUsername, replyTo, toEmail, ccEmail, bccEmail,
                     subject, body, isHtml, inReplyTo, references));
 
-            Transport.send(message);
+            sendMessage(session, message);
 
             String messageId = message.getMessageID();
 
@@ -334,6 +344,15 @@ public class SendEmailNode extends BaseNode {
      * a live SMTP server: whether TLS is enabled at all, and that certificate validation is never
      * disabled.
      */
+    /**
+     * The one place the relay is dialled. Package-private and overridable so a test can assert what
+     * the session was built with (the relay NAME in mail.smtp.host, the vetted ADDRESS in the
+     * pinning socket factory) without a live SMTP server.
+     */
+    void sendMessage(Session session, MimeMessage message) throws Exception {
+        Transport.send(message);
+    }
+
     static Properties buildSmtpProperties(String smtpHost, int smtpPort, String smtpUsername, boolean smtpUseTls) {
         return buildSmtpProperties(smtpHost, smtpPort, smtpUsername, smtpUseTls, MailTimeouts.defaults());
     }

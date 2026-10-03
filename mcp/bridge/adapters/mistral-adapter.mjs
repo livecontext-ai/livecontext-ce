@@ -18,6 +18,7 @@ import { resolve, join } from 'path';
 import { homedir } from 'os';
 import { applyResultMapping } from '../lib/stopReasonMapper.js';
 import { recordCallUsage, handleCodexStyleItemEvent, handleClaudeStyleAssistantMessage, handleFlatCliMessage, buildStdinPayload, incrementTurn } from '../lib/adapterHelpers.mjs';
+import { buildBaseChildEnv } from '../lib/childEnv.mjs';
 
 // ─── Configuration ────────────────────────────────────────────────────────
 
@@ -140,7 +141,8 @@ ${envEntries}
    * Copies auth credentials from the real home if they exist.
    */
   buildChildEnv(tmpDir) {
-    const env = { ...process.env };
+    // Platform secrets are stripped centrally - see lib/childEnv.mjs (LC-053).
+    const env = buildBaseChildEnv();
     if (tmpDir) {
       const realHome = homedir();
       const realVibeDir = join(realHome, '.vibe');

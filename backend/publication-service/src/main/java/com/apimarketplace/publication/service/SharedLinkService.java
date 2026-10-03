@@ -332,7 +332,12 @@ public class SharedLinkService {
         if (tokenBackfill != null) {
             tokenBackfill.heal(PublicationTokenAtRestBackfill.SHARED_LINK_RESOURCE_TOKENS, resourceToken);
         }
-        int deactivated = repository.deactivateByResourceTokenHash(TokenAtRest.hash(resourceToken));
+        // Every hash form the row can carry (current write form, pre-v2 password-keyed form,
+        // previous key generation), so a link hashed before a write-version flip is still reached.
+        int deactivated = 0;
+        for (String hash : TokenAtRest.hashCandidates(resourceToken)) {
+            deactivated += repository.deactivateByResourceTokenHash(hash);
+        }
         if (deactivated == 0) {
             logger.info("No active shared link to deactivate for this resource token");
         } else {

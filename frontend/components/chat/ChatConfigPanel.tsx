@@ -79,6 +79,8 @@ export function ChatConfigPanel({
   onPendingConfigurationSave,
 }: ChatConfigPanelProps) {
   const t = useTranslations('chatConfig');
+  // Heading of the model picker's group of unlisted (hidden) models.
+  const tActions = useTranslations('actions');
   const { config, updateConfig, isLoading, isSaving, error, target } = useChatConfig({
     agentId: agentId ?? null,
     conversationId: conversationId ?? null,
@@ -166,6 +168,7 @@ export function ChatConfigPanel({
               </div>
               {modelOverrideOpen ? (
                 <ModelPicker
+                  hiddenModelsLabel={tActions('unlistedModels')}
                   value={{
                     provider: config.compactionModelProvider ?? '',
                     id: config.compactionModelName ?? '',

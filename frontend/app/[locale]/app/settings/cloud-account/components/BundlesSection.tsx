@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import { urlEnum, useUrlState } from "@/hooks/useUrlState";
 import { Plug, SlidersHorizontal, Shield, Sparkles } from "lucide-react";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { useTranslations } from "next-intl";
@@ -18,7 +19,11 @@ export default function BundlesSection() {
   const { hasRole } = useAuth();
   const t = useTranslations("settings.bundles");
   const tSettings = useTranslations("settings");
-  const [section, setSection] = useState<"models" | "apis" | "skills">("models");
+  // In the address, so a reload stays on the same kind of bundle. The page's tab drops it.
+  const [section, setSection] = useUrlState<"models" | "apis" | "skills">("kind", "models", {
+    codec: urlEnum(["models", "apis", "skills"]),
+    history: "push",
+  });
 
   const tabs = [
     { id: "models" as const, label: t("tabModels"), icon: SlidersHorizontal },

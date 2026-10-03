@@ -221,7 +221,20 @@ public class AgentTaskContextModule implements ToolModule {
         result.put("hint", "Call agent(action='task_get_execution', task_id='" + taskId
                 + "', execution_id='<id>') to drill into a specific execution's messages and tool calls.");
 
-        return ToolExecutionResult.success(result);
+        return readResult(result, task.holdsRestrictedData());
+    }
+
+    /**
+     * CASA LC-066: a read that returns a RESTRICTED task's text (or a RESTRICTED execution's
+     * messages) carries the restricted tag, as the task's own delegation results do, so the
+     * reading execution is provider-checked from then on.
+     */
+    private static ToolExecutionResult readResult(Map<String, Object> result, boolean restricted) {
+        return restricted
+                ? ToolExecutionResult.success(result, Map.of(
+                        com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY,
+                        com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name()))
+                : ToolExecutionResult.success(result);
     }
 
     private Map<String, Object> buildTaskBlock(AgentTaskEntity task) {
@@ -418,7 +431,8 @@ public class AgentTaskContextModule implements ToolModule {
         result.put("hint", to < totalMessages
                 ? "More messages available. Call again with offset=" + to + "."
                 : "All messages returned.");
-        return ToolExecutionResult.success(result);
+        return readResult(result, task.holdsRestrictedData()
+                || com.apimarketplace.common.classification.DataSensitivity.parse(exec.getDataSensitivity()).isRestricted());
     }
 
     private Map<String, Object> buildMessagesBlock(List<AgentExecutionMessageEntity> page,

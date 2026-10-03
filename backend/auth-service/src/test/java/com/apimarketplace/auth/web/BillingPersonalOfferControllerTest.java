@@ -64,12 +64,17 @@ class BillingPersonalOfferControllerTest {
     void previewReturnsVerifiedPlanMatrix() throws Exception {
         when(offers.preview(7L, 42L, null, 3, "monthly")).thenReturn(new PersonalOfferService.OfferPreview(
                 "AVAILABLE", 42L, 5, Instant.now().plusSeconds(3600), 50000, "monthly",
-                List.of(new PersonalOfferService.PlanBonus("PRO", 8000, 10, "ELIGIBLE")), null));
+                List.of(new PersonalOfferService.PlanBonus("PRO", 8000, 10, "ELIGIBLE")), null,
+                List.of(new com.apimarketplace.auth.service.PersonalOfferSteps.Step(50000, 8000),
+                        new com.apimarketplace.auth.service.PersonalOfferSteps.Step(500000, 80000))));
         http.perform(post("/api/billing/offers/preview").header("X-User-ID", "7")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"offerId\":42,\"creditTierIndex\":3,\"billingCycle\":\"monthly\"}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.offerVersion").value(5))
-                .andExpect(jsonPath("$.plans[0].bonusCredits").value(8000));
+                .andExpect(jsonPath("$.plans[0].bonusCredits").value(8000))
+                // The tiers the page draws as its ladder.
+                .andExpect(jsonPath("$.steps[1].monthlyCredits").value(500000))
+                .andExpect(jsonPath("$.steps[1].bonusCredits").value(80000));
     }
 
     @Test

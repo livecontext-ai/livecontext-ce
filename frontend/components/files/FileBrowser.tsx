@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { samePageUrl, showSamePageUrl } from '@/lib/navigation/showSamePageUrl';
 import { useTranslations } from 'next-intl';
 import { Folder, FolderOpen, FolderPlus, FolderInput, History, Upload, Download, Trash2, Pencil, ArrowLeft, ChevronRight } from 'lucide-react';
 
@@ -42,6 +43,7 @@ import { SelectionActionBar, BulkBarButton } from '@/components/ui/SelectionActi
 import { useToast } from '@/components/Toast';
 import ToastContainer from '@/components/ToastContainer';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { urlEnum, useUrlSearchState, useUrlState, type UrlStateCodec } from '@/hooks/useUrlState';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 import {
   emitFilesDetailState,
@@ -86,6 +88,16 @@ import { track } from '@/lib/analytics/analytics';
 /** Default page size - must be one of the offered options (50 | 100). */
 const PAGE_SIZE = 50;
 
+/** The listing's page, a URL param owned by useStorageExplorer and dropped here with the folder. */
+const FILES_PAGE_PARAM = 'page';
+const VIEW_MODES: readonly FilesViewMode[] = ['grid', 'list'];
+
+/** A date filter bound as the date input holds it (`yyyy-mm-dd`), not the instant sent to the server. */
+const urlDay: UrlStateCodec<string> = {
+  parse: (raw) => (/^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : undefined),
+  serialize: (value) => value,
+};
+
 /**
  * The generation dialog, kept out of this page's first load.
  *
@@ -121,9 +133,11 @@ export function FileBrowser() {
   // ---- What the browser remembers, and where ----
   // The OPEN FOLDER lives in the URL: it describes what is on screen, so a refresh, a
   // browser Back, or a pasted link must land on the same folder instead of snapping back
-  // to the root. HOW the user looks at files (grid vs list, the sort criterion) lives in
-  // localStorage instead: it should follow them across folders and sessions rather than
-  // ride along in a link they share.
+  // to the root. So does the rest of the view (search, filters, page, grid vs list, sort),
+  // each under its own param, so a reload reopens the listing as it was.
+  // HOW the user likes to look at files (grid vs list, the sort criterion) is ALSO kept in
+  // localStorage, so it follows them across folders and sessions: the stored preference is
+  // the default, and the URL only spells a choice that differs from it.
   const urlFolder = searchParams.get(FILES_FOLDER_PARAM);
   const [storedViewMode, setStoredViewMode] = usePersistentState<FilesViewMode>(FILES_VIEW_MODE_STORAGE_KEY, 'grid');
   const [storedSort, setStoredSort] = usePersistentState<FilesSortPreference>(
@@ -132,11 +146,31 @@ export function FileBrowser() {
   );
   // Re-validated on read: a preference written by an older build (or hand-edited) must
   // degrade to the default, never render an unsortable listing or a blank view.
-  const viewMode = normalizeViewMode(storedViewMode);
+  const [viewMode, setViewMode] = useUrlState<FilesViewMode>('view', normalizeViewMode(storedViewMode), {
+    codec: urlEnum(VIEW_MODES),
+  });
   const savedSort = React.useMemo(() => normalizeSortPreference(storedSort), [storedSort]);
   // Seeds for the data hook's own state, read ONCE: after mount the hook is driven by
   // setSort / navigateToFolder, so these refs never need to stay in sync.
-  const seedRef = React.useRef({ folder: urlFolder, sort: savedSort });
+  // Search and the date range are held here, in the form they are typed in, and mirrored in
+  // the URL in that form; the hook is handed what the server filters on.
+  const [searchInput, setSearchInput] = useUrlSearchState('q');
+  const [dateFromInput, setDateFromInput] = useUrlState('from', '', { codec: urlDay });
+  const [dateToInput, setDateToInput] = useUrlState('to', '', { codec: urlDay });
+  // Boundaries are the READER'S midnight, not UTC midnight, because the day they typed is the day
+  // they see on the rows (which render in their display zone). Pinning the bounds to UTC put the
+  // last hours of every westward day in the next bucket: a file whose row reads "Jan 15" went
+  // missing from a filter asking for the 15th. The backend filters createdAt against these ISO
+  // instants, so the conversion has to happen here, where the zone is known.
+  const dateFromInstant = dayEdgeInstant(dateFromInput, 'start') ?? '';
+  const dateToInstant = dayEdgeInstant(dateToInput, 'end') ?? '';
+  const seedRef = React.useRef({
+    folder: urlFolder,
+    sort: savedSort,
+    search: searchInput,
+    dateFrom: dateFromInstant,
+    dateTo: dateToInstant,
+  });
 
   const {
     entries,
@@ -179,6 +213,13 @@ export function FileBrowser() {
     initialFolderId: seedRef.current.folder,
     initialSort: seedRef.current.sort.key,
     initialDirection: seedRef.current.sort.direction,
+    // Seeded, not set after mount: a filter that arrives one render late counts as a filter
+    // CHANGE, and a filter change goes back to the first page, wiping the one in the URL.
+    initialSearch: seedRef.current.search,
+    initialDateFrom: seedRef.current.dateFrom,
+    initialDateTo: seedRef.current.dateTo,
+    // This page owns its address (it is only ever mounted as /app/files).
+    urlState: true,
   });
 
   // V313: the breadcrumb trail the user has navigated into (root → … → current).
@@ -293,8 +334,10 @@ export function FileBrowser() {
 
   // ---- View + sort preferences ----
   const changeViewMode = React.useCallback((mode: FilesViewMode) => {
-    setStoredViewMode(normalizeViewMode(mode));
-  }, [setStoredViewMode]);
+    const next = normalizeViewMode(mode);
+    setViewMode(next);
+    setStoredViewMode(next);
+  }, [setViewMode, setStoredViewMode]);
 
   // Picking a criterion adopts its natural direction (A→Z for text, newest/biggest for
   // date and size); the toggle then flips it. Both are remembered for the next visit.
@@ -311,7 +354,6 @@ export function FileBrowser() {
   }, [sort, direction, setSort, setStoredSort]);
 
   // Search - debounced into the hook's server-side filter.
-  const [searchInput, setSearchInput] = React.useState('');
   const debouncedSearch = useDebouncedValue(searchInput, 300);
   React.useEffect(() => {
     setSearch(debouncedSearch);
@@ -320,22 +362,15 @@ export function FileBrowser() {
   // Every filter - search, source, date AND file-type - is server-side: changing
   // any of them re-queries the full DB set and re-paginates from page 0 (the hook
   // resets currentPage). Nothing is narrowed over the already-loaded page.
-  // Date inputs are yyyy-mm-dd; converted to ISO instants.
-  const [dateFromInput, setDateFromInput] = React.useState('');
-  const [dateToInput, setDateToInput] = React.useState('');
-  // Boundaries are the READER'S midnight, not UTC midnight, because the day they typed is the day
-  // they see on the rows (which render in their display zone). Pinning the bounds to UTC put the
-  // last hours of every westward day in the next bucket: a file whose row reads "Jan 15" went
-  // missing from a filter asking for the 15th. The backend filters createdAt against these ISO
-  // instants, so the conversion has to happen here, where the zone is known.
-  const handleDateFrom = React.useCallback((v: string) => {
-    setDateFromInput(v);
-    setDateFrom(dayEdgeInstant(v, 'start') ?? '');
-  }, [setDateFrom]);
-  const handleDateTo = React.useCallback((v: string) => {
-    setDateToInput(v);
-    setDateTo(dayEdgeInstant(v, 'end') ?? '');
-  }, [setDateTo]);
+  // Date inputs are yyyy-mm-dd; converted to ISO instants (see dateFromInstant above). Derived
+  // from the input rather than set beside it, so the filter also follows a date that came back
+  // through the address (Back out of a folder).
+  React.useEffect(() => {
+    setDateFrom(dateFromInstant);
+  }, [dateFromInstant, setDateFrom]);
+  React.useEffect(() => {
+    setDateTo(dateToInstant);
+  }, [dateToInstant, setDateTo]);
 
   const filtersActive = !!search || !!sourceTypeFilter || !!dateFrom || !!dateTo || fileType !== '_all';
 
@@ -415,10 +450,21 @@ export function FileBrowser() {
     // belongs to the workspace we just left. Through the same helper as every other
     // navigation, so any OTHER query param survives. `replace`, not `push`: leaving a
     // workspace is not a navigation step the user should be able to Back into.
-    const query = folderQueryString(searchParams, null);
-    router.replace(query ? `${pathname}?${query}` : pathname);
+    // The page goes with it, in the SAME navigation: the listing reads its page from the
+    // address, and a separate setPage(0) would write an address built from the query of the
+    // last render, putting the folder straight back.
+    const params = new URLSearchParams(folderQueryString(searchParams, null));
+    params.delete(FILES_PAGE_PARAM);
+    const query = params.toString();
+    // Through the history API, which changes the address at once: a router navigation is
+    // applied later, and the page reset that the folder change below triggers would be written
+    // onto the address still holding the folder, putting it straight back.
+    showSamePageUrl(
+      query ? `${pathname}?${query}` : pathname,
+      samePageUrl(pathname, searchParams),
+      'replace',
+    );
     navigateToFolder(null);
-    setPage(0);
     refresh();
   });
 
@@ -1093,8 +1139,8 @@ export function FileBrowser() {
               onSourceTypeChange={setSourceTypeFilter}
               dateFrom={dateFromInput}
               dateTo={dateToInput}
-              onDateFromChange={handleDateFrom}
-              onDateToChange={handleDateTo}
+              onDateFromChange={setDateFromInput}
+              onDateToChange={setDateToInput}
               viewMode={viewMode}
               onViewModeChange={changeViewMode}
               sortKey={sort}

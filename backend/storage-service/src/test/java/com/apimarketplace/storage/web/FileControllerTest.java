@@ -244,7 +244,7 @@ class FileControllerTest {
 
             assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(r.getHeaders().getFirst("Content-Security-Policy"))
-                    .isEqualTo("default-src 'none'; style-src 'unsafe-inline'");
+                    .isEqualTo(com.apimarketplace.common.web.SafeFileServeHeaders.CONTENT_SECURITY_POLICY);
             assertThat(r.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
             assertThat(r.getHeaders().getFirst("Cache-Control")).isEqualTo("public, max-age=86400");
             assertThat(r.getHeaders().getFirst("Content-Type")).isEqualTo("image/svg+xml");
@@ -325,6 +325,63 @@ class FileControllerTest {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             r.getBody().writeTo(out);
             assertThat(out.toString()).isEqualTo("hello");
+        }
+
+        @Test
+        @DisplayName("LC-020: /by-id never renders an uploaded text/html file inline - attachment + nosniff + sandbox CSP")
+        void rawByIdForcesHtmlToAttachment() {
+            UUID id = UUID.randomUUID();
+            StorageEntity e = new StorageEntity();
+            e.setId(id);
+            e.setStorageType("S3_FILE");
+            e.setS3Key(OWN_TENANT + "/general/x/payload.html");
+            e.setFileName("payload.html");
+            e.setMimeType("text/html");
+            when(tenantResolver.resolveOrgId(request)).thenReturn("org-7");
+            when(storageIndex.getEntityByIdForScope(id, OWN_TENANT, "org-7")).thenReturn(Optional.of(e));
+            byte[] payload = "<script>alert(1)</script>".getBytes();
+            when(fileStorageService.openStream(e.getS3Key())).thenReturn(Optional.of(
+                    new DownloadStream(new ByteArrayInputStream(payload), payload.length, "text/html")));
+
+            ResponseEntity<StreamingResponseBody> r = controller.rawById(id, "inline", request);
+
+            assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(r.getHeaders().getFirst("Content-Disposition")).startsWith("attachment;");
+            assertThat(r.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+            assertThat(r.getHeaders().getFirst("Content-Security-Policy")).contains("sandbox");
+        }
+
+        @Test
+        @DisplayName("LC-020: the inline-row branch (no s3 key) applies the same rule; an image still renders inline")
+        void rawByIdInlineRowBranchAndImagesStayInline() throws IOException {
+            UUID htmlId = UUID.randomUUID();
+            StorageEntity html = new StorageEntity();
+            html.setId(htmlId);
+            html.setStorageType("TEXT");
+            html.setFileName("page.html");
+            html.setMimeType("text/html");
+            html.setDataText("<script>alert(1)</script>");
+            UUID pngId = UUID.randomUUID();
+            StorageEntity png = new StorageEntity();
+            png.setId(pngId);
+            png.setStorageType("S3_FILE");
+            png.setS3Key(OWN_TENANT + "/general/x/pic.png");
+            png.setFileName("pic.png");
+            png.setMimeType("image/png");
+            when(tenantResolver.resolveOrgId(request)).thenReturn("org-7");
+            when(storageIndex.getEntityByIdForScope(htmlId, OWN_TENANT, "org-7")).thenReturn(Optional.of(html));
+            when(storageIndex.getEntityByIdForScope(pngId, OWN_TENANT, "org-7")).thenReturn(Optional.of(png));
+            when(fileStorageService.openStream(png.getS3Key())).thenReturn(Optional.of(
+                    new DownloadStream(new ByteArrayInputStream(new byte[]{1}), 1, "image/png")));
+
+            ResponseEntity<StreamingResponseBody> htmlR = controller.rawById(htmlId, "inline", request);
+            ResponseEntity<StreamingResponseBody> pngR = controller.rawById(pngId, "inline", request);
+
+            assertThat(htmlR.getHeaders().getFirst("Content-Disposition")).startsWith("attachment;");
+            assertThat(htmlR.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+            assertThat(htmlR.getHeaders().getFirst("Content-Security-Policy")).contains("sandbox");
+            assertThat(pngR.getHeaders().getFirst("Content-Disposition")).startsWith("inline;");
+            assertThat(pngR.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
         }
 
         @Test

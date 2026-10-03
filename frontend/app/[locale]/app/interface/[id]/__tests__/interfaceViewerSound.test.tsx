@@ -26,7 +26,12 @@ vi.mock('@/components/LoadingSpinner', () => ({ default: () => <div data-testid=
 // Frozen for the same reason as the auth mock: the page's fetch callback is keyed on the
 // router, so a fresh object per render re-runs the fetch forever.
 const ROUTER = { push: vi.fn() };
-vi.mock('next/navigation', () => ({ useRouter: () => ROUTER }));
+// The page keeps the item on screen in the address (`?page=`), so it also reads the pathname
+// and the query: those come from the shared in-memory URL, the router stays the frozen one.
+vi.mock('next/navigation', async () => {
+  const mod = await import('@/lib/folders/testing/fakeFolderRouter');
+  return { ...mod.fakeFolderRouter.nextNavigationModule(), useRouter: () => ROUTER };
+});
 vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
 // One frozen object: a fresh one per render changes `user`'s identity every time, and any
 // effect keyed on it then re-runs forever.
@@ -49,7 +54,10 @@ import {
   emitInterfaceViewerControlsToggle,
   onInterfaceViewerControls,
 } from '@/lib/interfaces/interfaceViewerBus';
+import { fakeFolderRouter } from '@/lib/folders/testing/fakeFolderRouter';
 import InterfaceDetailPage from '../page';
+
+const VIEWER_PATH = '/en/app/interface/i1';
 
 /** The page reads its id through React's `use()`, which needs a settled promise. */
 const params = Promise.resolve({ id: 'i1' });
@@ -64,6 +72,7 @@ const reportAudio = (hasAudio: boolean) =>
   });
 
 beforeEach(() => {
+  fakeFolderRouter.reset(VIEWER_PATH);
   preview.props = [];
   api.getInterface.mockResolvedValue({
     id: 'i1',
@@ -225,5 +234,59 @@ describe('the control the reader gets in exchange', () => {
     await reportAudio(false);
 
     expect(screen.queryByTestId('interface-sound-toggle')).toBeNull();
+  });
+});
+
+describe('the item on screen lives in the address', () => {
+  /** A datasource-backed interface with `total` items, one per page. */
+  const withItems = (total: number) => {
+    api.getInterface.mockResolvedValue({
+      id: 'i1', tenantId: 't1', name: 'Launch page', htmlTemplate: '<p>{{title}}</p>',
+      dataSourceId: 5, isPublic: false, isActive: true,
+    });
+    api.renderInterfaceWithDatasource.mockResolvedValue({
+      htmlTemplate: '<p>{{title}}</p>',
+      items: [{ data: { title: 'row' } }],
+      pagination: { totalItems: total, totalPages: total },
+    });
+  };
+  /** The two arrows around the "n / total" counter: [older, newer]. */
+  const arrows = (counter: string) =>
+    Array.from(screen.getByText(counter).parentElement!.querySelectorAll('button'));
+
+  it('opened on ?page=3, asks for the third item first, which is what a reload does', async () => {
+    withItems(5);
+    fakeFolderRouter.navigate(`${VIEWER_PATH}?page=3`, 'replace');
+
+    await renderViewer();
+
+    await waitFor(() => expect(api.renderInterfaceWithDatasource).toHaveBeenCalled());
+    // The address counts from 1, the request from 0. The FIRST request already carries it.
+    expect(api.renderInterfaceWithDatasource.mock.calls[0]).toEqual(['i1', { page: 2, size: 1 }]);
+  });
+
+  it('writes the item to the address when the reader steps to an older one, and drops it on the newest', async () => {
+    withItems(5);
+    await renderViewer();
+    await waitFor(() => expect(screen.getByText('5 / 5')).toBeInTheDocument());
+
+    await act(async () => arrows('5 / 5')[0].click());
+
+    expect(fakeFolderRouter.search()).toBe('page=2');
+    expect(fakeFolderRouter.navigations.at(-1)?.method).toBe('replace');
+    await waitFor(() => expect(api.renderInterfaceWithDatasource).toHaveBeenLastCalledWith('i1', { page: 1, size: 1 }));
+
+    await act(async () => arrows('4 / 5')[1].click());
+    expect(fakeFolderRouter.search()).toBe('');
+  });
+
+  it('lands on the last item when the address asks for one past the end', async () => {
+    withItems(5);
+    fakeFolderRouter.navigate(`${VIEWER_PATH}?page=9`, 'replace');
+
+    await renderViewer();
+
+    await waitFor(() => expect(fakeFolderRouter.search()).toBe('page=5'));
+    await waitFor(() => expect(api.renderInterfaceWithDatasource).toHaveBeenLastCalledWith('i1', { page: 4, size: 1 }));
   });
 });

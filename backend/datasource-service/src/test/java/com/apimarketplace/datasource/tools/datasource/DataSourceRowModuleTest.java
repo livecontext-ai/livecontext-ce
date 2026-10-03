@@ -967,4 +967,147 @@ class DataSourceRowModuleTest {
             assertThat(dataOf(res.get())).doesNotContainKey("warnings");
         }
     }
+
+    /**
+     * LC-066/LC-011 CASA re-audit item 2: the MCP {@code table} tool has no orchestrator run to
+     * consult ({@code StepPayloadService.isRunRestricted}), so it reads the SAME
+     * {@code DataSensitivity.CREDENTIAL_KEY} tag {@code RestrictedDataTransferGuard} already
+     * stamps on the chat turn's execution credentials for a restricted conversation. Pre-fix,
+     * neither direction was wired: a write inside a restricted conversation stored an untagged
+     * row, and a read result never carried the tag back into {@code conversation.tool_results}.
+     */
+    @Nested
+    @DisplayName("LC-066/LC-011 restricted-data classification")
+    class RestrictedDataClassificationTests {
+
+        private static final String SENSITIVITY_KEY =
+                com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY;
+
+        private ToolExecutionContext restrictedCtx() {
+            return new ToolExecutionContext(TENANT, Map.of(SENSITIVITY_KEY, "RESTRICTED"),
+                    Map.of(), Set.of(), null, null, null, null);
+        }
+
+        @Test
+        @DisplayName("insert_rows in a restricted conversation sets CreateRowRequest.restricted=true")
+        void insertRowsInRestrictedConversationSetsRequestFlag() {
+            when(dataSourceService.getDataSource(3L)).thenReturn(Optional.of(fakeDs(3L, "T")));
+            CrudResult result = CrudResult.success(CrudOperation.CREATE_ROW, "OK",
+                    CrudResult.ResultData.forCreate(List.of(1L)));
+            ArgumentCaptor<CrudRequest> captor = ArgumentCaptor.forClass(CrudRequest.class);
+            when(crudExecutorService.execute(captor.capture(), eq(TENANT), any())).thenReturn(result);
+
+            module.execute("insert_rows",
+                    Map.of("table_id", 3, "rows", List.of(Map.of("subject", "wire transfer"))),
+                    TENANT, restrictedCtx());
+
+            assertThat(captor.getValue().isRestricted()).isTrue();
+        }
+
+        @Test
+        @DisplayName("insert_rows in an ordinary conversation leaves restricted=false")
+        void insertRowsInOrdinaryConversationLeavesFlagFalse() {
+            when(dataSourceService.getDataSource(3L)).thenReturn(Optional.of(fakeDs(3L, "T")));
+            CrudResult result = CrudResult.success(CrudOperation.CREATE_ROW, "OK",
+                    CrudResult.ResultData.forCreate(List.of(1L)));
+            ArgumentCaptor<CrudRequest> captor = ArgumentCaptor.forClass(CrudRequest.class);
+            when(crudExecutorService.execute(captor.capture(), eq(TENANT), any())).thenReturn(result);
+
+            module.execute("insert_rows",
+                    Map.of("table_id", 3, "rows", List.of(Map.of("name", "ok"))),
+                    TENANT, ctxWithOrg(ORG));
+
+            assertThat(captor.getValue().isRestricted()).isFalse();
+        }
+
+        @Test
+        @DisplayName("insert_rows with a null context (no chat turn / no credentials) leaves restricted=false")
+        void insertRowsWithNullContextLeavesFlagFalse() {
+            when(dataSourceService.getDataSource(3L)).thenReturn(Optional.of(fakeDs(3L, "T")));
+            CrudResult result = CrudResult.success(CrudOperation.CREATE_ROW, "OK",
+                    CrudResult.ResultData.forCreate(List.of(1L)));
+            ArgumentCaptor<CrudRequest> captor = ArgumentCaptor.forClass(CrudRequest.class);
+            when(crudExecutorService.execute(captor.capture(), eq(TENANT), any())).thenReturn(result);
+
+            module.execute("insert_rows",
+                    Map.of("table_id", 3, "rows", List.of(Map.of("name", "ok"))), TENANT, null);
+
+            assertThat(captor.getValue().isRestricted()).isFalse();
+        }
+
+        @Test
+        @DisplayName("update_rows in a restricted conversation sets UpdateRowRequest.restricted=true")
+        void updateRowsInRestrictedConversationSetsRequestFlag() {
+            when(dataSourceService.getDataSource(3L)).thenReturn(Optional.of(fakeDs(3L, "T")));
+            CrudResult result = CrudResult.success(CrudOperation.UPDATE_ROW, "OK",
+                    CrudResult.ResultData.forUpdate(1));
+            ArgumentCaptor<CrudRequest> captor = ArgumentCaptor.forClass(CrudRequest.class);
+            when(crudExecutorService.execute(captor.capture(), eq(TENANT), any())).thenReturn(result);
+
+            module.execute("update_rows", Map.of(
+                    "table_id", 3,
+                    "where", Map.of("column", "id", "operator", "=", "value", 1),
+                    "set", Map.of("status", "closed")
+            ), TENANT, restrictedCtx());
+
+            assertThat(captor.getValue().isRestricted()).isTrue();
+        }
+
+        @Test
+        @DisplayName("query_rows in a restricted conversation sets ReadRowRequest.restricted=true "
+            + "(the interim guard, so a read echoes the tag even for rows written before the conversation was tainted)")
+        void queryRowsInRestrictedConversationSetsRequestFlag() {
+            CrudResult result = CrudResult.success(CrudOperation.READ_ROW, "OK",
+                    CrudResult.ResultData.forRead(List.of(Map.of("name", "Alice")), false, 0));
+            ArgumentCaptor<CrudRequest> captor = ArgumentCaptor.forClass(CrudRequest.class);
+            when(crudExecutorService.execute(captor.capture(), eq(TENANT), any())).thenReturn(result);
+
+            module.execute("query_rows", Map.of("table_id", 5), TENANT, restrictedCtx());
+
+            assertThat(captor.getValue().isRestricted()).isTrue();
+        }
+
+        @Test
+        @DisplayName("query_rows whose result CrudResult tags RESTRICTED stamps the tool result metadata "
+            + "with DataSensitivity.CREDENTIAL_KEY - the same channel ToolResultService reads")
+        void queryRowsRestrictedResultStampsMetadata() {
+            CrudResult result = CrudResult.success(CrudOperation.READ_ROW, "OK",
+                    CrudResult.ResultData.forRead(List.of(Map.of("subject", "wire transfer")), false, 0,
+                            com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name()));
+            when(crudExecutorService.execute(any(CrudRequest.class), eq(TENANT), any())).thenReturn(result);
+
+            Optional<ToolExecutionResult> res = module.execute("query_rows", Map.of("table_id", 5), TENANT, null);
+
+            assertThat(res).isPresent();
+            assertThat(res.get().metadata()).containsEntry(SENSITIVITY_KEY, "RESTRICTED");
+        }
+
+        @Test
+        @DisplayName("query_rows whose result CrudResult tags NORMAL does not stamp the metadata")
+        void queryRowsNormalResultDoesNotStampMetadata() {
+            CrudResult result = CrudResult.success(CrudOperation.READ_ROW, "OK",
+                    CrudResult.ResultData.forRead(List.of(Map.of("name", "github")), false, 0,
+                            com.apimarketplace.common.classification.DataSensitivity.NORMAL.name()));
+            when(crudExecutorService.execute(any(CrudRequest.class), eq(TENANT), any())).thenReturn(result);
+
+            Optional<ToolExecutionResult> res = module.execute("query_rows", Map.of("table_id", 5), TENANT, null);
+
+            assertThat(res).isPresent();
+            assertThat(res.get().metadata()).doesNotContainKey(SENSITIVITY_KEY);
+        }
+
+        @Test
+        @DisplayName("query_rows whose result carries a null dataSensitivity (legacy/back-compat response) "
+            + "does not stamp the metadata")
+        void queryRowsNullDataSensitivityDoesNotStampMetadata() {
+            CrudResult result = CrudResult.success(CrudOperation.READ_ROW, "OK",
+                    CrudResult.ResultData.forRead(List.of(Map.of("name", "a")), false, 0));
+            when(crudExecutorService.execute(any(CrudRequest.class), eq(TENANT), any())).thenReturn(result);
+
+            Optional<ToolExecutionResult> res = module.execute("query_rows", Map.of("table_id", 5), TENANT, null);
+
+            assertThat(res).isPresent();
+            assertThat(res.get().metadata()).doesNotContainKey(SENSITIVITY_KEY);
+        }
+    }
 }

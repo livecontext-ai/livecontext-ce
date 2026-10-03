@@ -140,4 +140,26 @@ class NoteTest {
             assertNotEquals(note1, note2);
         }
     }
+
+    @Nested
+    @DisplayName("Anchor (attachedTo)")
+    class AnchorTests {
+
+        @Test
+        @DisplayName("The plan parser reads attachedTo, and a blank one means a free note")
+        void parserReadsAnchor() {
+            java.util.List<Note> notes = WorkflowPlanParser.parseNotes(java.util.List.of(
+                Map.of("id", "n1", "text", "a", "attachedTo", "core:check_seen"),
+                Map.of("id", "n2", "text", "b", "attachedTo", " ")));
+
+            assertEquals("core:check_seen", notes.get(0).attachedTo());
+            assertNull(notes.get(1).attachedTo());
+        }
+
+        @Test
+        @DisplayName("The 10-argument constructor builds a free note")
+        void legacyConstructorIsFree() {
+            assertNull(new Note("n1", null, null, "t", null, null, null, null, null, null).attachedTo());
+        }
+    }
 }

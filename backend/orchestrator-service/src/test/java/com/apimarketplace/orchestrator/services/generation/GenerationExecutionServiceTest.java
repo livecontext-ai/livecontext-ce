@@ -55,8 +55,11 @@ class GenerationExecutionServiceTest {
         // Two templates on purpose: the generation call needs a 25 minute read
         // window, and a plain read must never inherit it.
         readRestTemplate = org.mockito.Mockito.mock(org.springframework.web.client.RestTemplate.class);
-        service = new GenerationExecutionService(restTemplate, readRestTemplate, "http://catalog:8081");
+        service = new GenerationExecutionService(restTemplate, readRestTemplate, "http://catalog:8081",
+                GATEWAY_SECRET);
     }
+
+    private static final String GATEWAY_SECRET = "test-gateway-secret-key-0123456789";
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private void stubResponse(Map<String, Object> body) {
@@ -351,6 +354,60 @@ class GenerationExecutionServiceTest {
         assertEquals(1, service.readModels().models().size());
         assertTrue(service.readModels().served());
         org.mockito.Mockito.verifyNoInteractions(restTemplate);
+    }
+
+    @Test
+    @DisplayName("regression unsigned model listing: the read is signed v1+v2 and passes catalog's filter with accept-v1=false")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void listingIsSignedForCatalogsGatewayFilter() throws Exception {
+        // /api/generation/models is not a catalog public path: unsigned, the filter answered 401
+        // and readModels() reported "served, no models" on every cloud install.
+        when(readRestTemplate.exchange(eq("http://catalog:8081/api/generation/models"), eq(HttpMethod.GET),
+                entityCaptor.capture(), eq(Map.class)))
+            .thenReturn((ResponseEntity) ResponseEntity.ok(Map.of("models", java.util.List.of(Map.of("model", "m")))));
+
+        assertEquals(1, service.readModels().models().size());
+
+        org.springframework.http.HttpHeaders sent = entityCaptor.getValue().getHeaders();
+        assertEquals(GenerationExecutionService.MODELS_PROVIDER_ID, sent.getFirst("X-Provider-ID"));
+        assertEquals(200, replayThroughCatalogFilter(sent, "/api/generation/models", false));
+        // And with no headers at all (the pre-fix call), the same filter refuses it.
+        assertEquals(401, replayThroughCatalogFilter(new org.springframework.http.HttpHeaders(),
+                "/api/generation/models", true));
+    }
+
+    @Test
+    @DisplayName("blank gateway secret (verification off): the listing goes out unsigned, as before")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void blankSecretListsUnsigned() {
+        service = new GenerationExecutionService(restTemplate, readRestTemplate, "http://catalog:8081", "");
+        when(readRestTemplate.exchange(any(String.class), eq(HttpMethod.GET), entityCaptor.capture(), eq(Map.class)))
+            .thenReturn((ResponseEntity) ResponseEntity.ok(Map.of("models", java.util.List.of())));
+
+        service.readModels();
+
+        org.springframework.http.HttpHeaders sent = entityCaptor.getValue().getHeaders();
+        assertNull(sent.getFirst("X-Gateway-Secret"));
+        assertNull(sent.getFirst(com.apimarketplace.common.web.GatewaySignatureV2.HEADER));
+    }
+
+    /** Status catalog-service's GatewayAuthenticationFilter (its real public paths) answers. */
+    private static int replayThroughCatalogFilter(org.springframework.http.HttpHeaders headers, String path,
+                                                  boolean acceptV1) throws Exception {
+        com.apimarketplace.common.web.GatewayFilterProperties props =
+                new com.apimarketplace.common.web.GatewayFilterProperties();
+        props.setSecretKey(GATEWAY_SECRET);
+        props.setVerificationEnabled(true);
+        // Mirrors catalog-service application.yml gateway.filter.public-paths: no /api/generation.
+        props.setPublicPaths(java.util.List.of("/health", "/actuator", "/api/internal/", "/api/agent-tools",
+                "/api/tools", "/api/catalog", "/api/v1", "/catalog/v1", "/api/tool-responses",
+                "/api/mcp", "/api/tool-categories", "/api/apis"));
+        var filter = new com.apimarketplace.common.web.GatewayAuthenticationFilter(props, acceptV1);
+        var request = new org.springframework.mock.web.MockHttpServletRequest("GET", path);
+        headers.forEach((name, values) -> values.forEach(v -> request.addHeader(name, v)));
+        var response = new org.springframework.mock.web.MockHttpServletResponse();
+        filter.doFilter(request, response, new org.springframework.mock.web.MockFilterChain());
+        return response.getStatus();
     }
 
     @Test

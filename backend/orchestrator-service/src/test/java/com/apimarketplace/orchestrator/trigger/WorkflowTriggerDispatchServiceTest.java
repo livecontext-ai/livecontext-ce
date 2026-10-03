@@ -6,11 +6,13 @@ import com.apimarketplace.orchestrator.domain.workflow.ExecutionStatistics;
 import com.apimarketplace.orchestrator.domain.workflow.RunStatus;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowExecution;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
+import com.apimarketplace.orchestrator.services.persistence.StepPayloadService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -23,6 +25,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -36,6 +39,7 @@ class WorkflowTriggerDispatchServiceTest {
     @Mock private WorkflowRunRepository runRepository;
     @Mock private ReusableTriggerService triggerService;
     @Mock private ProductionRunResolver productionRunResolver;
+    @Mock private StepPayloadService stepPayloadService;
 
     private WorkflowTriggerDispatchService service;
 
@@ -48,7 +52,8 @@ class WorkflowTriggerDispatchServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new WorkflowTriggerDispatchService(triggerLookupService, runRepository, triggerService, productionRunResolver);
+        service = new WorkflowTriggerDispatchService(
+                triggerLookupService, runRepository, triggerService, productionRunResolver, stepPayloadService);
     }
 
     private Map<String, Object> buildPlanWithTrigger(String triggerType, String triggerId) {
@@ -420,6 +425,78 @@ class WorkflowTriggerDispatchServiceTest {
             service.dispatchWorkflowCompletion(execution);
 
             verifyNoInteractions(triggerService);
+        }
+    }
+
+    // ==================== LC-066: restricted parent taint ====================
+
+    /**
+     * A chained workflow receives its parent's step outputs as its trigger payload, so a parent
+     * run that read Gmail / Drive hands that content to the downstream run. The downstream fire
+     * must then carry {@link ReusableTriggerService#RESTRICTED_DATA_MARKER}, exactly as a
+     * restricted parent taints a sub-workflow; before, the downstream run stored it all NORMAL.
+     */
+    @Nested
+    @DisplayName("a restricted parent run makes the downstream fire carry the restricted-data marker")
+    class RestrictedParentTaint {
+
+        private WorkflowRunEntity downstreamReadyToFire() {
+            WorkflowRunEntity parentRun = createParentRunEntity();
+            when(runRepository.findById(PARENT_WORKFLOW_RUN_ID)).thenReturn(Optional.of(parentRun));
+            WorkflowEntity downstream = createDownstreamWorkflow(7);
+            when(triggerLookupService.findByWorkflowTrigger(PARENT_WORKFLOW_ID.toString()))
+                    .thenReturn(List.of(downstream));
+            when(runRepository.countByWorkflowIdAndStatus(DOWNSTREAM_WORKFLOW_ID, RunStatus.RUNNING)).thenReturn(0L);
+            WorkflowRunEntity downstreamRun = createDownstreamRun(RunStatus.WAITING_TRIGGER);
+            stubLatestTrustedResolution(foundResolution(downstreamRun));
+            when(triggerService.executeTrigger(eq(downstreamRun), any(), eq(TriggerType.WORKFLOW), any()))
+                    .thenReturn(TriggerExecutionResult.success(DOWNSTREAM_RUN_ID, "trigger:trigger_label",
+                            TriggerType.WORKFLOW, Set.of(), 1));
+            return downstreamRun;
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> firedPayload(WorkflowRunEntity downstreamRun) {
+            ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
+            verify(triggerService).executeTrigger(eq(downstreamRun), any(), eq(TriggerType.WORKFLOW), payload.capture());
+            return payload.getValue();
+        }
+
+        @Test
+        @DisplayName("regression: completion of a restricted parent fires the downstream run with the marker and the parent's result")
+        void restrictedParentCompletionCarriesTheMarker() {
+            WorkflowRunEntity downstreamRun = downstreamReadyToFire();
+            when(stepPayloadService.isRunRestricted(PARENT_RUN_ID)).thenReturn(true);
+
+            service.dispatchWorkflowCompletion(createCompletedExecution());
+
+            Map<String, Object> payload = firedPayload(downstreamRun);
+            assertThat(payload).containsEntry(ReusableTriggerService.RESTRICTED_DATA_MARKER, Boolean.TRUE);
+            assertThat(payload).containsEntry("result", Map.of("result", "ok"));
+        }
+
+        @Test
+        @DisplayName("regression: an epoch completion of a restricted reusable-trigger parent carries the marker too")
+        void restrictedParentCycleCompletionCarriesTheMarker() {
+            WorkflowRunEntity downstreamRun = downstreamReadyToFire();
+            when(stepPayloadService.isRunRestricted(PARENT_RUN_ID)).thenReturn(true);
+
+            service.dispatchCycleCompletion(PARENT_RUN_ID, PARENT_WORKFLOW_RUN_ID, Map.of("gmail", "inbox"), false);
+
+            assertThat(firedPayload(downstreamRun))
+                    .containsEntry(ReusableTriggerService.RESTRICTED_DATA_MARKER, Boolean.TRUE);
+        }
+
+        @Test
+        @DisplayName("a parent that holds no restricted data fires the downstream run without the marker")
+        void normalParentCarriesNoMarker() {
+            WorkflowRunEntity downstreamRun = downstreamReadyToFire();
+            when(stepPayloadService.isRunRestricted(PARENT_RUN_ID)).thenReturn(false);
+
+            service.dispatchWorkflowCompletion(createCompletedExecution());
+
+            assertThat(firedPayload(downstreamRun))
+                    .doesNotContainKey(ReusableTriggerService.RESTRICTED_DATA_MARKER);
         }
     }
 }

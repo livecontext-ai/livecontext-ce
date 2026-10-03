@@ -89,7 +89,7 @@ class InternalChatControllerSyncTest {
 
             ArgumentCaptor<String> errCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).persistAttemptAndError(eq("conv-1"),
-                    eq("scheduled prompt body"), errCaptor.capture());
+                    eq("scheduled prompt body"), errCaptor.capture(), org.mockito.ArgumentMatchers.isNull());
             assertThat(errCaptor.getValue()).startsWith("[Error] Insufficient credits");
 
             // agentService.executeSync MUST NOT run on the 402 path - that's the
@@ -197,6 +197,56 @@ class InternalChatControllerSyncTest {
             assertThat(captor.getValue().getRole()).isEqualTo("user");
             verify(agentService).executeSync(any(), eq("conv-1"));
             verify(executionLockService).withConversationLock(eq("conv-1"), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("LC-066: a delegated task written from a restricted execution")
+    class Lc066RestrictedTaskMessage {
+
+        private MessageDto storedUserMessage(String dataSensitivity) {
+            ChatRequest request = new ChatRequest();
+            request.setConversationId("conv-1");
+            request.setMessage("task with mail text");
+            request.setSource("TASK");
+            request.setDataSensitivity(dataSensitivity);
+            when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION", null, null)).thenReturn(true);
+            when(agentService.executeSync(any(), eq("conv-1"))).thenReturn(Map.of("success", true));
+
+            controller.chatSync(request, "user-1", "org-1", null, null);
+
+            ArgumentCaptor<MessageDto> captor = ArgumentCaptor.forClass(MessageDto.class);
+            verify(messageService).addMessage(eq("conv-1"), captor.capture());
+            return captor.getValue();
+        }
+
+        @Test
+        @DisplayName("LC-066: a RESTRICTED task message is stored restricted, so the turn is tagged and provider-checked")
+        void lc066RestrictedTaskMessageIsStoredRestricted() {
+            assertThat(storedUserMessage("RESTRICTED").getDataSensitivity()).isEqualTo("RESTRICTED");
+        }
+
+        @Test
+        @DisplayName("LC-066: an ordinary sync message carries no tag (classified as usual, no over-tagging)")
+        void lc066OrdinaryMessageIsNotTagged() {
+            assertThat(storedUserMessage(null).getDataSensitivity()).isNull();
+            org.mockito.Mockito.reset(messageService, agentService, creditClient);
+            assertThat(storedUserMessage("NORMAL").getDataSensitivity()).isNull();
+        }
+
+        @Test
+        @DisplayName("LC-066: the 402 audit trail stores a RESTRICTED task prompt restricted too")
+        void lc066RefusedRestrictedPromptIsStoredRestricted() {
+            ChatRequest request = new ChatRequest();
+            request.setConversationId("conv-1");
+            request.setMessage("task with mail text");
+            request.setDataSensitivity("RESTRICTED");
+            when(creditClient.checkCredits("user-1", "CHAT_CONVERSATION", null, null)).thenReturn(false);
+
+            controller.chatSync(request, "user-1", "org-1", null, null);
+
+            verify(messageService).persistAttemptAndError(eq("conv-1"), eq("task with mail text"), any(),
+                    eq("RESTRICTED"));
         }
     }
 

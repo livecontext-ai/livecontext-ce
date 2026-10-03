@@ -1513,6 +1513,45 @@ class StorageServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("existsSubWorkflowInvocation - CASA LC-037 gap 2")
+    class ExistsSubWorkflowInvocationTests {
+
+        @Test
+        @DisplayName("delegates to the repository and returns its answer")
+        void delegatesToRepository() {
+            when(storageRepository.existsSubWorkflowInvocation("wf-1", "run-1")).thenReturn(true);
+
+            assertThat(storageService.existsSubWorkflowInvocation("wf-1", "run-1")).isTrue();
+        }
+
+        @Test
+        @DisplayName("pre-fix regression: returns false when the repository finds no matching step output")
+        void returnsFalseWhenNoEvidence() {
+            when(storageRepository.existsSubWorkflowInvocation("wf-1", "run-1")).thenReturn(false);
+
+            assertThat(storageService.existsSubWorkflowInvocation("wf-1", "run-1")).isFalse();
+        }
+
+        @Test
+        @DisplayName("short-circuits to false for a blank parentWorkflowId, without querying the repository")
+        void blankParentWorkflowIdShortCircuits() {
+            assertThat(storageService.existsSubWorkflowInvocation("", "run-1")).isFalse();
+            assertThat(storageService.existsSubWorkflowInvocation(null, "run-1")).isFalse();
+
+            verifyNoInteractions(storageRepository);
+        }
+
+        @Test
+        @DisplayName("short-circuits to false for a blank childRunId, without querying the repository")
+        void blankChildRunIdShortCircuits() {
+            assertThat(storageService.existsSubWorkflowInvocation("wf-1", "")).isFalse();
+            assertThat(storageService.existsSubWorkflowInvocation("wf-1", null)).isFalse();
+
+            verifyNoInteractions(storageRepository);
+        }
+    }
+
     private StorageEntity createActiveEntity(UUID id) {
         StorageEntity entity = new StorageEntity();
         entity.setId(id);

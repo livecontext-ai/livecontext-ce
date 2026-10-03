@@ -31,7 +31,9 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       images: [{ url: landingOgImage(locale), width: 1200, height: 630, alt: title }],
     },
     twitter: { card: 'summary_large_image', title, description, images: [landingOgImage(locale)] },
-    robots: IS_CE ? { index: false, follow: false } : { index: true, follow: true },
+    // Only on CE: on the cloud the root layout's directives apply (a page-level { index: true }
+    // replaced them, dropping max-image-preview and max-snippet).
+    ...(IS_CE ? { robots: { index: false, follow: false } } : {}),
   };
 }
 

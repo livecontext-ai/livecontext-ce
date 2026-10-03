@@ -183,7 +183,7 @@ public class InternalAgentTaskController {
         String tenantId = tenantResolver.resolve(httpRequest);
         try {
             AgentTaskEntity t = taskService.assignTask(tenantId, null, tenantId, request);
-            return ResponseEntity.ok(TaskResponse.from(t));
+            return ResponseEntity.ok(workflowTaskBody(t, TaskResponse.from(t)));
         } catch (Exception e) {
             logger.error("Internal create task failed for tenant={}: {}", tenantId, e.getMessage(), e);
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -210,7 +210,7 @@ public class InternalAgentTaskController {
                 return ResponseEntity.status(404).body(Map.of("error", "task not found"));
             }
             var notes = noteRepository.findByTaskIdOrderByCreatedAtAsc(taskId);
-            return ResponseEntity.ok(TaskResponse.from(opt.get(), notes));
+            return ResponseEntity.ok(workflowTaskBody(opt.get(), TaskResponse.from(opt.get(), notes)));
         } catch (Exception e) {
             logger.error("Internal get task failed id={}: {}", taskId, e.getMessage(), e);
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -235,7 +235,7 @@ public class InternalAgentTaskController {
         }
         try {
             AgentTaskEntity t = taskService.updateTask(tenantId, taskId, null, tenantId, request);
-            return ResponseEntity.ok(TaskResponse.from(t));
+            return ResponseEntity.ok(workflowTaskBody(t, TaskResponse.from(t)));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
@@ -312,7 +312,7 @@ public class InternalAgentTaskController {
                     priorityParam, searchParam, null);
 
             return ResponseEntity.ok(Map.of(
-                    "tasks", tasks.stream().map(TaskResponse::from).toList(),
+                    "tasks", tasks.stream().map(InternalAgentTaskController::workflowListEntry).toList(),
                     "count", tasks.size(),
                     "total", total,
                     "page", clampedPage,
@@ -322,6 +322,36 @@ public class InternalAgentTaskController {
             logger.error("Internal list tasks failed for tenant={}: {}", tenantId, e.getMessage(), e);
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    /** Upper bound of one {@link #restrictedTaskIds} call. */
+    static final int RESTRICTED_IDS_MAX = 500;
+
+    /**
+     * CASA LC-066: which of the given task ids are RESTRICTED (Gmail / Google Drive content).
+     * Body {@code {"ids": [uuid, ...]}} (at most {@link #RESTRICTED_IDS_MAX}), answer
+     * {@code {"restrictedIds": [uuid, ...]}}. Ids in, ids out: no task content leaves. Used by
+     * orchestrator to scrub task titles out of notifications stored before they were withheld.
+     * Unknown or malformed ids are simply not restricted; a deleted task is absent.
+     */
+    @Transactional(readOnly = true)
+    @PostMapping("/tasks/restricted-ids")
+    public ResponseEntity<?> restrictedTaskIds(@RequestBody(required = false) Map<String, Object> body) {
+        Object raw = body != null ? body.get("ids") : null;
+        if (!(raw instanceof List<?> list)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "ids is required"));
+        }
+        if (list.size() > RESTRICTED_IDS_MAX) {
+            return ResponseEntity.badRequest().body(Map.of("error", "at most " + RESTRICTED_IDS_MAX + " ids"));
+        }
+        List<UUID> ids = list.stream()
+                .map(o -> o == null ? null : validUuidOrNull(o.toString()))
+                .filter(java.util.Objects::nonNull)
+                .map(UUID::fromString)
+                .distinct()
+                .toList();
+        List<UUID> restricted = ids.isEmpty() ? List.of() : taskRepository.findRestrictedIdsAmong(ids);
+        return ResponseEntity.ok(Map.of("restrictedIds", restricted));
     }
 
     private static String nullIfBlank(String s) {
@@ -335,6 +365,39 @@ public class InternalAgentTaskController {
             return s.trim();
         } catch (IllegalArgumentException e) {
             return null;
+        }
+    }
+
+    /** The call a workflow makes to open one listed task, for the withheld entry's note. */
+    static final String WORKFLOW_OPEN_TASK = "the task node's get_task operation (taskId '<id>')";
+
+    /**
+     * LC-066: the body a workflow task node receives for ONE task (create, get, update). The node
+     * copies it into its step output, so a RESTRICTED task's body carries the restricted tag
+     * ({@code __dataSensitivity__}) next to its fields: the node lifts it onto its output, which
+     * stores the step RESTRICTED and restricts the run, as any other read of Gmail content does.
+     */
+    static Object workflowTaskBody(AgentTaskEntity task, TaskResponse response) {
+        return task.holdsRestrictedData() ? new RestrictedTaskBody(response) : response;
+    }
+
+    /**
+     * LC-066: one entry of the workflow task node's list. The list is not tagged (one RESTRICTED
+     * task would otherwise restrict every run that lists the board), so a RESTRICTED task is listed
+     * without its text, exactly as the agent tool listings show it.
+     */
+    static Object workflowListEntry(AgentTaskEntity task) {
+        return task.holdsRestrictedData()
+                ? com.apimarketplace.agent.tools.agent.AgentDelegationModule.withheldListingEntry(task, WORKFLOW_OPEN_TASK)
+                : TaskResponse.from(task);
+    }
+
+    /** A RESTRICTED task's body: its usual fields plus the restricted tag. */
+    record RestrictedTaskBody(@com.fasterxml.jackson.annotation.JsonUnwrapped TaskResponse task) {
+        @com.fasterxml.jackson.annotation.JsonProperty(
+                com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY)
+        public String dataSensitivity() {
+            return com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name();
         }
     }
 }

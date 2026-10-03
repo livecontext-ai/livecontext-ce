@@ -144,7 +144,7 @@ class DataSourceEnhancedServiceMediaEventTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> before = ArgumentCaptor.forClass(Map.class);
         verify(rowEventPublisher).publishUpdated(eq(DATA_SOURCE_ID), eq(11L), any(), any(),
-            after.capture(), before.capture());
+            after.capture(), before.capture(), any());
         assertThat(asMap(after.getValue().get("video"))).containsEntry("_type", "file");
         assertThat(asMap(before.getValue().get("video")))
             .as("previous_row reaches the same expressions, so it must not be the other shape")
@@ -166,7 +166,7 @@ class DataSourceEnhancedServiceMediaEventTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> published = ArgumentCaptor.forClass(Map.class);
         verify(rowEventPublisher).publishDeleted(eq(DATA_SOURCE_ID), eq(9L), any(), any(),
-            published.capture());
+            published.capture(), any());
         assertThat(asMap(published.getValue().get("video")))
             .containsEntry("_type", "file")
             .containsEntry("path", "tenant-1/wf/run/clip.mp4");

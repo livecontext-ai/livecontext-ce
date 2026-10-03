@@ -9,6 +9,7 @@ import LoadingSpinner from "@/components/LoadingSpinner";
 import { NodeIcon } from "@/app/workflows/builder/components/nodes/shared";
 import { apiClient } from "@/lib/api";
 import { PlanRequirementSelect } from "./PlanRequirementSelect";
+import { urlPageIndex, useUrlSearchState, useUrlState } from "@/hooks/useUrlState";
 
 interface CatalogApiRow {
   slug: string;
@@ -56,10 +57,11 @@ export function IntegrationPlanList({
   planOptions,
 }: IntegrationPlanListProps) {
   const t = useTranslations("nodeTypeSettings");
-  const [query, setQuery] = React.useState("");
+  // The search and the page live in the address, so a reload reopens the same page of results.
+  const [query, setQuery] = useUrlSearchState("q");
   const [apis, setApis] = React.useState<CatalogApiRow[]>([]);
   const [loading, setLoading] = React.useState(true);
-  const [page, setPage] = React.useState(0);
+  const [page, setPage] = useUrlState("page", 0, { codec: urlPageIndex });
   const [hasMore, setHasMore] = React.useState(false);
 
   /** The integration whose endpoints are being edited, or null on the list. */
@@ -85,6 +87,9 @@ export function IntegrationPlanList({
           if (cancelled) return;
           const content = Array.isArray(data) ? (data as CatalogApiRow[]) : (data?.content ?? []);
           setApis(content);
+          // The endpoint gives no total, so a page restored from the address that is past the
+          // end can only be told by its emptiness: go back to the first page.
+          if (content.length === 0 && page > 0) setPage(0);
           // The endpoint says whether this was the last page; the length check is only
           // the fallback for the array-shaped response it also sometimes returns.
           setHasMore(typeof data?.last === "boolean" ? !data.last : content.length >= PAGE_SIZE);
@@ -102,7 +107,7 @@ export function IntegrationPlanList({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query, page, openApi]);
+  }, [query, page, openApi, setPage]);
 
   React.useEffect(() => {
     if (!openApi) return;

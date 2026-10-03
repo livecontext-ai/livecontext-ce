@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslations } from 'next-intl';
-import { PackagePlus, Play, CheckCircle, Ban, Rocket, PowerOff, CalendarClock } from 'lucide-react';
+import { PackagePlus, Play, CheckCircle, Ban, Rocket, PowerOff, CalendarClock, ShieldOff } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { Button } from '@/components/ui/button';
 import { PublicationCard, PublicationCardSkeleton } from '@/components/marketplace/PublicationCard';
@@ -65,11 +65,16 @@ export function ToolAuthorizationCard({
 
   const rule = pendingAuthorization.rule;
   const isInstall = rule === 'application:acquire';
-  const applicationId = pendingAuthorization.applicationId;
 
-  // The subject of the card: what is about to go live, or which cron is being armed.
-  // Absent for every rule that names nothing, and for a backend older than this field.
+  // The subject of the card: what is about to go live, which cron is being armed, which
+  // workflow / agent / app is about to run, who an email goes to. Absent for a rule that
+  // names nothing, a call that omitted the target, and a backend older than this field.
   const subject = pendingAuthorization.subject;
+
+  // acquire carries the publication id at the top level; application:execute names the same
+  // kind of id in its subject. Either way the card previews the app instead of a raw id.
+  const applicationId = pendingAuthorization.applicationId
+    ?? (subject?.kind === 'application' ? subject.id : undefined);
 
   // The subject's name is the one thing the backend cannot always send: agent-service has
   // no orchestrator client, and on an agent UPDATE the call carries an id rather than a
@@ -109,7 +114,13 @@ export function ToolAuthorizationCard({
   // When the name could not be resolved, show the id rather than nothing: "Take this
   // workflow off the air?" with no identification at all is a question the user cannot
   // answer, and unpin has no version to fall back on either.
-  const unresolvedId = !subjectName && !nameLoading ? subject?.id ?? null : null;
+  // Only for the kinds a name is looked up for (an API tool's id is a bare UUID that the
+  // details below already show). An application is previewed instead, so it shows its id only
+  // when that preview could not load: the anonymous publication fetch 404s on a private or
+  // unlisted app, which is exactly the user's own app being run.
+  const unresolvedId = subjectName || nameLoading ? null
+    : kindToName === 'workflow' || kindToName === 'agent' ? subject?.id ?? null
+    : null;
 
   // Per-action title/subtitle so the user sees a clear description of what the
   // agent is about to do (e.g. continue a paused interface / resolve an approval)
@@ -130,6 +141,18 @@ export function ToolAuthorizationCard({
     // email is about to leave their own address is the raw params dump underneath.
     : rule === 'mailbox:send' ? 'mailboxSendTitle'
     : rule === 'mailbox:delete' ? 'mailboxDeleteTitle'
+    // The run rules used to share the bare "Run this action? / a sensitive action" copy, which
+    // told the user neither WHAT would run nor WHY they were being asked. Each now names its
+    // target when the call carries one, and its subtitle says what the click costs.
+    : rule === 'workflow:execute' ? (subjectName ? 'workflowExecuteTitleNamed' : 'workflowExecuteTitle')
+    : rule === 'workflow:restart_from_node' ? 'restartFromNodeTitle'
+    : rule === 'workflow:run_node' ? 'runNodeTitle'
+    : rule === 'application:execute' ? 'applicationExecuteTitle'
+    : rule === 'agent:execute' ? (subjectName ? 'agentExecuteTitleNamed' : 'agentExecuteTitle')
+    : rule === 'catalog:execute' || rule === 'catalog:call' ? 'catalogExecuteTitle'
+    // Removes the safeguard instead of spending anything, so the generic "can spend
+    // credits" copy would describe the wrong risk.
+    : rule === 'agent:disarm_tool_authorization' ? (subjectName ? 'disarmTitleNamed' : 'disarmTitle')
     : 'runTitle';
   const subtitleKey = isInstall ? 'installSubtitle'
     : rule === 'workflow:continue_interface' ? 'continueInterfaceSubtitle'
@@ -137,8 +160,15 @@ export function ToolAuthorizationCard({
     : rule === 'workflow:pin' ? (subject?.version != null ? 'pinSubtitleVersioned' : 'pinSubtitle')
     : rule === 'workflow:unpin' ? 'unpinSubtitle'
     : rule === 'agent:schedule' ? (subject?.cron ? 'agentScheduleSubtitle' : 'agentScheduleSubtitleBare')
-    : rule === 'mailbox:send' ? 'mailboxSendSubtitle'
+    : rule === 'mailbox:send' ? (subject?.to ? 'mailboxSendSubtitleTo' : 'mailboxSendSubtitle')
     : rule === 'mailbox:delete' ? 'mailboxDeleteSubtitle'
+    : rule === 'workflow:execute' ? 'workflowExecuteSubtitle'
+    : rule === 'workflow:restart_from_node' ? (subject?.node ? 'restartFromNodeSubtitleNamed' : 'restartFromNodeSubtitle')
+    : rule === 'workflow:run_node' ? (subject?.type ? 'runNodeSubtitleNamed' : 'runNodeSubtitle')
+    : rule === 'application:execute' ? 'applicationExecuteSubtitle'
+    : rule === 'agent:execute' ? 'agentExecuteSubtitle'
+    : rule === 'catalog:execute' || rule === 'catalog:call' ? 'catalogExecuteSubtitle'
+    : rule === 'agent:disarm_tool_authorization' ? 'disarmSubtitle'
     : 'runSubtitle';
 
   // Values the two keys above may reference. next-intl throws on a missing placeholder,
@@ -148,12 +178,25 @@ export function ToolAuthorizationCard({
     version: subject?.version ?? 0,
     cron: subject?.cron ?? '',
     timezone: subject?.timezone ?? 'UTC',
+    node: subject?.node ?? '',
+    nodeType: subject?.type ?? '',
+    // Every recipient, copies included: naming only `to` would understate who gets the mail.
+    to: [subject?.to, subject?.cc, subject?.bcc].filter(Boolean).join(', '),
   };
+
+  // The raw call, behind a disclosure: the copy above says what and why, this says exactly
+  // which tool, which action and with which arguments, for the user who wants to check.
+  const toolName = pendingAuthorization.toolName || rule.split(':')[0];
+  const actionName = pendingAuthorization.action || rule.split(':')[1];
+  const paramsText = formatArgsSummary(pendingAuthorization.argsSummary);
 
   // Load the publication so we render its marketplace preview instead of raw args.
   // Public (marketplace-safe) fetch - the app may not be owned yet (we're acquiring it).
   const [publication, setPublication] = useState<WorkflowPublication | null>(null);
   const [pubLoading, setPubLoading] = useState(!!applicationId);
+  // The preview failed (or returned nothing): say which app by id rather than an empty box.
+  // Applies to acquire too, which carries its id at the top level rather than in a subject.
+  const unpreviewedAppId = applicationId && !pubLoading && !publication ? applicationId : null;
 
   useEffect(() => {
     if (!applicationId) {
@@ -238,6 +281,8 @@ export function ToolAuthorizationCard({
               <PowerOff className="w-4 h-4 text-theme-primary" />
             ) : rule === 'agent:schedule' ? (
               <CalendarClock className="w-4 h-4 text-theme-primary" />
+            ) : rule === 'agent:disarm_tool_authorization' ? (
+              <ShieldOff className="w-4 h-4 text-theme-primary" />
             ) : (
               <Play className="w-4 h-4 text-theme-primary" />
             )}
@@ -251,10 +296,17 @@ export function ToolAuthorizationCard({
             </p>
             {/* Could not resolve a name: show the id, so the question stays answerable.
                 Nothing identifying at all is worse than a raw id. */}
-            {unresolvedId && (
+            {(unresolvedId || unpreviewedAppId) && (
               <p className="text-xs text-theme-muted mt-0.5 font-mono truncate"
                  data-testid="tool-authorization-subject-id">
-                {unresolvedId}
+                {unresolvedId || unpreviewedAppId}
+              </p>
+            )}
+            {/* The email's subject line, verbatim: with the recipients above, it is what
+                tells the user which message is about to leave. */}
+            {rule === 'mailbox:send' && subject?.subject && (
+              <p className="text-xs text-theme-muted mt-0.5 truncate" data-testid="tool-authorization-mail-subject">
+                “{subject.subject}”
               </p>
             )}
             {/* The agent is holding this call: say so, otherwise the tool above just looks
@@ -269,7 +321,7 @@ export function ToolAuthorizationCard({
 
         {/* Application preview - the exact marketplace card, no install CTA (the card's
             own Install button performs it) and non-navigating (pointer-events-none). */}
-        {applicationId && (
+        {applicationId && (pubLoading || publication) && (
           <div className="rounded-2xl bg-theme-primary border border-theme p-3">
             {pubLoading ? (
               <PublicationCardSkeleton />
@@ -280,6 +332,31 @@ export function ToolAuthorizationCard({
             ) : null}
           </div>
         )}
+
+        {/* What exactly would run: tool, action, arguments. Collapsed by default so the
+            card reads as a question, not a JSON dump. */}
+        <details className="mt-3" data-testid="tool-authorization-details">
+          <summary className="text-xs text-theme-muted cursor-pointer select-none hover:text-theme-secondary">
+            {t('detailsToggle')}
+          </summary>
+          <div className="mt-2 rounded-xl bg-theme-primary border border-theme p-2.5 space-y-1">
+            <p className="text-xs text-theme-secondary">
+              {t('toolLabel')}: <span className="font-mono">{toolName}</span>
+              {actionName && (
+                <> · {t('actionLabel')}: <span className="font-mono">{actionName}</span></>
+              )}
+            </p>
+            {paramsText && (
+              <>
+                <p className="text-xs font-medium text-theme-secondary">{t('paramsLabel')}</p>
+                <pre className="text-xs font-mono text-theme-secondary whitespace-pre-wrap break-all max-h-40 overflow-auto"
+                     data-testid="tool-authorization-params">
+                  {paramsText}
+                </pre>
+              </>
+            )}
+          </div>
+        </details>
 
         {/* Footer: "don't ask again" checkbox + actions */}
         <div className="mt-3 flex items-center justify-between gap-3">
@@ -323,6 +400,27 @@ export function ToolAuthorizationCard({
       </div>
     </div>
   );
+}
+
+/**
+ * Pretty-prints the backend's argument summary. The backend truncates it at 240 characters, so
+ * a long call arrives as invalid JSON: that is shown as-is rather than dropped. The `action`
+ * key is left out because the line above already names it.
+ */
+export function formatArgsSummary(summary?: string): string | null {
+  if (!summary) return null;
+  try {
+    const parsed: unknown = JSON.parse(summary);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const rest = Object.fromEntries(
+        Object.entries(parsed as Record<string, unknown>).filter(([key]) => key !== 'action'),
+      );
+      return Object.keys(rest).length ? JSON.stringify(rest, null, 2) : null;
+    }
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return summary;
+  }
 }
 
 export default ToolAuthorizationCard;

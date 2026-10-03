@@ -125,6 +125,46 @@ class InterfaceControllerScopeGateTest {
         verify(renderService).callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, ORG_ID);
     }
 
+    // ===== /render - CASA LC-037: under a share link the interface is bound to the shared run =====
+    // The binding lives in InterfaceRenderService.callerCanRenderInterface (the interface must be
+    // in the run's plan or belong to the shared application); the controller must delegate to it
+    // and never render on a refusal.
+
+    private MockHttpServletRequest shareRequest() {
+        MockHttpServletRequest req = request(CALLER_TENANT);
+        req.addHeader("X-Share-Context", "true");
+        req.addHeader("X-Share-Resource-Type", "APPLICATION");
+        return req;
+    }
+
+    @Test
+    @DisplayName("GET /{id}/render (share context) is served when the binding accepts the interface")
+    void renderShareContextAcceptsBoundInterface() {
+        when(renderService.callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, null)).thenReturn(true);
+        InterfaceRenderResult body = emptyResult();
+        when(renderService.render(INTERFACE_ID, RUN_ID, CALLER_TENANT, 0, 10, null, java.util.Map.of())).thenReturn(body);
+
+        ResponseEntity<InterfaceRenderResult> response = controller.renderInterface(
+                INTERFACE_ID, RUN_ID, 0, 10, null, null, shareRequest(), null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isSameAs(body);
+    }
+
+    @Test
+    @DisplayName("LC-037: GET /{id}/render (share context) refuses an interface outside the shared run, "
+            + "even though the shared runId itself is legitimate, and renders nothing")
+    void renderShareContextRejectsUnboundInterface() {
+        when(renderService.callerCanRenderInterface(INTERFACE_ID, RUN_ID, CALLER_TENANT, null)).thenReturn(false);
+
+        ResponseEntity<InterfaceRenderResult> response = controller.renderInterface(
+                INTERFACE_ID, RUN_ID, 0, 10, null, null, shareRequest(), null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).isNull();
+        verify(renderService, never()).render(any(), any(), any(), anyInt(), anyInt(), any(), any());
+    }
+
     // ===== /items/{itemIndex} =====
 
     @Test

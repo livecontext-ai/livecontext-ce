@@ -74,7 +74,8 @@ class WorkflowRunQueryControllerStatusFilterTest {
                 storageService,
                 objectMapper,
                 workflowEpochRepository,
-                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.ApplicationRunVersionBatchService.class)
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.ApplicationRunVersionBatchService.class),
+                org.mockito.Mockito.mock(com.apimarketplace.auth.client.access.OrgAccessGuard.class)
         );
 
         WorkflowRunEntity run = new WorkflowRunEntity();
@@ -117,7 +118,7 @@ class WorkflowRunQueryControllerStatusFilterTest {
             .thenReturn(page(List.of(entity(1L, "completed", 0), entity(3L, "completed", 0))));
 
         ResponseEntity<?> response = controller.listStepsPaged(
-                RUN_ID, STEP_ALIAS, 0, 50, null, "completed", TENANT_ID, null);
+                RUN_ID, STEP_ALIAS, 0, 50, null, "completed", TENANT_ID, null, null);
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(body(response)).containsEntry("totalElements", 2L);
@@ -132,7 +133,7 @@ class WorkflowRunQueryControllerStatusFilterTest {
             .thenReturn(page(List.of(entity(1L, "completed", 0), entity(2L, "success", 0))));
 
         ResponseEntity<?> response = controller.listStepsPaged(
-                RUN_ID, STEP_ALIAS, 0, 50, null, "completed", TENANT_ID, null);
+                RUN_ID, STEP_ALIAS, 0, 50, null, "completed", TENANT_ID, null, null);
 
         assertThat(body(response)).containsEntry("totalElements", 2L);
     }
@@ -145,7 +146,7 @@ class WorkflowRunQueryControllerStatusFilterTest {
             .thenReturn(page(List.of(entity(2L, "completed", 1), entity(4L, "success", 1))));
 
         ResponseEntity<?> response = controller.listStepsPaged(
-                RUN_ID, STEP_ALIAS, 0, 50, 1, "completed", TENANT_ID, null);
+                RUN_ID, STEP_ALIAS, 0, 50, 1, "completed", TENANT_ID, null, null);
 
         assertThat(body(response)).containsEntry("totalElements", 2L);
     }
@@ -159,9 +160,9 @@ class WorkflowRunQueryControllerStatusFilterTest {
             .thenReturn(page(List.of(entity(1L, "completed", 0), entity(2L, "failed", 0))));
 
         ResponseEntity<?> withNull = controller.listStepsPaged(
-                RUN_ID, STEP_ALIAS, 0, 50, null, null, TENANT_ID, null);
+                RUN_ID, STEP_ALIAS, 0, 50, null, null, TENANT_ID, null, null);
         ResponseEntity<?> withBlank = controller.listStepsPaged(
-                RUN_ID, STEP_ALIAS, 0, 50, null, "  ", TENANT_ID, null);
+                RUN_ID, STEP_ALIAS, 0, 50, null, "  ", TENANT_ID, null, null);
 
         assertThat(body(withNull)).containsEntry("totalElements", 2L);
         assertThat(body(withBlank)).containsEntry("totalElements", 2L);
@@ -178,7 +179,7 @@ class WorkflowRunQueryControllerStatusFilterTest {
         when(workflowStepDataRepository.findByWorkflowRunIdLightweightAll(RUN_ID))
             .thenReturn(List.of(entity(1L, "completed", 0)));
 
-        controller.listSteps(RUN_ID, TENANT_ID, null);
+        controller.listSteps(RUN_ID, TENANT_ID, null, null);
 
         // The legacy heavy-JSONB query must NEVER be used by listSteps anymore.
         org.mockito.Mockito.verify(workflowStepDataRepository, org.mockito.Mockito.never())
@@ -198,7 +199,7 @@ class WorkflowRunQueryControllerStatusFilterTest {
                 any(UUID.class), any(String.class), any(), any(), any()))
             .thenReturn(page(List.of(entity(1L, "completed", 0))));
 
-        controller.listStepsPaged(RUN_ID, STEP_ALIAS, 0, 50, null, "completed", TENANT_ID, null);
+        controller.listStepsPaged(RUN_ID, STEP_ALIAS, 0, 50, null, "completed", TENANT_ID, null, null);
 
         // Legacy in-memory path must NEVER be invoked from listStepsPaged anymore.
         org.mockito.Mockito.verify(workflowStepDataRepository, org.mockito.Mockito.never())

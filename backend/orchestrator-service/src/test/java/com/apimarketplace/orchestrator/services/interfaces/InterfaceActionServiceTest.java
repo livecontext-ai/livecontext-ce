@@ -1,8 +1,10 @@
 package com.apimarketplace.orchestrator.services.interfaces;
 
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.common.storage.domain.StorageEntity;
 import com.apimarketplace.common.storage.repository.StorageRepository;
 import com.apimarketplace.common.storage.service.StorageService;
+import com.apimarketplace.orchestrator.services.persistence.StepPayloadService;
 import com.apimarketplace.orchestrator.utils.ExecutionConstants;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,8 +58,8 @@ class InterfaceActionServiceTest {
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(storageService).saveJsonWithContext(
                 eq("tenant-1"), payloadCaptor.capture(), eq(ExecutionConstants.CONTENT_TYPE_JSON),
-                isNull(), isNull(), eq("run-1"), eq("interface:my_form"), eq(0), eq(0),
-                isNull(), eq("INTERFACE_ACTION")
+                isNull(), isNull(), eq("run-1"), eq("interface:my_form"), eq(0), eq(0), eq(0),
+                isNull(), eq("INTERFACE_ACTION"), eq(DataSensitivity.NORMAL)
         );
 
         Map<String, Object> payload = payloadCaptor.getValue();
@@ -92,8 +94,8 @@ class InterfaceActionServiceTest {
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(storageService).saveJsonWithContext(
                 anyString(), payloadCaptor.capture(), anyString(),
-                isNull(), isNull(), anyString(), anyString(), anyInt(), anyInt(),
-                isNull(), eq("INTERFACE_ACTION")
+                isNull(), isNull(), anyString(), anyString(), anyInt(), anyInt(), anyInt(),
+                isNull(), eq("INTERFACE_ACTION"), eq(DataSensitivity.NORMAL)
         );
 
         Map<String, Object> payload = payloadCaptor.getValue();
@@ -122,8 +124,8 @@ class InterfaceActionServiceTest {
 
         verify(storageService).saveJsonWithContext(
                 anyString(), any(Map.class), anyString(),
-                isNull(), isNull(), anyString(), anyString(), eq(0), eq(3),
-                isNull(), eq("INTERFACE_ACTION")
+                isNull(), isNull(), anyString(), anyString(), eq(0), eq(3), eq(0),
+                isNull(), eq("INTERFACE_ACTION"), eq(DataSensitivity.NORMAL)
         );
     }
 
@@ -139,8 +141,8 @@ class InterfaceActionServiceTest {
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(storageService).saveJsonWithContext(
                 anyString(), payloadCaptor.capture(), anyString(),
-                isNull(), isNull(), anyString(), anyString(), anyInt(), anyInt(),
-                isNull(), eq("INTERFACE_ACTION")
+                isNull(), isNull(), anyString(), anyString(), anyInt(), anyInt(), anyInt(),
+                isNull(), eq("INTERFACE_ACTION"), eq(DataSensitivity.NORMAL)
         );
 
         Map<String, Object> payload = payloadCaptor.getValue();
@@ -171,13 +173,75 @@ class InterfaceActionServiceTest {
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
         verify(storageService).saveJsonWithContext(
                 eq("tenant-1"), payloadCaptor.capture(), eq(ExecutionConstants.CONTENT_TYPE_JSON),
-                isNull(), isNull(), eq("run-1"), eq("interface:form"), eq(2), eq(7),
-                eq("wf-1"), eq("INTERFACE_ACTION")
+                isNull(), isNull(), eq("run-1"), eq("interface:form"), eq(2), eq(7), eq(0),
+                eq("wf-1"), eq("INTERFACE_ACTION"), eq(DataSensitivity.NORMAL)
         );
 
         Map<String, Object> output = (Map<String, Object>) payloadCaptor.getValue().get("output");
         assertThat(output).containsKeys("save", "approve");
         assertThat((Map<String, Object>) output.get("save")).containsEntry("value", "item-2");
         assertThat((Map<String, Object>) output.get("approve")).containsEntry("choice", "yes");
+    }
+
+    // ---- LC-066/LC-011 re-audit item 3: classify-and-tag via StepPayloadService ----
+    //
+    // Pre-fix, this method always called saveJsonWithContext with an implicit NORMAL tag and
+    // expiresAt=null, even when the run already held Gmail/Drive content (e.g. a form field
+    // echoing back a value read from an earlier restricted step) - never expiring, never swept.
+
+    @Test
+    @DisplayName("action data in a run that already holds restricted data is saved RESTRICTED")
+    void restrictedRunTagsActionDataRestricted() {
+        StepPayloadService stepPayloadService = mock(StepPayloadService.class);
+        when(stepPayloadService.classifySensitivityForRun(eq("run-restricted"), any()))
+                .thenReturn(DataSensitivity.RESTRICTED);
+        service.setStepPayloadService(stepPayloadService);
+        when(storageRepository.findByRunIdAndStepKeyAndItemIndexAndEpoch(anyString(), anyString(), anyInt(), anyInt(), anyString()))
+                .thenReturn(Optional.empty());
+
+        service.persistActionData("run-restricted", "interface:form", "submit", Map.of("name", "Alice"), "tenant-1", 0);
+
+        verify(storageService).saveJsonWithContext(
+                eq("tenant-1"), any(), eq(ExecutionConstants.CONTENT_TYPE_JSON),
+                isNull(), isNull(), eq("run-restricted"), eq("interface:form"), eq(0), eq(0), eq(0),
+                isNull(), eq("INTERFACE_ACTION"), eq(DataSensitivity.RESTRICTED)
+        );
+    }
+
+    @Test
+    @DisplayName("action data in an ordinary run is saved NORMAL, and the payload actually classified is the one being written")
+    void ordinaryRunTagsActionDataNormalAndPassesTheRealPayload() {
+        StepPayloadService stepPayloadService = mock(StepPayloadService.class);
+        when(stepPayloadService.classifySensitivityForRun(eq("run-1"), any())).thenReturn(DataSensitivity.NORMAL);
+        service.setStepPayloadService(stepPayloadService);
+        when(storageRepository.findByRunIdAndStepKeyAndItemIndexAndEpoch(anyString(), anyString(), anyInt(), anyInt(), anyString()))
+                .thenReturn(Optional.empty());
+
+        service.persistActionData("run-1", "interface:form", "submit", Map.of("name", "Bob"), "tenant-1", 0);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> classifiedPayloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(stepPayloadService).classifySensitivityForRun(eq("run-1"), classifiedPayloadCaptor.capture());
+        assertThat(classifiedPayloadCaptor.getValue()).containsKey("output");
+        verify(storageService).saveJsonWithContext(
+                eq("tenant-1"), any(), eq(ExecutionConstants.CONTENT_TYPE_JSON),
+                isNull(), isNull(), eq("run-1"), eq("interface:form"), eq(0), eq(0), eq(0),
+                isNull(), eq("INTERFACE_ACTION"), eq(DataSensitivity.NORMAL)
+        );
+    }
+
+    @Test
+    @DisplayName("no StepPayloadService wired: degrades to NORMAL rather than failing")
+    void missingStepPayloadServiceDegradesToNormal() {
+        when(storageRepository.findByRunIdAndStepKeyAndItemIndexAndEpoch(anyString(), anyString(), anyInt(), anyInt(), anyString()))
+                .thenReturn(Optional.empty());
+
+        service.persistActionData("run-1", "interface:form", "submit", Map.of(), "tenant-1", 0);
+
+        verify(storageService).saveJsonWithContext(
+                eq("tenant-1"), any(), eq(ExecutionConstants.CONTENT_TYPE_JSON),
+                isNull(), isNull(), eq("run-1"), eq("interface:form"), eq(0), eq(0), eq(0),
+                isNull(), eq("INTERFACE_ACTION"), eq(DataSensitivity.NORMAL)
+        );
     }
 }

@@ -1,14 +1,15 @@
 LiveContext Community Edition
 Copyright (c) 2026 LiveContext SAS
 
-This product is licensed under the LiveContext Sustainable Use License 1.0
+This product is licensed under the LiveContext Sustainable Use License 1.1
 (see the LICENSE file). You may use, copy, modify and redistribute it,
 including for your own production use and for the internal business
 purposes of your organization. You may not provide it to third parties on
 a hosted or embedded basis in order to compete with LiveContext's paid
 versions. Service providers may host and maintain it for their clients,
-one deployment per client, under section 7 of the LICENSE. For
-alternative licensing arrangements, contact oss@livecontext.ai.
+each deployment serving one client, as part of their services to that
+client, under section 7 of the LICENSE. For alternative licensing
+arrangements, contact oss@livecontext.ai.
 
 THE LICENSED WORK IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OR
 CONDITIONS OF ANY KIND, EXPRESS OR IMPLIED. See the LICENSE file for the

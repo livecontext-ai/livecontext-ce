@@ -190,6 +190,7 @@ public class NotificationService {
         //   row[2] category        row[6] integration   (CREDENTIAL-only, else NULL)
         //   row[3] run_id_public   row[7] credential_id (CREDENTIAL-only, else NULL)
         //                          row[8] trigger_kind  (TRIGGER-only,    else NULL)
+        //                          row[9] profile_handle (USER-only,      else NULL)
         // Post-V261 (2026-05-19): the gateway always injects X-Organization-ID
         // (personal workspaces resolve to the user's default personal org), so
         // the strict-org branch handles every workspace. The legacy
@@ -213,7 +214,8 @@ public class NotificationService {
                 "SELECT subject_type, subject_id, category, run_id_public, severity, occurred_at," +
                         "       payload->>'integration'  AS integration," +
                         "       payload->>'credentialId' AS credential_id," +
-                        "       payload->>'triggerKind'  AS trigger_kind " +
+                        "       payload->>'triggerKind'  AS trigger_kind," +
+                        "       payload->>'profileHandle' AS profile_handle " +
                         "  FROM orchestrator.notifications " +
                         scopePredicate +
                         "   AND occurred_at > now() - INTERVAL '30 days' " +
@@ -249,6 +251,7 @@ public class NotificationService {
             String integration = row.length > 6 ? (String) row[6] : null;
             String credentialId = row.length > 7 ? (String) row[7] : null;
             String triggerKind = row.length > 8 ? (String) row[8] : null;
+            String profileHandle = row.length > 9 ? (String) row[9] : null;
 
             BucketKey key = new BucketKey(subjectId, category);
 
@@ -263,7 +266,7 @@ public class NotificationService {
             // rows in the same bucket are older and their payload would be staler.
             AggBucket b = byKey.computeIfAbsent(key,
                     k -> new AggBucket(subjectId, subjectType, category, severity,
-                            runIdPublic, occurredAt, integration, credentialId, triggerKind));
+                            runIdPublic, occurredAt, integration, credentialId, triggerKind, profileHandle));
             b.count++;
             if (occurredAt.isBefore(b.firstEventAt)) b.firstEventAt = occurredAt;
             if (occurredAt.isAfter(b.lastEventAt)) {
@@ -320,7 +323,8 @@ public class NotificationService {
                     unread,
                     b.integration,
                     b.credentialId,
-                    b.triggerKind));
+                    b.triggerKind,
+                    b.profileHandle));
         }
 
         // In-memory page slice. byKey iteration order matches the
@@ -529,6 +533,7 @@ public class NotificationService {
         final String integration;
         final String credentialId;
         final String triggerKind;
+        final String profileHandle;
         String latestRunIdPublic;
         int count = 0;
         Instant firstEventAt;
@@ -536,7 +541,7 @@ public class NotificationService {
 
         AggBucket(UUID subjectId, String subjectType, String category, String severity,
                    String runIdPublic, Instant occurredAt,
-                   String integration, String credentialId, String triggerKind) {
+                   String integration, String credentialId, String triggerKind, String profileHandle) {
             this.subjectId = subjectId;
             this.subjectType = subjectType;
             this.category = category;
@@ -544,6 +549,7 @@ public class NotificationService {
             this.integration = integration;
             this.credentialId = credentialId;
             this.triggerKind = triggerKind;
+            this.profileHandle = profileHandle;
             this.latestRunIdPublic = runIdPublic;
             this.firstEventAt = occurredAt;
             this.lastEventAt = occurredAt;

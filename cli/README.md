@@ -39,4 +39,4 @@ Edit `livecontext/.env`, then re-run `npx livecontext@latest`. Compose loads thi
 
 Use `LIVECONTEXT_HOME` to select a different configuration directory, and keep using that value for every management command. Back up the configuration, encryption keys and application volumes before `update`. `down` keeps volumes; the CLI does not erase application data. See [backup and recovery](https://github.com/livecontext-ai/livecontext-ce/blob/main/docker/README-CE.md#backup-and-recovery).
 
-Licensed under the LiveContext Sustainable Use License 1.0. Part of https://github.com/livecontext-ai/livecontext-ce
+Licensed under the LiveContext Sustainable Use License 1.1. Part of https://github.com/livecontext-ai/livecontext-ce

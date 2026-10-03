@@ -43,7 +43,8 @@ public class DatasourceRowEventListener {
                 event.organizationId(),
                 event.row(),
                 event.previousRow(),
-                event.triggeredAt()
+                event.triggeredAt(),
+                event.dataSensitivity()
         );
         log.debug("Dispatching {} for datasource={} row={} org={}",
                 event.eventType(), event.dataSourceId(), event.rowId(), event.organizationId());

@@ -44,6 +44,10 @@ export interface PersonalOfferCurrent {
   reservedBonusCredits?: number | null;
   grantedCredits?: number | null;
   sessionExpiresAt?: string | null;
+  /** While a checkout is open: the plan, pack and cycle it holds (past the offer's deadline, the only one still payable). */
+  reservedPlanCode?: string | null;
+  reservedCreditTierIndex?: number | null;
+  reservedBillingCycle?: string | null;
 }
 
 export interface PersonalOfferPlanPreview {
@@ -51,6 +55,12 @@ export interface PersonalOfferPlanPreview {
   bonusCredits: number;
   paygFaceValueUsd: number;
   status: 'ELIGIBLE' | 'NO_BONUS' | 'UNAVAILABLE';
+}
+
+/** From {@code monthlyCredits} a month up, at least {@code bonusCredits} on the first payment. */
+export interface PersonalOfferStep {
+  monthlyCredits: number;
+  bonusCredits: number;
 }
 
 export interface PersonalOfferPreview {
@@ -62,6 +72,8 @@ export interface PersonalOfferPreview {
   billingCycle: 'monthly' | 'yearly';
   plans: PersonalOfferPlanPreview[];
   nextEligibleMonthlyCredits?: number | null;
+  /** The offer's bonus tiers, smallest pack first (absent from an older server). */
+  steps?: PersonalOfferStep[] | null;
 }
 
 /**
@@ -71,7 +83,7 @@ export interface PersonalOfferPreview {
  *
  * On a typed failure apiClient throws an ApiError whose {@code .code} is one of
  * INVALID_CODE | NOT_REDEEMABLE | ALREADY_REDEEMED | EXHAUSTED | SELF_REFERRAL |
- * ALREADY_PAID | ALREADY_ATTRIBUTED | CLOUD_LINK_REQUIRED, so the caller maps it to a
+ * ALREADY_PAID | ALREADY_ATTRIBUTED | PARTNER_ACCOUNT | CLOUD_LINK_REQUIRED, so the caller maps it to a
  * localized message.
  */
 export class RewardApiService {

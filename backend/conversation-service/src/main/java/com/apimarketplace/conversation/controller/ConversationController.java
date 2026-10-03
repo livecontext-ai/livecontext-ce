@@ -36,7 +36,8 @@ import java.util.Set;
  */
 @RestController
 @RequestMapping("/api/conversations")
-@CrossOrigin(origins = "*")
+// No @CrossOrigin (LC-033): CORS is decided centrally (gateway CorsConfig). A per-controller
+// wildcard would widen the origin set for any request reaching this service directly.
 public class ConversationController {
     
     private static final Logger logger = LoggerFactory.getLogger(ConversationController.class);
@@ -331,11 +332,11 @@ public class ConversationController {
             @RequestParam(value = "size", defaultValue = "10") int size) {
         try {
             logger.info("🔍 [SEARCH TITLE] Searching conversations by title for user: {} (org: {}), searchTerm: {}",
-                    userId, organizationId, searchTerm);
+                    userId, organizationId, com.apimarketplace.common.logging.PayloadLogSafety.describeText(searchTerm, 40));
             Page<ConversationDto> conversations = conversationQueryService.searchConversationsByTitle(
                     userId, organizationId, searchTerm, page, size);
             PagedResponseDto<ConversationDto> response = new PagedResponseDto<>(conversations);
-            logger.info("✅ [SEARCH TITLE] Found {} conversations matching title: {}", response.getNumberOfElements(), searchTerm);
+            logger.info("✅ [SEARCH TITLE] Found {} conversations matching title: {}", response.getNumberOfElements(), com.apimarketplace.common.logging.PayloadLogSafety.describeText(searchTerm, 40));
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             logger.error("❌ [SEARCH TITLE] Error searching conversations by title: {}", e.getMessage(), e);
@@ -356,11 +357,11 @@ public class ConversationController {
             @RequestParam(value = "size", defaultValue = "10") int size) {
         try {
             logger.info("🔍 [SEARCH CONTENT] Searching conversations by content for user: {} (org: {}), searchTerm: {}",
-                    userId, organizationId, searchTerm);
+                    userId, organizationId, com.apimarketplace.common.logging.PayloadLogSafety.describeText(searchTerm, 40));
             Page<ConversationDto> conversations = conversationQueryService.searchConversationsByContent(
                     userId, organizationId, searchTerm, page, size);
             PagedResponseDto<ConversationDto> response = new PagedResponseDto<>(conversations);
-            logger.info("✅ [SEARCH CONTENT] Found {} conversations matching content: {}", response.getNumberOfElements(), searchTerm);
+            logger.info("✅ [SEARCH CONTENT] Found {} conversations matching content: {}", response.getNumberOfElements(), com.apimarketplace.common.logging.PayloadLogSafety.describeText(searchTerm, 40));
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             logger.error("❌ [SEARCH CONTENT] Error searching conversations by content: {}", e.getMessage(), e);
@@ -429,7 +430,8 @@ public class ConversationController {
             return ResponseEntity.notFound().build();
         }
         try {
-            logger.info("[ChatConfig] Updating conversation: {}, chatConfig={}", conversationId, conversationDto.getChatConfig());
+            logger.info("[ChatConfig] Updating conversation: {}, chatConfig={}", conversationId,
+                    com.apimarketplace.common.logging.PayloadLogSafety.describeAny(conversationDto.getChatConfig()));
             ConversationDto updatedConversation = conversationCommandService.updateConversation(conversationId, conversationDto);
             return ResponseEntity.ok(updatedConversation);
         } catch (IllegalArgumentException e) {

@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { orchestratorApi } from '@/lib/api';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
+import { useUrlSearchState } from '@/hooks/useUrlState';
 import type { Skill, SkillFolder } from '@/lib/api';
 
 interface UseSkillExplorerReturn {
@@ -26,11 +27,15 @@ interface UseSkillExplorerReturn {
   moveSkill: (id: string, folderId: string | null) => Promise<void>;
 }
 
-export function useSkillExplorer(): UseSkillExplorerReturn {
+/**
+ * @param urlState true keeps the search text in the address (`?q=`), for the full Skills page.
+ *   Left off, the text stays local, so an embedded copy never owns the address.
+ */
+export function useSkillExplorer({ urlState = false }: { urlState?: boolean } = {}): UseSkillExplorerReturn {
   const [allFolders, setAllFolders] = useState<SkillFolder[]>([]);
   const [allSkills, setAllSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useUrlSearchState('q', urlState);
 
   const fetchAllFolders = useCallback(async () => {
     try {

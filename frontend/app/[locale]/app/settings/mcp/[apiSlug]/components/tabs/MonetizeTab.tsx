@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { useTranslations } from 'next-intl';
+import { urlEnum, urlNullable, useUrlState } from '@/hooks/useUrlState';
 import {
   DollarSign,
   CreditCard,
@@ -107,7 +108,13 @@ const MonetizeTab: React.FC<MonetizeTabProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
-  const [activeTab, setActiveTab] = useState<'ai-integration' | 'api-marketplace'>('ai-integration');
+  // The sub-tab the user picked lives in the address (`?view=`). Until they pick one, the tab
+  // shown is the automatic one below, which a reload must not turn into a choice.
+  const [autoTab, setAutoTab] = useState<'ai-integration' | 'api-marketplace'>('ai-integration');
+  const [chosenTab, setActiveTab] = useUrlState<'ai-integration' | 'api-marketplace' | null>('view', null, {
+    codec: urlNullable(urlEnum(['ai-integration', 'api-marketplace'])),
+  });
+  const activeTab = chosenTab ?? autoTab;
   const [hasInitialized, setHasInitialized] = useState(false);
   const [initialConfig, setInitialConfig] = useState<MonetizationConfig | null>(null);
   const [isSubTabEditing, setIsSubTabEditing] = useState(false);
@@ -430,7 +437,7 @@ const MonetizeTab: React.FC<MonetizeTabProps> = ({
       // Auto-switch to API Marketplace tab if paid plans are detected (only on initial load)
       if (hasPaid && activeTab === 'ai-integration' && !hasInitialized) {
         console.log('🔄 Switching to API Marketplace tab due to paid plans detected');
-        setActiveTab('api-marketplace');
+        setAutoTab('api-marketplace');
       }
 
       // Mark as initialized after first data load

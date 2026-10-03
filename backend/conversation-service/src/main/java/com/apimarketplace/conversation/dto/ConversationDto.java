@@ -46,6 +46,14 @@ public class ConversationDto {
 
     private String agentId;
 
+    /**
+     * CASA LC-066: the delegated task whose RESTRICTED turns this conversation holds (V563), null
+     * for every other conversation. Read-only: set by conversation-service when it creates a task
+     * conversation, never taken from a client. Lets the UI tell a task conversation from the
+     * agent's own conversation (both carry the agent id).
+     */
+    private String taskId;
+
     private String parentConversationId;
 
     private Boolean active = true;
@@ -226,6 +234,14 @@ public class ConversationDto {
 
     public void setAgentId(String agentId) {
         this.agentId = agentId;
+    }
+
+    public String getTaskId() {
+        return taskId;
+    }
+
+    public void setTaskId(String taskId) {
+        this.taskId = taskId;
     }
 
     public String getParentConversationId() {

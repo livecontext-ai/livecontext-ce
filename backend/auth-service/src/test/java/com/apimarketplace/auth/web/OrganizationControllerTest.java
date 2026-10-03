@@ -438,6 +438,9 @@ class OrganizationControllerTest {
             assertThat(resp.getHeaders().getCacheControl())
                     .isEqualTo("no-cache")
                     .doesNotContain("max-age=86400");
+            // LC-020: uploaded bytes on the app origin, public GET.
+            assertThat(resp.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+            assertThat(resp.getHeaders().getFirst("Content-Security-Policy")).contains("sandbox");
         }
 
         @Test
@@ -485,6 +488,26 @@ class OrganizationControllerTest {
             when(memberService.acceptInvitationById(invId, userId)).thenThrow(new InvitationEmailNotVerifiedException());
 
             assertEmailNotVerified(controller.acceptInvitationById(invId, userId));
+        }
+
+        @Test
+        @SuppressWarnings("unchecked")
+        @DisplayName("CASA LC-084: accept / decline by id from a CE account newer than the invitation → 403 code invitation_requires_link")
+        void byIdRequiresLinkCarriesItsCode() {
+            UUID invId = UUID.randomUUID();
+            when(memberService.acceptInvitationById(invId, userId))
+                    .thenThrow(new com.apimarketplace.auth.service.InvitationRequiresLinkException());
+            when(memberService.declineInvitationById(invId, userId))
+                    .thenThrow(new com.apimarketplace.auth.service.InvitationRequiresLinkException());
+
+            for (ResponseEntity<?> resp : java.util.List.of(
+                    controller.acceptInvitationById(invId, userId),
+                    controller.declineInvitationById(invId, userId))) {
+                assertThat(resp.getStatusCode().value()).isEqualTo(403);
+                Map<String, Object> body = (Map<String, Object>) resp.getBody();
+                // The inbox translates this code; without it the user only sees a generic refusal.
+                assertThat(body).containsEntry("code", "invitation_requires_link");
+            }
         }
 
         @Test

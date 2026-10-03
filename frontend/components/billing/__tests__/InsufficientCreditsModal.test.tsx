@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => ({
   plans: { value: undefined as unknown },
   offer: { current: { status: 'NONE' } as { status: string; offerId?: number },
     preview: null as null | { offerId: number; offerVersion: number; plans: { planCode: string; bonusCredits: number; paygFaceValueUsd: number; status: string }[] },
-    candidateCode: null, isLoading: false, isError: false, refresh: vi.fn() },
+    candidateCode: null, isLoading: false, isError: false, errorCode: null as string | null, refresh: vi.fn() },
 }));
 
 vi.mock('next-intl', () => ({
@@ -138,6 +138,9 @@ describe('InsufficientCreditsModal', () => {
     mocks.plans.value = undefined;
     mocks.offer.current = { status: 'NONE' };
     mocks.offer.preview = null;
+    mocks.offer.isError = false;
+    mocks.offer.errorCode = null;
+    mocks.offer.refresh.mockReset();
   });
 
   afterEach(() => cleanup());
@@ -186,6 +189,45 @@ describe('InsufficientCreditsModal', () => {
 
     fireEvent.click(screen.getAllByRole('button', { name: /modals.insufficientCredits.upgrade/ })[1]);
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('reward.personalOffer.errors.firstPaymentRequired'));
+  });
+
+  it('regression: another benefit in the way, refused by the preview, is said in words rather than "could not verify, try again"', async () => {
+    const createSubscription = vi.fn();
+    mocks.useSubscription.mockReturnValue({ createSubscription, subscription: null });
+    mocks.offer.current = { status: 'AVAILABLE', offerId: 42 };
+    mocks.offer.isError = true;
+    mocks.offer.errorCode = 'OFFER_CONFLICT';
+    render(<InsufficientCreditsModal />);
+    openViaEvent();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /modals.insufficientCredits.upgrade/ })[1]);
+
+    await waitFor(() => expect(screen.getAllByRole('alert').map((a) => a.textContent).join(' ')).toContain('reward.personalOffer.errors.conflict'));
+    expect(screen.queryByText('reward.personalOffer.verifyUnavailable')).toBeNull();
+    expect(createSubscription).not.toHaveBeenCalled();
+
+    // A read that failed for no named reason still asks to try again.
+    cleanup();
+    mocks.offer.errorCode = 'HTTP_503';
+    render(<InsufficientCreditsModal />);
+    openViaEvent();
+    fireEvent.click(screen.getAllByRole('button', { name: /modals.insufficientCredits.upgrade/ })[1]);
+    await waitFor(() => expect(screen.getAllByRole('alert').map((a) => a.textContent).join(' ')).toContain('reward.personalOffer.verifyUnavailable'));
+  });
+
+  it('a checkout already in progress is said in words and the offer is read again', async () => {
+    const createSubscription = vi.fn().mockRejectedValue(new ApiError('busy', 409, 'CHECKOUT_IN_PROGRESS'));
+    mocks.useSubscription.mockReturnValue({ createSubscription, subscription: null });
+    mocks.offer.current = { status: 'AVAILABLE', offerId: 42 };
+    mocks.offer.preview = { offerId: 42, offerVersion: 5, plans: [
+      { planCode: 'PRO', bonusCredits: 10000, paygFaceValueUsd: 10, status: 'ELIGIBLE' },
+    ] };
+    render(<InsufficientCreditsModal />);
+    openViaEvent();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /modals.insufficientCredits.upgrade/ })[1]);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('reward.personalOffer.errors.checkoutActive'));
+    expect(mocks.offer.refresh).toHaveBeenCalled();
   });
 
   describe('event-driven open/close', () => {

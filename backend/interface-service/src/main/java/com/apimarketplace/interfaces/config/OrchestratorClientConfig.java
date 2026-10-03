@@ -2,6 +2,7 @@ package com.apimarketplace.interfaces.config;
 
 import com.apimarketplace.common.web.SharedApplicationScopeClient;
 import com.apimarketplace.interfaces.client.OrchestratorCascadeClient;
+import com.apimarketplace.interfaces.client.OrchestratorInterfaceMembershipClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -10,16 +11,17 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Wiring for the orchestrator-side cascade client used by
  * {@code InterfaceService.deleteInterface} to scrub plan references
- * before the {@code interface.interfaces} row is removed.
+ * before the {@code interface.interfaces} row is removed, and for the
+ * CASA LC-037 plan-membership client used by {@code InterfaceController.getInterface}
+ * to bind a share-token read to the shared workflow.
  *
  * <p>{@code @ConditionalOnMissingBean}: the integration test harness
- * supplies a mocked {@code OrchestratorCascadeClient} via
- * {@code IntegrationTestConfig} (the orchestrator-service isn't
- * running in the test env, so the real client would throw on every
- * delete). Without this condition, Spring context caching across the
- * multi-test run can keep the production bean instead of the mock -
- * surfaces as a CI-only failure that doesn't reproduce when running
- * the test class in isolation (verified 2026-05-10).
+ * supplies mocked clients via {@code IntegrationTestConfig} (the
+ * orchestrator-service isn't running in the test env, so the real client
+ * would throw on every call). Without this condition, Spring context
+ * caching across the multi-test run can keep the production bean instead
+ * of the mock - surfaces as a CI-only failure that doesn't reproduce when
+ * running the test class in isolation (verified 2026-05-10).
  */
 @Configuration
 public class OrchestratorClientConfig {
@@ -29,6 +31,13 @@ public class OrchestratorClientConfig {
     public OrchestratorCascadeClient orchestratorCascadeClient(
             @Value("${services.orchestrator-url:http://localhost:8099}") String orchestratorUrl) {
         return new OrchestratorCascadeClient(orchestratorUrl);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public OrchestratorInterfaceMembershipClient orchestratorInterfaceMembershipClient(
+            @Value("${services.orchestrator-url:http://localhost:8099}") String orchestratorUrl) {
+        return new OrchestratorInterfaceMembershipClient(orchestratorUrl);
     }
 
     /**

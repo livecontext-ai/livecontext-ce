@@ -56,7 +56,10 @@ public class StorageMappingResolverService implements MappingOperations {
         this.normalizer = normalizer;
         this.converter = converter;
         String catalogBaseUrl = config.getCatalogBaseUrl();
-        this.webClient = webClientBuilder
+        // clone(): the injected builder is a shared singleton, so configuring it in place would
+        // change every client built from it afterwards (and this one would inherit whatever an
+        // earlier bean had set on it).
+        this.webClient = webClientBuilder.clone()
             .baseUrl(catalogBaseUrl)
             .build();
         // Observabilite : l'URL catalog effective au demarrage. Un localhost:8081 ici sur un deploiement

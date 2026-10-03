@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.services.file;
 
 import com.apimarketplace.common.web.UrlResolutionException;
+import com.apimarketplace.common.web.SafeAddressResolverGroup;
 import com.apimarketplace.common.web.UrlSafetyValidator;
 import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.utils.file.FileConstants;
@@ -15,12 +16,15 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
 
+import java.net.InetAddress;
+import java.net.SocketAddress;
 import java.net.URI;
 import java.time.Duration;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /**
  * WebClient-based file downloader implementation.
@@ -53,12 +57,20 @@ public class WebClientFileDownloader implements FileDownloader {
      */
     static final int MAX_REDIRECTS = 5;
 
+    /**
+     * Downloads go through a pool of their own, with the outbound transport limits (large response
+     * headers, short idle reuse): the default client shared the global pool and refused headers
+     * over 8 KB, which a CDN answer can carry.
+     */
+    private static final reactor.netty.resources.ConnectionProvider POOL =
+        com.apimarketplace.common.web.OutboundHttpTransport.pool("file-download");
+
     private final WebClient webClient;
     private final Consumer<String> urlValidator;
 
     @Autowired
     public WebClientFileDownloader(WebClient.Builder webClientBuilder) {
-        this(webClientBuilder, UrlSafetyValidator::validateUrl);
+        this(webClientBuilder, UrlSafetyValidator::validateUrl, UrlSafetyValidator::isUnsafeAddress);
     }
 
     /**
@@ -68,20 +80,53 @@ public class WebClientFileDownloader implements FileDownloader {
      * against the real one instead, so the wiring is covered.
      */
     WebClientFileDownloader(WebClient.Builder webClientBuilder, Consumer<String> urlValidator) {
+        // Test seam: a local test server IS loopback, so the connect-time guard is off here too.
+        this(webClientBuilder, urlValidator, address -> false);
+    }
+
+    /**
+     * @param unsafeAddress the connect-time SSRF filter (LC-073). Production uses
+     *                      {@link UrlSafetyValidator#isUnsafeAddress}.
+     */
+    WebClientFileDownloader(WebClient.Builder webClientBuilder, Consumer<String> urlValidator,
+                            Predicate<InetAddress> unsafeAddress) {
         // followRedirect stays FALSE on purpose. Letting Netty follow would skip the
         // per-hop validation below, which is the SSRF bypass 9f16b7f02 closed: an allowed
         // host redirecting to an internal address. Redirects are followed here instead,
         // one hop at a time, each validated before it is requested.
-        HttpClient httpClient = HttpClient.create()
-            .followRedirect(false);
+        //
+        // DNS rebinding (LC-073): validateHop resolves the name and judges the answer, then
+        // Netty used to resolve it AGAIN through its own resolver and cache, so a name that
+        // answered public to the check and private to the connect reached the cluster. The
+        // resolver below vets the very answer the socket is dialled with, and the channel hooks
+        // re-check the connected peer (an IP literal never goes through a resolver).
+        HttpClient httpClient = com.apimarketplace.common.web.OutboundHttpTransport.client(POOL)
+            .followRedirect(false)
+            .resolver(new SafeAddressResolverGroup(unsafeAddress))
+            .doOnChannelInit((observer, channel, remoteAddress) ->
+                assertRemoteAddressSafe(remoteAddress, unsafeAddress))
+            .doOnConnected(connection ->
+                assertRemoteAddressSafe(connection.channel().remoteAddress(), unsafeAddress));
 
-        this.webClient = webClientBuilder
+        // clone(), never the injected builder itself: it is a shared singleton (StorageConfig), and
+        // setting this SSRF-pinned connector on it made every client built from it afterwards
+        // refuse private addresses. In the CE monolith that broke OAuth Connect ("Credential
+        // template not found": OAuth2Service's in-process catalog call was refused as internal).
+        this.webClient = webClientBuilder.clone()
             .clientConnector(new ReactorClientHttpConnector(httpClient))
             .codecs(configurer -> configurer
                 .defaultCodecs()
                 .maxInMemorySize((int) FileConstants.MAX_FILE_SIZE_BYTES))
             .build();
         this.urlValidator = urlValidator;
+    }
+
+    /** Error text used when a hostname resolves to an internal address at connect time. */
+    static final String INTERNAL_TARGET_MESSAGE = SafeAddressResolverGroup.INTERNAL_TARGET_MESSAGE;
+
+    /** See {@link SafeAddressResolverGroup#assertRemoteAddressSafe}. */
+    static void assertRemoteAddressSafe(SocketAddress remoteAddress, Predicate<InetAddress> unsafeAddress) {
+        SafeAddressResolverGroup.assertRemoteAddressSafe(remoteAddress, unsafeAddress);
     }
 
     @Override

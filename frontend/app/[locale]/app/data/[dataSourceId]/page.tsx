@@ -82,7 +82,7 @@ export default function DataSourceDetailPage({ params }: Props) {
 
   return (
     <div className="h-full w-full p-6 flex flex-col">
-      <DataTable key={refreshKey} dataSourceId={numericId} />
+      <DataTable key={refreshKey} dataSourceId={numericId} urlState />
     </div>
   );
 }

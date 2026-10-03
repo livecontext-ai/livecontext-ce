@@ -46,7 +46,8 @@ export async function generateMetadata({ searchParams }: ModelsPageProps) {
     description: DESCRIPTION,
     alternates: { canonical: '/models' },
     ...socialCard({ title: 'AI models', description: DESCRIPTION, path: '/models' }),
-    robots: IS_CE ? { index: false, follow: false } : undefined,
+    // Only on CE: on the cloud an explicit 'robots: undefined' wiped the root layout's directives.
+    ...(IS_CE ? { robots: { index: false, follow: false } } : {}),
   };
   if (!provider) return base;
 

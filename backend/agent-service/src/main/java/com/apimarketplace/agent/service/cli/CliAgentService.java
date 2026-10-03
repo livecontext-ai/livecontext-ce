@@ -331,6 +331,12 @@ public class CliAgentService {
     /**
      * Execute a single tool within an existing session.
      */
+    /**
+     * Provider label used for the restricted-data decision on this path: every session here is a
+     * CLI bridge, none of which is on the restricted-data allow-list.
+     */
+    static final String CLI_BRIDGE_PROVIDER_LABEL = "cli-bridge";
+
     public CliToolResponse executeTool(CliToolRequest request, String tenantId) {
         long startTime = System.currentTimeMillis();
 
@@ -374,6 +380,27 @@ public class CliAgentService {
                 toolCall, toolDef, tenantId, session.credentials);
 
             long duration = System.currentTimeMillis() - startTime;
+
+            // LC-004: this result goes back to a CLI bridge (claude-code, codex, gemini-cli, ...),
+            // which runs on a subscription account and is NOT on the restricted-data allow-list.
+            // A Gmail / Drive result therefore never reaches it: the CLI gets the refusal, which
+            // tells the user which models can process that data. The real result is not recorded
+            // in the session either, so observability never stores what the model never saw.
+            // Honours the install policy: on a self-hosted install (auth.mode=embedded) the
+            // allow-list is not enforced by default, and the operator's own CLI may receive it.
+            if (com.apimarketplace.common.classification.RestrictedDataPolicy
+                    .fromToolMetadata(result.metadata()).isRestricted()
+                    && !com.apimarketplace.common.classification.RestrictedDataPolicy
+                        .mayReceiveRestricted(CLI_BRIDGE_PROVIDER_LABEL)) {
+                String refusal = com.apimarketplace.common.classification.RestrictedDataPolicy
+                    .refusalMessage(CLI_BRIDGE_PROVIDER_LABEL);
+                log.warn("CLI tool result withheld: restricted data from {} (session={})",
+                    request.tool(), request.sessionId());
+                session.toolResults.add(ToolResult.builder()
+                    .toolCall(toolCall).success(false).error(refusal).durationMs(duration).build());
+                session.toolCallCount++;
+                return new CliToolResponse(false, null, refusal, duration, null);
+            }
 
             // Record in session
             session.toolResults.add(result);

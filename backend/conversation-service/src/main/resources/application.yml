@@ -172,6 +172,10 @@ conversation:
   bridge:
     enabled: ${CONVERSATION_BRIDGE_ENABLED:true}
     url: ${BRIDGE_SERVICE_URL:http://localhost:8093}
+    # LC-022: when true, a run requested by a PLATFORM ADMIN (ADMIN in X-User-Roles) is signed
+    # UNRESTRICTED (native host tools, source checkout, repo/shell MCP tools) unless it is in
+    # restricted "API mode". Every other run is restricted whatever this says. Off by default.
+    host-tools-enabled: ${CONVERSATION_BRIDGE_HOST_TOOLS_ENABLED:false}
   # Stage 4a.2 - Just-In-Time tools-schema routing per model tier. Read by
   # ModelTierMapper. mode-by-tier applies to every model with that tier; an
   # entry in model-overrides wins over the tier lookup. unknown-model-default

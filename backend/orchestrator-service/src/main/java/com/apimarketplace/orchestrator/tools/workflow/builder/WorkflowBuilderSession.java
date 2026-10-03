@@ -456,6 +456,42 @@ public class WorkflowBuilderSession {
         return false;
     }
 
+    // ==================== Note Anchors ====================
+
+    /**
+     * Plan key of a note's anchor: the id of the node the note explains (e.g. {@code core:check_seen}).
+     * Stored as a node id like edge endpoints, so it survives the same renames edges do.
+     */
+    public static final String NOTE_ANCHOR_KEY = "attachedTo";
+
+    /**
+     * Resolve what a caller wrote as a note's anchor (label, normalized label or node id) to a node id,
+     * or null when it names no node, or names a note (a note explains a node, not another note).
+     */
+    public String resolveNoteAnchor(String reference) {
+        if (reference == null || reference.isBlank()) return null;
+        String resolved = resolveNodeReference(reference.trim());
+        if (resolved == null || LabelNormalizer.isNoteKey(resolved) || !nodeExists(resolved)) return null;
+        return resolved;
+    }
+
+    /**
+     * Remove the notes attached to {@code nodeId} and return them, so the caller can restore them on undo.
+     * A note attached to a removed node would explain a node nobody can see any more.
+     */
+    public List<Map<String, Object>> removeNotesAttachedTo(String nodeId) {
+        List<Map<String, Object>> removed = new ArrayList<>();
+        if (nodeId == null || LabelNormalizer.isNoteKey(nodeId)) return removed;
+        notes.removeIf(note -> {
+            if (nodeId.equals(note.get(NOTE_ANCHOR_KEY))) {
+                removed.add(note);
+                return true;
+            }
+            return false;
+        });
+        return removed;
+    }
+
     // ==================== Label Validation ====================
 
     /**
@@ -657,6 +693,13 @@ public class WorkflowBuilderSession {
 
     public void updateAllReferences(String oldNodeId, String newNodeId) {
         getEdgeManager().updateAllReferences(oldNodeId, newNodeId);
+
+        // A note names its node by id, exactly like an edge, so a rename must carry it along.
+        for (Map<String, Object> note : notes) {
+            if (oldNodeId.equals(note.get(NOTE_ANCHOR_KEY))) {
+                note.put(NOTE_ANCHOR_KEY, newNodeId);
+            }
+        }
 
         // Re-key per-node state from old→new id. Same phantom-resolution class as
         // removeNode: a node renamed via modify (which changes its prefixed id, e.g.

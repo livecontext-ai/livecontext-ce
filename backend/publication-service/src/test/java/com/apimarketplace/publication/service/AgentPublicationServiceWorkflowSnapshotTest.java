@@ -940,7 +940,7 @@ class AgentPublicationServiceWorkflowSnapshotTest {
                 dataSourceId, "teammate", "DataSource " + dataSourceId, "Shared datasource",
                 null, null, null, null, null, null, null, null, null, null, null, ORG_ID);
         lenient().when(dataSourceClient.findByIdAndTenantId(dataSourceId, TENANT_ID, ORG_ID)).thenReturn(ds);
-        lenient().when(dataSourceClient.getAllItems(dataSourceId, TENANT_ID, ORG_ID)).thenReturn(List.of());
+        lenient().when(dataSourceClient.copyAllItems(dataSourceId, TENANT_ID, ORG_ID)).thenReturn(List.of());
     }
 
     /** Stub agent-client so the recursive sub-agent snapshot resolves to a minimal leaf agent. */

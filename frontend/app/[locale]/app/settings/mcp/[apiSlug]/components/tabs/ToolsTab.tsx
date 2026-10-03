@@ -6,6 +6,7 @@ import { Search, Wrench, Plus } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useTranslations } from 'next-intl';
+import { useUrlSearchState } from '@/hooks/useUrlState';
 
 interface Tool {
   id: string;
@@ -30,7 +31,8 @@ const ToolsTab: React.FC<ToolsTabProps> = ({ tools }) => {
   const router = useRouter();
   const params = useParams();
   const apiId = params.apiSlug as string;
-  const [searchQuery, setSearchQuery] = useState('');
+  // In the address, so a reload keeps the search. The page's tab bar drops it.
+  const [searchQuery, setSearchQuery] = useUrlSearchState('q');
 
   // Filter tools
   const filteredTools = useMemo(() => {

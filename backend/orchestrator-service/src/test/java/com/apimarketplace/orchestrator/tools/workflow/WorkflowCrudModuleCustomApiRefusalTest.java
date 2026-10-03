@@ -141,6 +141,57 @@ class WorkflowCrudModuleCustomApiRefusalTest {
     }
 
     @Test
+    @DisplayName("regression (refusal text): a row refusal gives the reason once, no 'Heaviest' list, and the real table id")
+    void tooLargeTableNamesItsIdAndTheFixes() {
+        String reason = "Table 'Orders' has 6000 rows (max 5000 rows per published table).";
+        when(publicationClient.publishWorkflow(any(), eq(TENANT_ID), any()))
+                .thenThrow(new PublicationValidationException(
+                        "PUBLICATION_SNAPSHOT_TOO_LARGE",
+                        reason + " Delete rows from that table, or stop using it in this workflow, then publish again.",
+                        Map.of("reason", reason, "maxTableRows", 5000, "breakdown", List.of(Map.of(
+                                "type", "datasource", "id", "9", "name", "Orders", "items", 6000))),
+                        null));
+
+        ToolExecutionResult result = publish();
+
+        assertThat(result.errorCode()).isEqualTo(
+                com.apimarketplace.agent.tools.ToolErrorCode.INVALID_PARAMETER_VALUE);
+        assertThat(result.error()).isEqualTo("Publish refused: " + reason + " Fix: delete rows with "
+                + "table(action='delete_rows', table_id=9, where={...}), or remove the node that uses it with "
+                + "workflow(action='remove', node='<label>'), then publish again.");
+    }
+
+    @Test
+    @DisplayName("a size refusal lists the heaviest tables")
+    void sizeRefusalListsHeaviest() {
+        String reason = "Publication snapshot is 16.0 MB (max 15.0 MB).";
+        when(publicationClient.publishWorkflow(any(), eq(TENANT_ID), any()))
+                .thenThrow(new PublicationValidationException(
+                        "PUBLICATION_SNAPSHOT_TOO_LARGE", reason + " Reduce the content of the heaviest resources listed.",
+                        Map.of("reason", reason, "sizeBytes", 16_777_216L, "breakdown", List.of(Map.of(
+                                "type", "datasource", "id", "9", "name", "Orders", "items", 4000))),
+                        null));
+
+        assertThat(publish().error()).startsWith("Publish refused: " + reason
+                + " Heaviest: datasource \"Orders\" (4000 rows). Fix: delete rows from the heaviest table");
+    }
+
+    @Test
+    @DisplayName("a transient table copy failure is a retryable EXTERNAL_SERVICE_ERROR, not a plan error")
+    void tableCopyFailureIsRetryable() {
+        when(publicationClient.publishWorkflow(any(), eq(TENANT_ID), any()))
+                .thenThrow(new PublicationValidationException(
+                        "TABLE_COPY_FAILED", "The rows of table 'Orders' (id 9) could not be read just now, so "
+                                + "nothing was published. This is temporary: publish again in a moment.",
+                        Map.of("retryable", true), null));
+
+        ToolExecutionResult result = publish();
+
+        assertThat(result.errorCode()).isEqualTo(com.apimarketplace.agent.tools.ToolErrorCode.EXTERNAL_SERVICE_ERROR);
+        assertThat(result.error()).startsWith("Publish failed: The rows of table 'Orders' (id 9)");
+    }
+
+    @Test
     @DisplayName("an unrelated runtime failure still reports EXECUTION_FAILED (the mapping is not a catch-all)")
     void otherFailuresStayExecutionFailures() {
         when(publicationClient.publishWorkflow(any(), eq(TENANT_ID), any()))

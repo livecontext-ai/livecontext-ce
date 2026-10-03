@@ -47,6 +47,9 @@ import os
 import time
 from typing import Any, Optional
 
+from app.config import settings
+from app.services.crawl_filter import is_callback_url_allowed
+
 logger = logging.getLogger(__name__)
 
 
@@ -155,7 +158,14 @@ async def run_in_container(parameters: dict, redis_url: str) -> dict:
     api_key = llm_cfg.get("api_key") or os.environ.get("GOOGLE_API_KEY", "")
     bridge_url = llm_cfg.get("bridge_url") or os.environ.get("BRIDGE_URL", "")
 
+    # Forward the callback only when it targets a configured orchestrator
+    # origin: the container must never be handed an arbitrary URL to POST to.
     callback_url = parameters.get("callback_url")
+    if callback_url:
+        allowed, reason = is_callback_url_allowed(callback_url, settings.callback_allowed_origins)
+        if not allowed:
+            logger.warning("dropping browser-agent callback_url: %s", reason)
+            callback_url = None
 
     max_steps = max(1, min(int(parameters.get("max_steps") or DEFAULT_MAX_STEPS), MAX_STEPS_HARD_CAP))
     timeout_s = max(1, min(int(parameters.get("timeout_seconds") or DEFAULT_TIMEOUT_S), MAX_TIMEOUT_S))

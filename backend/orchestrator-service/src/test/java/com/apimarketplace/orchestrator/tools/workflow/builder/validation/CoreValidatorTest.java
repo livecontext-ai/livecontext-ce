@@ -725,4 +725,262 @@ class CoreValidatorTest {
             assertThat(result.getErrors()).noneMatch(e -> e.code().equals("INBOX_NO_TARGET_FOLDER"));
         }
     }
+
+    /**
+     * LC-018: the code body is the one parameter that becomes executable source. A {{...}}
+     * expression there splices an upstream value into JavaScript, TypeScript, Python or Bash,
+     * so a plan is refused while it is still being written and the author is pointed at the
+     * input object, which carries the same data without ever being parsed as code.
+     */
+    @Nested
+    @DisplayName("Code body must not carry a template expression")
+    class CodeTemplateTests {
+
+        private ValidationResult validate(Object codeField) {
+            Map<String, Object> core = new HashMap<>();
+            core.put("type", "code");
+            core.put("label", "Process");
+            core.put("code", codeField);
+            when(session.getCores()).thenReturn(List.of(core));
+
+            ValidationResult result = ValidationResult.builder().build();
+            validator.validate(session, result);
+            return result;
+        }
+
+        @Test
+        @DisplayName("Should only WARN about a {{...}} expression inside a string literal (saved workflows keep validating)")
+        void shouldWarnAboutTemplateInsideStringLiteral() {
+            ValidationResult result = validate(Map.of(
+                    "language", "javascript",
+                    "code", "const subject = '{{mcp:fetch_mail.output.subject}}';"));
+
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("CODE_TEMPLATE_IN_BODY"));
+            assertThat(result.getWarnings()).anyMatch(w -> w.code().equals("CODE_TEMPLATE_IN_BODY"));
+        }
+
+        @Test
+        @DisplayName("Should WARN, not block, on a {{...}} expression at a code position: the run splices it as data, and existing workflows must keep saving")
+        void shouldWarnOnTemplateAtCodePosition() {
+            ValidationResult result = validate(Map.of(
+                    "language", "javascript",
+                    "code", "const n = {{mcp:fetch_mail.output.count}};"));
+
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("CODE_TEMPLATE_IN_BODY"));
+            assertThat(result.getWarnings()).anyMatch(w -> w.code().equals("CODE_TEMPLATE_IN_BODY")
+                    && w.message().contains("{{mcp:fetch_mail.output.count}}"));
+        }
+
+        @Test
+        @DisplayName("Should name the input object so the author knows what to write instead")
+        void shouldTellTheAuthorToUseTheInputObject() {
+            ValidationResult result = validate(Map.of(
+                    "language", "python",
+                    "code", "subject = {{mcp:fetch_mail.output.subject}}"));
+
+            String message = result.getWarnings().stream()
+                    .filter(w -> w.code().equals("CODE_TEMPLATE_IN_BODY"))
+                    .map(w -> w.message())
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(message).contains("$input").contains("_input").contains("INPUT");
+            assertThat(message).contains("workflow(action='modify'");
+        }
+
+        @Test
+        @DisplayName("Should warn about it on the flat code shape an exported plan carries too")
+        void shouldWarnOnTemplateOnFlatCodeShape() {
+            ValidationResult result = validate("$output = {{trigger:start.output.name}};");
+
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("CODE_TEMPLATE_IN_BODY"));
+            assertThat(result.getWarnings()).anyMatch(w -> w.code().equals("CODE_TEMPLATE_IN_BODY"));
+        }
+
+        @Test
+        @DisplayName("Should accept a code body that reads the input object")
+        void shouldAcceptInputObjectRead() {
+            ValidationResult result = validate(Map.of(
+                    "language", "javascript",
+                    "code", "$output = { subject: $input.fetch_mail.output.subject };"));
+
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("CODE_TEMPLATE_IN_BODY"));
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("CODE_NO_CODE"));
+        }
+
+        @Test
+        @DisplayName("Should not flag a lone brace pair that is not an expression")
+        void shouldNotFlagPlainBraces() {
+            ValidationResult result = validate(Map.of(
+                    "language", "javascript",
+                    "code", "const empty = {}; if (x) { doWork(); }"));
+
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("CODE_TEMPLATE_IN_BODY"));
+        }
+
+        @Test
+        @DisplayName("Should still report a missing code body without a template error")
+        void shouldStillReportMissingCode() {
+            ValidationResult result = validate(Map.of("language", "javascript"));
+
+            assertThat(result.getErrors()).anyMatch(e -> e.code().equals("CODE_NO_CODE"));
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("CODE_TEMPLATE_IN_BODY"));
+        }
+
+        /**
+         * The guard used to be a bare {@code contains("{{")}, which refused source the engine
+         * never touches. It now matches with the engine's own expression pattern, so authoring
+         * and execution agree on what a placeholder is. A doubled brace holding a nested closing
+         * brace is not an expression: the run leaves it as written, so the save must too.
+         */
+        @Test
+        @DisplayName("Should not refuse a doubled brace the template engine would never resolve")
+        void shouldNotRefuseADoubledBraceThatIsNotAnExpression() {
+            ValidationResult result = validate(Map.of(
+                    "language", "javascript",
+                    "code", "if (ok) {{ a } b }}\n$output = { ok };"));
+
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("CODE_TEMPLATE_IN_BODY"));
+        }
+    }
+
+    /**
+     * LC-018: WHERE a placeholder sits decides which warning the author gets. Outside any string
+     * literal the run splices the value as a complete literal (data, never source), so the body
+     * does not do what it reads like; inside one the value is escaped into the literal as text.
+     *
+     * <p>Regression review 2026-09-29: this used to be a plan-SAVE refusal, which blocked every
+     * existing workflow holding such a node from being saved again. It is a builder warning now,
+     * and these cases pin the scanner that decides the wording, per language.
+     */
+    @Nested
+    @DisplayName("Outside-literal warning: where the placeholder sits, per language")
+    class OutsideLiteralWarningTests {
+
+        /** The outside-literal warning for this body, or null when the validator does not raise it. */
+        private String outsideLiteralWarning(String language, Object codeField) {
+            Map<String, Object> core = new HashMap<>();
+            core.put("type", "code");
+            core.put("label", "Process");
+            core.put("code", language == null ? codeField : Map.of("language", language, "code", codeField));
+            when(session.getCores()).thenReturn(List.of(core));
+
+            ValidationResult result = ValidationResult.builder().build();
+            validator.validate(session, result);
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("CODE_TEMPLATE_IN_BODY"));
+            return result.getWarnings().stream()
+                    .filter(w -> w.code().equals("CODE_TEMPLATE_IN_BODY"))
+                    .map(w -> w.message())
+                    .filter(m -> m.contains("outside any string literal"))
+                    .findFirst()
+                    .orElse(null);
+        }
+
+        @Test
+        @DisplayName("Warns about a placeholder in bare statement position and names it")
+        void warnsOnBareStatementPlaceholder() {
+            String message = outsideLiteralWarning(
+                    "javascript", "const o = {{core:build.output.obj}};");
+
+            assertThat(message).isNotNull();
+            assertThat(message).contains("Process").contains("{{core:build.output.obj}}");
+            assertThat(message).contains("$input").contains("_input").contains("INPUT");
+        }
+
+        @Test
+        @DisplayName("No outside-literal warning for a placeholder inside the string literal the author wrote around it")
+        void noOutsideWarningInsideAStringLiteral() {
+            assertThat(outsideLiteralWarning(
+                    "javascript", "const s = '{{trigger:start.output.name}}';"))
+                    .isNull();
+            assertThat(outsideLiteralWarning(
+                    "javascript", "const s = \"{{trigger:start.output.name}}\";"))
+                    .isNull();
+            assertThat(outsideLiteralWarning(
+                    "javascript", "const s = `{{trigger:start.output.name}}`;"))
+                    .isNull();
+        }
+
+        @Test
+        @DisplayName("Warns about a placeholder in a JavaScript interpolation, which is code again")
+        void warnsOnPlaceholderInsideAnInterpolation() {
+            assertThat(outsideLiteralWarning(
+                    "javascript", "const s = `total ${ {{core:sum.output.n}} }`;"))
+                    .isNotNull();
+        }
+
+        @Test
+        @DisplayName("Warns about a placeholder in a comment, where nothing escapes a comment terminator")
+        void warnsOnPlaceholderInAComment() {
+            assertThat(outsideLiteralWarning(
+                    "javascript", "/* see {{trigger:start.output.name}} */\n$output = {};"))
+                    .isNotNull();
+        }
+
+        @Test
+        @DisplayName("Bash: both quoted words are safe, a bare or substituted position is not")
+        void bashQuotingDecidesTheVerdict() {
+            assertThat(outsideLiteralWarning(
+                    "bash", "SUBJECT='{{mcp:mail.output.subject}}'"))
+                    .isNull();
+            // A double-quoted word expands $, ` and \, but a backslash escapes each of them there,
+            // so the value can be made data IN PLACE and the everyday echo "{{...}}" draws no warning.
+            assertThat(outsideLiteralWarning(
+                    "bash", "SUBJECT=\"{{mcp:mail.output.subject}}\""))
+                    .isNull();
+            // A bare word has no delimiters at all.
+            assertThat(outsideLiteralWarning(
+                    "bash", "SUBJECT={{mcp:mail.output.subject}}"))
+                    .isNotNull();
+            // Inside a command substitution the shell re-parses: escaping for the surrounding
+            // quotes would leave the value as an argument of a command that still runs.
+            assertThat(outsideLiteralWarning(
+                    "bash", "echo \"$(cat {{mcp:mail.output.subject}})\""))
+                    .isNotNull();
+            assertThat(outsideLiteralWarning(
+                    "bash", "echo \"${x:-{{mcp:mail.output.subject}}}\""))
+                    .isNotNull();
+            assertThat(outsideLiteralWarning(
+                    "bash", "echo \"`cat {{mcp:mail.output.subject}}`\""))
+                    .isNotNull();
+        }
+
+        @Test
+        @DisplayName("Python: a triple-quoted literal is a literal")
+        void pythonTripleQuotedIsALiteral() {
+            assertThat(outsideLiteralWarning(
+                    "python", "s = \"\"\"{{mcp:mail.output.subject}}\"\"\""))
+                    .isNull();
+            assertThat(outsideLiteralWarning(
+                    "python", "s = {{mcp:mail.output.subject}}"))
+                    .isNotNull();
+        }
+
+        @Test
+        @DisplayName("Reads the flat code shape an exported plan carries, and defaults to javascript")
+        void readsTheFlatShape() {
+            assertThat(outsideLiteralWarning(null, "const o = {{core:build.output.obj}};")).isNotNull();
+        }
+
+        /**
+         * The checked-in end-to-end fixture (buildCodeTaskWorkflowPlan) creates its workflow
+         * through the plan-save API, and its code body templates four values. Every one of them
+         * is written inside the quotes the author typed, so it must not draw the outside-literal
+         * warning, which would tell the author their working code does not do what it reads like.
+         */
+        @Test
+        @DisplayName("No outside-literal warning on the checked-in e2e fixture body, quote by quote")
+        void acceptsTheCheckedInFixtureBody() {
+            String fixtureBody = String.join("\n",
+                    "console.log('processed {{item.name}}');",
+                    "$output = {",
+                    "  name: '{{item.name}}',",
+                    "  marker: '{{trigger:start.output.marker}}',",
+                    "  doubled: Number('{{item.score}}') * 2,",
+                    "  itemIndex: Number('{{index}}')",
+                    "};");
+
+            assertThat(outsideLiteralWarning(
+                    "javascript", fixtureBody)).isNull();
+        }
+    }
 }

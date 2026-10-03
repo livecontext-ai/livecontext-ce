@@ -23,17 +23,39 @@ public class StorageClient {
 
     private static final Logger log = LoggerFactory.getLogger(StorageClient.class);
 
+    /** Stable caller identity echoed in X-Provider-ID and bound into the gateway signature. */
+    static final String INTERNAL_PROVIDER_ID = "internal-storage-client";
+
     private final RestTemplate restTemplate;
     private final String baseUrl;
+    private final String gatewaySecretKey;
 
     public StorageClient(String storageServiceUrl) {
-        this.restTemplate = new RestTemplate();
-        this.baseUrl = storageServiceUrl;
+        this(new RestTemplate(), storageServiceUrl, null);
+    }
+
+    public StorageClient(String storageServiceUrl, String gatewaySecretKey) {
+        this(new RestTemplate(), storageServiceUrl, gatewaySecretKey);
     }
 
     public StorageClient(RestTemplate restTemplate, String storageServiceUrl) {
+        this(restTemplate, storageServiceUrl, null);
+    }
+
+    /**
+     * CASA LC-038: every call to {@code /api/internal/storage/*} carries the gateway signature
+     * (v1 stamped in {@link #buildHeaders}, v2 added at send time), so storage-service can gate
+     * that prefix with {@code hmac-required-paths} and trust the {@code X-User-ID} its key-owner
+     * check compares against. A blank secret (dev, CE where verification is off) sends unsigned.
+     */
+    public StorageClient(RestTemplate restTemplate, String storageServiceUrl, String gatewaySecretKey) {
         this.restTemplate = restTemplate;
         this.baseUrl = storageServiceUrl;
+        this.gatewaySecretKey = gatewaySecretKey;
+        if (gatewaySecretKey != null && !gatewaySecretKey.isBlank()) {
+            restTemplate.getInterceptors().add(
+                    new com.apimarketplace.common.web.GatewaySignatureV2Interceptor(() -> gatewaySecretKey));
+        }
     }
 
     /**
@@ -511,6 +533,9 @@ public class StorageClient {
         } else {
             OrgContextHeaderForwarder.forward(headers);
         }
+        // Sign LAST, over the identity headers as they will be sent (the forwarder above may
+        // have added X-User-ID / X-Organization-ID).
+        com.apimarketplace.common.web.InternalGatewaySigner.stamp(headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
         return headers;
     }
 

@@ -86,7 +86,7 @@ public class PasswordAuthService {
      * languages, so the number is pinned by a test on this side and the mirror
      * names this constant in a comment.
      */
-    public static final int MIN_PASSWORD_LENGTH = 8;
+    public static final int MIN_PASSWORD_LENGTH = 12;
     private static final int REFRESH_TOKEN_BYTES = 32;
 
     private final UserRepository userRepository;
@@ -181,6 +181,12 @@ public class PasswordAuthService {
         user.setAuthProvider(AuthProvider.LOCAL);
         user.setProviderId("local:" + email);
         user.setEnabled(true);
+        // Every CE self-registration is marked verified. CE ships no self-serve email verification
+        // flow (the code flow is disabled for CE), and onboarding completion REQUIRES a verified
+        // email (OnboardingService#completeOnboarding), so an unverified CE account could never
+        // finish onboarding: verifying only the first user (tried for CASA LC-084) locked every
+        // later member of a self-hosted install out of the app. The invitation-hijack risk LC-084
+        // named is guarded independently by OrganizationMemberService#requireInboxEligible.
         user.setEmailVerified(true);
         user.setRoles(isFirstUser ? Set.of("USER", "ADMIN") : Set.of("USER"));
         LocalDateTime registeredAt = LocalDateTime.now();
@@ -300,15 +306,16 @@ public class PasswordAuthService {
      */
     @Transactional
     public TokenPair generateTokenPair(User user, String userAgent, String ipAddress) {
-        String accessToken = jwtTokenProvider.generateAccessToken(user, resolveOrganizationClaims(user));
-
         // Generate opaque refresh token
         byte[] tokenBytes = new byte[REFRESH_TOKEN_BYTES];
         secureRandom.nextBytes(tokenBytes);
         String rawRefreshToken = Base64.getUrlEncoder().withoutPadding().encodeToString(tokenBytes);
         String tokenHash = hashToken(rawRefreshToken);
 
-        // Evict oldest tokens if limit exceeded
+        // Evict oldest tokens if limit exceeded. NOTE (CASA LC-015): this revokes EVERY session row
+        // of the user, and CE access tokens are bound to their row (sid claim), so every other
+        // device is signed out immediately (within CeSessionRevocationService's 5s cache), not
+        // only at its next refresh as before.
         long activeCount = refreshTokenRepository.countActiveByUserId(user.getId(), LocalDateTime.now());
         if (activeCount >= MAX_ACTIVE_TOKENS_PER_USER) {
             refreshTokenRepository.revokeAllByUserId(user.getId(), LocalDateTime.now());
@@ -321,7 +328,14 @@ public class PasswordAuthService {
         RefreshToken refreshToken = new RefreshToken(tokenHash, user, expiresAt);
         refreshToken.setUserAgent(userAgent != null ? truncate(userAgent, 512) : null);
         refreshToken.setIpAddress(ipAddress);
-        refreshTokenRepository.save(refreshToken);
+        RefreshToken saved = refreshTokenRepository.save(refreshToken);
+        Long sessionRowId = saved != null ? saved.getId() : refreshToken.getId();
+
+        // CASA LC-015: the access token names the session (refresh-token row) it belongs to, so
+        // revoking that row (logout, password change, reuse detection, eviction) also withdraws
+        // the access token instead of leaving it valid for the rest of its TTL.
+        String accessToken = jwtTokenProvider.generateAccessToken(user, resolveOrganizationClaims(user),
+                sessionRowId != null ? String.valueOf(sessionRowId) : null);
 
         return new TokenPair(
                 accessToken,

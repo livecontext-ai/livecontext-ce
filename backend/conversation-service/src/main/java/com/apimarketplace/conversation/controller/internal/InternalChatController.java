@@ -155,7 +155,8 @@ public class InternalChatController {
             // effects - the user had no way to know their wallet was empty.
             String errorContent = "[Error] " + ChatCreditRefusal.MESSAGE + " - this scheduled run was skipped. "
                     + "Top up your wallet to resume scheduled execution.";
-            messageService.persistAttemptAndError(conversationId, request.getMessage(), errorContent);
+            messageService.persistAttemptAndError(conversationId, request.getMessage(), errorContent,
+                    restrictedOrNull(request));
             // Also record a FAILED execution row so the attempt shows up in Agent
             // Performance / Agent Fleet with stop reason BUDGET_EXHAUSTED. Without
             // this, the conversation shows the error but the agent dashboards stay
@@ -190,12 +191,27 @@ public class InternalChatController {
         userMsg.setRole("user");
         userMsg.setContent(request.getMessage());
         userMsg.setTimestamp(Instant.now().toString());
+        // LC-066: a delegated task written from a restricted execution carries Gmail / Drive
+        // content. Stored restricted, the conversation then holds restricted data, so
+        // RestrictedDataTransferGuard tags this turn and refuses it on a provider outside the
+        // allow-list (and every later turn of the conversation, which re-sends this message).
+        userMsg.setDataSensitivity(restrictedOrNull(request));
         messageService.addMessage(conversationId, userMsg);
 
         // Execute synchronously - blocks until agent completes
         Map<String, Object> result = agentService.executeSync(request, conversationId);
 
         return ResponseEntity.ok(result);
+    }
+
+    /**
+     * RESTRICTED when the caller tagged the message so (LC-066), else null (classified as usual).
+     * Also called by the CE monolith's re-host of {@code /api/internal/chat/sync}, so both editions tag alike.
+     */
+    public static String restrictedOrNull(ChatRequest request) {
+        return com.apimarketplace.common.classification.DataSensitivity.parse(request.getDataSensitivity()).isRestricted()
+                ? com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name()
+                : null;
     }
 
 }

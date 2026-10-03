@@ -139,6 +139,10 @@ public class WorkflowCrudController {
     /**
      * Gets a workflow by its ID.
      * Requires tenant authentication - only returns workflows owned by the requesting tenant.
+     *
+     * <p>A share-link holder acts as the owner (CASA LC-037): only a workflow of the shared
+     * publication is served, through {@link WorkflowControllerHelper#shareContextPermitsWorkflow}
+     * below; any other id answers 404, like an unknown one.
      */
     @GetMapping("/{workflowId}")
     public ResponseEntity<?> getWorkflow(

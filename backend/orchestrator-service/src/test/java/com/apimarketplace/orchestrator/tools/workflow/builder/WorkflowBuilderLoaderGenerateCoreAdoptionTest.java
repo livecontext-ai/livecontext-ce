@@ -192,6 +192,23 @@ class WorkflowBuilderLoaderGenerateCoreAdoptionTest {
     }
 
     @Test
+    @DisplayName("a note attached to the node follows it, so it keeps its rename and remove cascade")
+    @SuppressWarnings("unchecked")
+    void theNotesFollowTheNode() throws Exception {
+        WorkflowEntity workflow = workflowWith();
+        workflow.getPlan().put("notes", new ArrayList<>(List.of(
+                new LinkedHashMap<>(Map.of("id", "n1", "label", "Why", "text", "x", "attachedTo", "core:make_clip")),
+                new LinkedHashMap<>(Map.of("id", "n2", "label", "Other", "text", "y", "attachedTo", "core:use_clip")))));
+
+        WorkflowBuilderSession session = load(workflow);
+
+        assertThat(nodeLabelled(session.getNotes(), "Why")).containsEntry("attachedTo", "agent:make_clip");
+        assertThat(nodeLabelled(session.getNotes(), "Other"))
+                .as("a note on a node that was not adopted keeps its anchor")
+                .containsEntry("attachedTo", "core:use_clip");
+    }
+
+    @Test
     @DisplayName("the node itself carries the new key, since the exporter looks it up by id")
     void theNodeCarriesTheNewId() throws Exception {
         WorkflowBuilderSession session = load(workflowWith());

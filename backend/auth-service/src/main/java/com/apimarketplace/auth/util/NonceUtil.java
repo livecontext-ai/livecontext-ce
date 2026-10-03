@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -20,6 +21,12 @@ import java.util.Map;
  * Utility for creating and decoding nonces from user_id.
  * The nonce is an opaque identifier that masks the user ID for Stripe
  * while allowing secure recovery.
+ *
+ * <p>Formats: {@code n2_} (written) is AES-256-GCM with a random 96-bit IV and a 128-bit tag,
+ * base64url without padding (a valid Stripe {@code client_reference_id}), keyed by the SHA-256 of
+ * {@code auth.nonce.encryption-key}. {@code n_} (read only) is the historical AES-128-ECB
+ * envelope: such nonces live in Stripe customer metadata for the life of a subscription, so they
+ * stay decodable. ECB is no longer produced (CASA LC-026).
  */
 @Component
 public class NonceUtil {
@@ -27,10 +34,23 @@ public class NonceUtil {
     private static final Logger log = LoggerFactory.getLogger(NonceUtil.class);
 
     private static final String ALGORITHM = "AES";
-    private static final String TRANSFORMATION = "AES/ECB/PKCS5Padding";
+    private static final String LEGACY_TRANSFORMATION = "AES/ECB/PKCS5Padding";
+    private static final String TRANSFORMATION = "AES/GCM/NoPadding";
+    private static final int GCM_IV_BYTES = 12;
+    private static final int GCM_TAG_BITS = 128;
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
-    /** 16-byte AES-128 key material derived from the configured key. */
+    /** Prefix of the authenticated format written today. */
+    static final String NONCE_PREFIX = "n2_";
+    /** Prefix of the historical AES-ECB format, still readable. */
+    static final String LEGACY_NONCE_PREFIX = "n_";
+
+    /** 16-byte AES-128 key material, legacy ECB reads only. */
+    private final byte[] legacyKeyBytes;
+    /** 32-byte AES-256 key material of the GCM format. */
     private final byte[] keyBytes;
+    /** True when no key is configured (see {@link #isUsingEphemeralKey()}). */
+    private final boolean ephemeralKey;
 
     /**
      * {@code @Autowired} is REQUIRED here, not decorative: with two constructors and no
@@ -42,13 +62,42 @@ public class NonceUtil {
     @Autowired
     public NonceUtil(@Value("${auth.nonce.encryption-key:}") String configuredKey) {
         if (configuredKey == null || configuredKey.isBlank()) {
-            this.keyBytes = generateEphemeralKeyBytes();
+            byte[] ephemeral = generateEphemeralKeyBytes();
+            this.keyBytes = ephemeral;
+            this.legacyKeyBytes = Arrays.copyOf(ephemeral, 16);
+            this.ephemeralKey = true;
+            // Deliberately NOT fatal, even in prod: refusing to start without the secret would take
+            // auth-service (every login) down for a billing-only concern. The ephemeral state is
+            // instead published as the gauge auth.nonce.key.ephemeral (1 = unset) so it is
+            // alertable, and setting NONCE_ENCRYPTION_KEY is a mandatory deploy step.
             log.warn("auth.nonce.encryption-key is not set - using an ephemeral startup key. " +
                     "Set a deployment-specific value (NONCE_ENCRYPTION_KEY env) so billing nonces " +
-                    "survive restarts and replicas.");
+                    "survive restarts and replicas (metric auth.nonce.key.ephemeral=1).");
         } else {
-            this.keyBytes = deriveKeyBytes(configuredKey);
+            this.legacyKeyBytes = deriveKeyBytes(configuredKey);
+            this.keyBytes = sha256(configuredKey.getBytes(StandardCharsets.UTF_8));
+            this.ephemeralKey = false;
         }
+    }
+
+    /** True when no key is configured and this process mints its own (nonces die with it). */
+    public boolean isUsingEphemeralKey() {
+        return ephemeralKey;
+    }
+
+    /**
+     * Publishes {@link #isUsingEphemeralKey()} as the gauge {@code auth.nonce.key.ephemeral}
+     * (1 = no NONCE_ENCRYPTION_KEY, cross-replica Stripe webhooks cannot decode nonces).
+     * Optional: a context without a registry still gets a working component.
+     */
+    @Autowired(required = false)
+    public void bindTo(io.micrometer.core.instrument.MeterRegistry registry) {
+        if (registry == null) {
+            return;
+        }
+        io.micrometer.core.instrument.Gauge.builder("auth.nonce.key.ephemeral", this, n -> n.ephemeralKey ? 1 : 0)
+                .description("1 when auth.nonce.encryption-key (NONCE_ENCRYPTION_KEY) is not configured")
+                .register(registry);
     }
 
     /** Convenience constructor for tests: uses an ephemeral startup key. */
@@ -57,8 +106,8 @@ public class NonceUtil {
     }
 
     private static byte[] generateEphemeralKeyBytes() {
-        byte[] bytes = new byte[16];
-        new SecureRandom().nextBytes(bytes);
+        byte[] bytes = new byte[32];
+        SECURE_RANDOM.nextBytes(bytes);
         return bytes;
     }
 
@@ -72,9 +121,12 @@ public class NonceUtil {
         if (raw.length == 16) {
             return raw;
         }
+        return Arrays.copyOf(sha256(raw), 16);
+    }
+
+    private static byte[] sha256(byte[] input) {
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(raw);
-            return Arrays.copyOf(digest, 16);
+            return MessageDigest.getInstance("SHA-256").digest(input);
         } catch (Exception e) {
             throw new IllegalStateException("SHA-256 unavailable", e);
         }
@@ -116,7 +168,7 @@ public class NonceUtil {
             String encryptedData = encrypt(dataToEncrypt);
             
             // Create the final nonce with a prefix for identification
-            String nonce = "n_" + encryptedData;
+            String nonce = NONCE_PREFIX + encryptedData;
             
             // Store in cache
             nonceToUserIdCache.put(nonce, userId);
@@ -151,15 +203,16 @@ public class NonceUtil {
                 return cachedUserId;
             }
             
-            // Verify the nonce format
-            if (!nonce.startsWith("n_")) {
+            // Verify the nonce format and decrypt: n2_ (GCM, written today) or n_ (legacy ECB)
+            String decryptedData;
+            if (nonce.startsWith(NONCE_PREFIX)) {
+                decryptedData = decrypt(nonce.substring(NONCE_PREFIX.length()));
+            } else if (nonce.startsWith(LEGACY_NONCE_PREFIX)) {
+                decryptedData = decryptLegacy(nonce.substring(LEGACY_NONCE_PREFIX.length()));
+            } else {
                 log.warn("Invalid nonce format: {}", nonce);
                 return null;
             }
-            
-            // Extract and decrypt the data
-            String encryptedData = nonce.substring(2);
-            String decryptedData = decrypt(encryptedData);
             
             if (decryptedData == null) {
                 log.warn("Failed to decrypt nonce: {}", nonce);
@@ -228,32 +281,50 @@ public class NonceUtil {
     }
     
     /**
-     * Encrypts a string.
+     * Seals the payload with AES-256-GCM: a fresh 96-bit IV per call, prepended to
+     * ciphertext+tag, base64url without padding.
      */
     private String encrypt(String data) throws Exception {
-        SecretKeySpec keySpec = new SecretKeySpec(keyBytes, ALGORITHM);
+        byte[] iv = new byte[GCM_IV_BYTES];
+        SECURE_RANDOM.nextBytes(iv);
         Cipher cipher = Cipher.getInstance(TRANSFORMATION);
-        cipher.init(Cipher.ENCRYPT_MODE, keySpec);
-        
-        byte[] encryptedBytes = cipher.doFinal(data.getBytes(StandardCharsets.UTF_8));
-        return Base64.getEncoder().encodeToString(encryptedBytes);
+        cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(keyBytes, ALGORITHM),
+                new GCMParameterSpec(GCM_TAG_BITS, iv));
+        byte[] sealed = cipher.doFinal(data.getBytes(StandardCharsets.UTF_8));
+        byte[] envelope = new byte[iv.length + sealed.length];
+        System.arraycopy(iv, 0, envelope, 0, iv.length);
+        System.arraycopy(sealed, 0, envelope, iv.length, sealed.length);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(envelope);
     }
-    
-    /**
-     * Decrypts a string.
-     */
+
+    /** Opens an {@code n2_} payload; null when it is malformed or its tag does not verify. */
     private String decrypt(String encryptedData) {
         try {
-            SecretKeySpec keySpec = new SecretKeySpec(keyBytes, ALGORITHM);
+            byte[] envelope = Base64.getUrlDecoder().decode(encryptedData);
+            if (envelope.length <= GCM_IV_BYTES) {
+                log.warn("Nonce payload too short to carry an IV");
+                return null;
+            }
             Cipher cipher = Cipher.getInstance(TRANSFORMATION);
-            cipher.init(Cipher.DECRYPT_MODE, keySpec);
-            
-            byte[] decodedBytes = Base64.getDecoder().decode(encryptedData);
-            byte[] decryptedBytes = cipher.doFinal(decodedBytes);
-            
-            return new String(decryptedBytes, StandardCharsets.UTF_8);
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(keyBytes, ALGORITHM),
+                    new GCMParameterSpec(GCM_TAG_BITS, envelope, 0, GCM_IV_BYTES));
+            byte[] plain = cipher.doFinal(envelope, GCM_IV_BYTES, envelope.length - GCM_IV_BYTES);
+            return new String(plain, StandardCharsets.UTF_8);
         } catch (Exception e) {
             log.error("Decryption failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** Opens a historical {@code n_} (AES-128-ECB) payload. Read only: nothing writes this shape. */
+    private String decryptLegacy(String encryptedData) {
+        try {
+            Cipher cipher = Cipher.getInstance(LEGACY_TRANSFORMATION);
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(legacyKeyBytes, ALGORITHM));
+            return new String(cipher.doFinal(Base64.getDecoder().decode(encryptedData)),
+                    StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.error("Legacy nonce decryption failed: {}", e.getMessage());
             return null;
         }
     }

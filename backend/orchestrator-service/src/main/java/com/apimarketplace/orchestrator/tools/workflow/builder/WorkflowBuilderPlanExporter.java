@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.tools.workflow.builder;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.orchestrator.execution.v2.nodes.MediaNode;
 import com.apimarketplace.orchestrator.tools.workflow.builder.creators.DecisionNodeCreator;
+import com.apimarketplace.orchestrator.tools.workflow.builder.creators.NoteCreator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.session.SessionPlanBuilder;
 import com.apimarketplace.orchestrator.utils.EdgeRefParser;
 import com.apimarketplace.orchestrator.domain.workflow.NodePolicy;
@@ -133,6 +134,15 @@ public class WorkflowBuilderPlanExporter {
 
         // Import control nodes (auto-correct decision format already done in validation)
         importList(plan, "cores", session.getCores());
+        // The plan is label-native, so an agent writes a core without an id; the plan parser
+        // then SKIPS it ("Core with missing id"), and the saved workflow runs without the node
+        // while the run still reports success. Give it the id add_node would have given it.
+        for (Map<String, Object> core : session.getCores()) {
+            if (!(core.get("id") instanceof String id) || id.isBlank()) {
+                String key = LabelNormalizer.coreKey(core.get("label") instanceof String l ? l : null);
+                if (key != null) core.put("id", key);
+            }
+        }
 
         // Import interfaces
         importList(plan, "interfaces", session.getInterfaces());
@@ -140,8 +150,21 @@ public class WorkflowBuilderPlanExporter {
         // Import tables
         importList(plan, "tables", session.getTables());
 
-        // Import notes
+        // Import notes (after every node, so an anchor resolves to the node's real id)
         importList(plan, "notes", session.getNotes());
+        // Ids the plan states are taken before any is generated, so a generated one never
+        // collides with a note further down that carries the same id explicitly.
+        Set<String> noteIds = new HashSet<>();
+        for (Map<String, Object> note : session.getNotes()) {
+            if (note.get("id") instanceof String id && !id.isBlank()) noteIds.add(id);
+        }
+        List<Map<String, Object>> notes = session.getNotes();
+        for (int i = 0; i < notes.size(); i++) {
+            canonicalizeImportedNote(session, notes.get(i), noteIds, formFieldIssues);
+            // An agent's notes usually carry no colour: they alternate through the palette.
+            NoteCreator.applyNextColor(notes.get(i), notes.subList(0, i));
+        }
+        formFieldIssues.addAll(noteLabelClashes(session));
 
         // Import edges (convert labels to normalized IDs)
         importEdges(plan, session);
@@ -167,6 +190,83 @@ public class WorkflowBuilderPlanExporter {
                 target.add(LabelNormalizer.normalizeVariableReferencesDeep(new LinkedHashMap<>(item)));
             }
         }
+    }
+
+    /**
+     * Give an agent-written note the shape the canvas and the plan parser read: {@code text} (a note
+     * written with {@code content} would otherwise import EMPTY, the parser reads text only), an
+     * {@code id} unique among the notes (the parser drops a note without one, and the canvas keys
+     * nodes by it), and its anchor as a node id like an edge's.
+     */
+    private void canonicalizeImportedNote(WorkflowBuilderSession session, Map<String, Object> note,
+                                          Set<String> usedIds, List<String> warnings) {
+        if (note.get("text") == null && note.get("content") instanceof String content) {
+            note.put("text", content);
+            note.remove("content");
+        }
+        Object id = note.get("id");
+        if (!(id instanceof String s) || s.isBlank()) {
+            Object label = note.get("label");
+            String key = LabelNormalizer.noteKey(label instanceof String l ? l : null);
+            String candidate = key != null ? key : "note:" + UUID.randomUUID().toString().substring(0, 8);
+            for (int i = 2; usedIds.contains(candidate); i++) {
+                candidate = (key != null ? key : "note") + "_" + i;
+            }
+            note.put("id", candidate);
+            usedIds.add(candidate);
+        }
+        Object anchor = note.remove("attached_to");
+        if (anchor == null) anchor = note.get(WorkflowBuilderSession.NOTE_ANCHOR_KEY);
+        if (anchor instanceof String ref && !ref.isBlank()) {
+            String anchorId = session.resolveNoteAnchor(ref);
+            if (anchorId != null) {
+                note.put(WorkflowBuilderSession.NOTE_ANCHOR_KEY, anchorId);
+            } else {
+                // validateNoteAnchors refuses an anchor that names no node, so this is the residue
+                // of a form the two resolvers read differently. Said, never dropped in silence.
+                note.remove(WorkflowBuilderSession.NOTE_ANCHOR_KEY);
+                warnings.add("Note '" + note.getOrDefault("label", note.get("id")) + "': attachedTo '" + ref
+                        + "' did not resolve to a node, so the note was imported as a free note. Attach it with "
+                        + "workflow(action='modify', node='<note label>', params={attachedTo: '<node label>'}).");
+            }
+        } else {
+            note.remove(WorkflowBuilderSession.NOTE_ANCHOR_KEY);
+        }
+    }
+
+    /**
+     * modify and remove find a note by its label, after every node: a note labelled like a node, or
+     * like another note, is accepted (the canvas tells them apart) but the agent cannot address it.
+     * Said once, with the way out, instead of discovered when a remove hits the wrong node.
+     */
+    private List<String> noteLabelClashes(WorkflowBuilderSession session) {
+        Set<String> nodeLabels = new HashSet<>();
+        for (String id : session.getAllNodeIds()) {
+            if (LabelNormalizer.isNoteKey(id)) continue;
+            session.findNode(id)
+                    .map(n -> WorkflowBuilderSession.normalizeLabel(n.get("label") instanceof String l ? l : null))
+                    .ifPresent(nodeLabels::add);
+        }
+        Map<String, Integer> noteCounts = new LinkedHashMap<>();
+        for (Map<String, Object> note : session.getNotes()) {
+            String normalized = WorkflowBuilderSession.normalizeLabel(note.get("label") instanceof String l ? l : null);
+            if (normalized != null) noteCounts.merge(normalized, 1, Integer::sum);
+        }
+        List<String> warnings = new ArrayList<>();
+        for (Map<String, Object> note : session.getNotes()) {
+            String label = note.get("label") instanceof String l ? l : null;
+            String normalized = WorkflowBuilderSession.normalizeLabel(label);
+            if (normalized == null) continue;
+            if (nodeLabels.contains(normalized)) {
+                warnings.add("Note '" + label + "' has the label of a node, so modify/remove with that label reach the "
+                        + "node, not the note. Give the note its own label with set_plan to edit it later.");
+            } else if (noteCounts.getOrDefault(normalized, 0) > 1) {
+                warnings.add("Several notes are labelled '" + label + "': modify/remove with that label cannot tell them "
+                        + "apart. Give each note its own label with set_plan to edit them later.");
+                noteCounts.put(normalized, 0); // once per label
+            }
+        }
+        return warnings;
     }
 
     @SuppressWarnings("unchecked")
@@ -374,7 +474,12 @@ public class WorkflowBuilderPlanExporter {
         // Notes
         List<Map<String, Object>> notesList = new ArrayList<>();
         for (Map<String, Object> note : session.getNotes()) {
-            notesList.add(new LinkedHashMap<>(note));
+            Map<String, Object> copy = new LinkedHashMap<>(note);
+            // Labels, like the edges: what set_plan accepts back.
+            if (copy.get(WorkflowBuilderSession.NOTE_ANCHOR_KEY) instanceof String anchorId) {
+                copy.put(WorkflowBuilderSession.NOTE_ANCHOR_KEY, nodeIdToLabelRef(session, anchorId));
+            }
+            notesList.add(copy);
         }
         if (!notesList.isEmpty()) {
             plan.put("notes", notesList);
@@ -500,7 +605,11 @@ public class WorkflowBuilderPlanExporter {
         validateAgents(plan, errors, allLabels);
         validateCores(plan, errors, allLabels);
         validateInterfaces(plan, errors, allLabels);
+        validateTableKeys(plan, errors);
         validateLabelsOnly(plan, "tables", allLabels);
+        // Before the notes join allLabels: an anchor must name a NODE, and a note may share its
+        // node's label ("Check Seen" explaining Check Seen), as the session resolver allows.
+        validateNoteAnchors(plan, errors, allLabels);
         validateLabelsOnly(plan, "notes", allLabels);
         validateEdges(plan, errors, allLabels);
         validateNodePolicies(plan, errors);
@@ -796,6 +905,25 @@ public class WorkflowBuilderPlanExporter {
         }
     }
 
+    /**
+     * The plan parser SKIPS a table node without a label or a type, without an error: the workflow
+     * then saves and runs as if the node had never been written. Refused here instead.
+     */
+    @SuppressWarnings("unchecked")
+    private void validateTableKeys(Map<String, Object> plan, List<String> errors) {
+        if (!(plan.get("tables") instanceof List<?> tables)) return;
+        for (int i = 0; i < tables.size(); i++) {
+            if (!(tables.get(i) instanceof Map<?, ?> raw)) continue;
+            Map<String, Object> table = (Map<String, Object>) raw;
+            if (!(table.get("label") instanceof String label) || label.isBlank()) {
+                errors.add("tables[" + i + "]: 'label' is required");
+            }
+            if (!(table.get("type") instanceof String type) || type.isBlank()) {
+                errors.add("tables[" + i + "]: 'type' is required (insert-row, find, read-row, update-row, delete-row)");
+            }
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private void validateCores(Map<String, Object> plan, List<String> errors, Set<String> allLabels) {
         Object obj = plan.get("cores");
@@ -807,6 +935,10 @@ public class WorkflowBuilderPlanExporter {
         }
 
         List<Map<String, Object>> cores = (List<Map<String, Object>>) obj;
+        // A core without an id is given core:<normalized label> on import, and the plan parser
+        // SKIPS a core it cannot key, without an error. So every core must end up with an id,
+        // and no two with the same one; checked here, while the caller can still fix it.
+        Set<String> coreIds = new HashSet<>();
         for (int i = 0; i < cores.size(); i++) {
             Map<String, Object> cn = cores.get(i);
             String label = (String) cn.get("label");
@@ -815,10 +947,23 @@ public class WorkflowBuilderPlanExporter {
             if (label == null || label.isBlank()) {
                 errors.add("cores[" + i + "]: 'label' is required");
             } else {
-                if (allLabels.contains(label.toLowerCase())) {
+                String normalized = WorkflowBuilderSession.normalizeLabel(label);
+                String statedId = cn.get("id") instanceof String s && !s.isBlank() ? s : null;
+                if ((normalized == null || normalized.isBlank()) && statedId == null) {
+                    // Only a core WITHOUT an id needs its label as a key: a core saved by the canvas
+                    // carries its id, so a label in any script keeps working there.
+                    errors.add("cores[" + i + "]: label '" + label + "' must contain at least one latin letter or digit, "
+                            + "or the core must state its id: without an id the label becomes the node's key "
+                            + "(core:<label>), which keeps only a-z and 0-9");
+                } else if (allLabels.contains(label.toLowerCase())
+                        || (normalized != null && !normalized.isBlank() && allLabels.contains(normalized))) {
                     errors.add("cores[" + i + "]: Duplicate label '" + label + "'");
                 }
                 registerLabelForms(label, "cores", allLabels);
+                String id = statedId != null ? statedId : LabelNormalizer.coreKey(label);
+                if (id != null && !coreIds.add(id)) {
+                    errors.add("cores[" + i + "]: id '" + id + "' is already used by another core; give each core its own label");
+                }
             }
 
             if (type == null || type.isBlank()) {
@@ -1183,6 +1328,36 @@ public class WorkflowBuilderPlanExporter {
             String label = (String) item.get("label");
             if (label != null && !label.isBlank()) {
                 registerLabelForms(label, key, allLabels);
+            }
+        }
+    }
+
+    /**
+     * A note's {@code attachedTo} must name a node of the plan, in any form an edge endpoint accepts.
+     * A dangling anchor would otherwise store fine and place the note nowhere in particular.
+     */
+    @SuppressWarnings("unchecked")
+    private void validateNoteAnchors(Map<String, Object> plan, List<String> errors, Set<String> nodeLabels) {
+        if (!(plan.get("notes") instanceof List<?> notes)) return;
+        Set<String> noteLabels = new HashSet<>();
+        validateLabelsOnly(plan, "notes", noteLabels);
+        for (int i = 0; i < notes.size(); i++) {
+            if (!(notes.get(i) instanceof Map<?, ?> raw)) continue;
+            Map<String, Object> note = (Map<String, Object>) raw;
+            Object anchor = note.get(WorkflowBuilderSession.NOTE_ANCHOR_KEY);
+            if (anchor == null) anchor = note.get("attached_to");
+            if (anchor == null) continue;
+            String noteName = String.valueOf(note.getOrDefault("label", "notes[" + i + "]"));
+            if (!(anchor instanceof String ref) || ref.isBlank()) {
+                errors.add("Note '" + noteName + "': attachedTo must be the label of the node it explains");
+            } else if (EdgeRefParser.splitPort(ref)[1] != null) {
+                errors.add("Note '" + noteName + "': attachedTo '" + ref + "' names a port; give the node's label alone");
+            } else if (resolveEdgeLabel(ref, nodeLabels)) {
+                continue;
+            } else if (resolveEdgeLabel(ref, noteLabels)) {
+                errors.add("Note '" + noteName + "': attachedTo '" + ref + "' is a note; attach it to the node it explains");
+            } else {
+                errors.add("Note '" + noteName + "': attachedTo references unknown node '" + ref + "'");
             }
         }
     }

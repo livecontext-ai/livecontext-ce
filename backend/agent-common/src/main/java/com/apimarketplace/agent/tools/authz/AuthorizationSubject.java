@@ -37,8 +37,18 @@ public final class AuthorizationSubject {
 
     /** A workflow being pinned or unpinned. The card resolves its name from {@code id}. */
     public static final String KIND_WORKFLOW = "workflow";
-    /** An agent being armed with a cron. */
+    /** An agent being armed with a cron, or launched as a sub-agent. */
     public static final String KIND_AGENT = "agent";
+    /** An installed marketplace application being run. The card previews it from {@code id}. */
+    public static final String KIND_APPLICATION = "application";
+    /** A node of an existing run being replayed, with everything downstream of it. */
+    public static final String KIND_RUN_NODE = "run_node";
+    /** A single node run on its own, outside any workflow. */
+    public static final String KIND_NODE = "node";
+    /** A catalog API tool being called. */
+    public static final String KIND_API_TOOL = "api_tool";
+    /** An email leaving the connected mailbox. */
+    public static final String KIND_MAIL = "mail";
 
     /** Metadata key under which the subject travels, alongside {@code rule} / {@code action}. */
     public static final String METADATA_KEY = "subject";
@@ -59,6 +69,24 @@ public final class AuthorizationSubject {
             case "workflow:pin" -> workflowSubject(arguments, true);
             case "workflow:unpin" -> workflowSubject(arguments, false);
             case ToolAuthorizationPolicy.RULE_AGENT_SCHEDULE -> agentScheduleSubject(arguments);
+            // An agent update, which AgentCrudModule reads through the MERGED view (as the
+            // rule itself does), so the agent is named whichever shape the call used.
+            case ToolAuthorizationPolicy.RULE_AGENT_DISARM -> single(KIND_AGENT, "id",
+                    firstNonBlank(ToolParamUtils.mergeParams(arguments), "agent_id"));
+            // The run rules below read only the TOP-LEVEL arguments, exactly as their executors
+            // do (WorkflowBuilderProvider, ApplicationCrudModule, SubAgentExecutionHandler,
+            // MailboxToolsProvider and the catalog tool never merge a nested params object), so
+            // the card cannot name a target the call would not touch.
+            // NOT workflowSubject: execute resolves `id` BEFORE `workflow_id`
+            // (WorkflowBuilderProvider.resolveWorkflowId), the reverse of pin. A call carrying
+            // both must be named by the one that actually runs.
+            case "workflow:execute" -> single(KIND_WORKFLOW, "id", firstNonBlank(arguments, "id", "workflow_id"));
+            case "workflow:restart_from_node" -> runNodeSubject(arguments);
+            case "workflow:run_node" -> single(KIND_NODE, "type", firstNonBlank(arguments, "type"));
+            case "application:execute" -> single(KIND_APPLICATION, "id", firstNonBlank(arguments, "application_id"));
+            case "agent:execute" -> single(KIND_AGENT, "id", firstNonBlank(arguments, "agent_id"));
+            case "catalog:execute", "catalog:call" -> single(KIND_API_TOOL, "id", firstNonBlank(arguments, "tool_id"));
+            case "mailbox:send" -> mailSubject(arguments);
             default -> null;
         };
     }
@@ -129,6 +157,64 @@ public final class AuthorizationSubject {
         if (name != null) {
             subject.put("name", name);
         }
+        return subject;
+    }
+
+    /**
+     * {@code {kind, node, run_id?}}. The node is what restarts, so without it there is nothing
+     * to name. {@code node_id} is the spelling the tool falls back to.
+     */
+    private static Map<String, Object> runNodeSubject(Map<String, Object> arguments) {
+        String node = firstNonBlank(arguments, "node", "node_id");
+        if (node == null) {
+            return null;
+        }
+        Map<String, Object> subject = new LinkedHashMap<>();
+        subject.put("kind", KIND_RUN_NODE);
+        subject.put("node", node);
+        String runId = firstNonBlank(arguments, "run_id");
+        if (runId != null) {
+            subject.put("run_id", runId);
+        }
+        return subject;
+    }
+
+    /**
+     * {@code {kind, to, cc?, bcc?, subject?}}. The recipient is the point of the card: the one thing a
+     * user must see before mail leaves under their address.
+     */
+    private static Map<String, Object> mailSubject(Map<String, Object> arguments) {
+        String to = firstNonBlank(arguments, "to");
+        if (to == null) {
+            return null;
+        }
+        Map<String, Object> subject = new LinkedHashMap<>();
+        subject.put("kind", KIND_MAIL);
+        subject.put("to", to);
+        // Copies receive the mail too: a card naming only `to` would understate who gets it.
+        String cc = firstNonBlank(arguments, "cc");
+        if (cc != null) {
+            subject.put("cc", cc);
+        }
+        String bcc = firstNonBlank(arguments, "bcc");
+        if (bcc != null) {
+            subject.put("bcc", bcc);
+        }
+        String title = firstNonBlank(arguments, "subject");
+        if (title != null) {
+            subject.put("subject", title);
+        }
+        return subject;
+    }
+
+    /** {@code {kind, key: value}}, or {@code null} when the call carries no value to name. */
+    private static Map<String, Object> single(String kind, String key, String value) {
+        if (value == null) {
+            return null;
+        }
+        Map<String, Object> subject = new LinkedHashMap<>();
+        subject.put("kind", kind);
+        subject.put(key, value);
         return subject;
     }
 

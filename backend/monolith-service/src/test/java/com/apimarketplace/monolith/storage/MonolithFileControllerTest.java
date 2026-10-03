@@ -288,7 +288,7 @@ class MonolithFileControllerTest {
 
             assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(r.getHeaders().getFirst("Content-Security-Policy"))
-                    .isEqualTo("default-src 'none'; style-src 'unsafe-inline'");
+                    .isEqualTo(com.apimarketplace.common.web.SafeFileServeHeaders.CONTENT_SECURITY_POLICY);
             assertThat(r.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
             assertThat(r.getHeaders().getFirst("Cache-Control")).isEqualTo("public, max-age=86400");
             assertThat(r.getBody()).isEqualTo("<svg/>".getBytes(StandardCharsets.UTF_8));
@@ -335,6 +335,26 @@ class MonolithFileControllerTest {
         }
 
         @Test
+        @DisplayName("LC-020 (CE twin): an uploaded text/html file downloads instead of rendering, with nosniff + sandbox CSP")
+        void htmlFileIsForcedToAttachment() {
+            StorageEntity entity = mock(StorageEntity.class);
+            when(entity.getFileName()).thenReturn("page.html");
+            lenient().when(entity.getMimeType()).thenReturn("text/html");
+            when(entity.getS3Key()).thenReturn("42/general/files/page.html");
+            lenient().when(entity.getOrganizationId()).thenReturn("org-9");
+            when(storageService.getEntityByIdForScope(id, "42", "org-9")).thenReturn(Optional.of(entity));
+            when(orgAccessGuard.canAccess("org-9", "42", "file", id.toString(), "ADMIN")).thenReturn(true);
+            when(fileStorageService.download("42/general/files/page.html"))
+                    .thenReturn(Optional.of("<script>alert(1)</script>".getBytes(StandardCharsets.UTF_8)));
+
+            ResponseEntity<byte[]> response = controller().rawById(id, "inline", "42", "org-9", "ADMIN");
+
+            assertThat(response.getHeaders().getFirst("Content-Disposition")).startsWith("attachment;");
+            assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+            assertThat(response.getHeaders().getFirst("Content-Security-Policy")).contains("sandbox");
+        }
+
+        @Test
         @DisplayName("Falls back to the owner fast-path when no active-org header is present")
         void ownerFastPathWithoutOrgHeader() {
             StorageEntity entity = mock(StorageEntity.class);
@@ -377,6 +397,7 @@ class MonolithFileControllerTest {
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
             verify(fileStorageService, never()).download(anyString());
         }
+
     }
 
     /** CE mount of the signed link that interface media streams from (see FileController.signedUrlById). */

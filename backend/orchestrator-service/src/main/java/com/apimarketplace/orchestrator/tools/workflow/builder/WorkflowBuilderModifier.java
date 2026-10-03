@@ -75,6 +75,12 @@ public class WorkflowBuilderModifier {
         // Remove logical mapping and linked interfaces
         List<String> unlinkedInterfaces = session.unlinkAllInterfaces(nodeId);
 
+        // The notes explaining this node go with it; undo brings them back.
+        List<Map<String, Object>> removedNotes = session.removeNotesAttachedTo(nodeId);
+        if (!removedNotes.isEmpty()) {
+            previousState.put("attachedNotes", new ArrayList<>(removedNotes));
+        }
+
         // Record action for undo (with full state to restore)
         session.recordAction("remove", nodeId, getNodeType(nodeId), previousState);
         session.clearRedoStack();
@@ -84,6 +90,9 @@ public class WorkflowBuilderModifier {
         // Build detailed response
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", "OK");
+        if (!removedNotes.isEmpty()) {
+            result.put("notes_removed", removedNotes.stream().map(n -> n.get("label")).toList());
+        }
         // When logicalId == label (the common case) the message used to render as
         // `Node "X" "X" removed.` which the LLM systematically interpreted as two
         // separate instances and re-issued the same remove call. Collapse to a
@@ -384,6 +393,14 @@ public class WorkflowBuilderModifier {
         boolean policyChanged = policyObj != null
                 && NodePolicyApplier.applyToNode(node, policyObj, nodeId);
 
+        // A note's anchor is written as a label, stored as a node id (like an edge endpoint).
+        if (LabelNormalizer.isNoteKey(nodeId)) {
+            String anchorError = canonicalizeNoteAnchor(session, changes);
+            if (anchorError != null) {
+                return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, anchorError);
+            }
+        }
+
         // Store old values for undo
         Map<String, Object> oldValues = new LinkedHashMap<>();
         for (String key : changes.keySet()) {
@@ -647,6 +664,31 @@ public class WorkflowBuilderModifier {
     }
 
     /**
+     * Rewrite a note's {@code attached_to}/{@code attachedTo} change to the stored form: the anchor
+     * node's id, or null to detach. Returns an error message when the anchor names no node.
+     */
+    private String canonicalizeNoteAnchor(WorkflowBuilderSession session, Map<String, Object> changes) {
+        String key = WorkflowBuilderSession.NOTE_ANCHOR_KEY;
+        if (changes.containsKey("attached_to")) {
+            changes.put(key, changes.remove("attached_to"));
+        }
+        if (!changes.containsKey(key)) return null;
+        Object ref = changes.get(key);
+        if (ref == null || (ref instanceof String s && s.isBlank())) {
+            changes.put(key, null); // detach: the note becomes a free note
+            return null;
+        }
+        String anchorId = ref instanceof String s ? session.resolveNoteAnchor(s) : null;
+        if (anchorId == null) {
+            return "attachedTo '" + ref + "' is not a node of this workflow (a note is attached to the node it "
+                    + "explains, never to another note). Send attachedTo: null to detach the note. Available: "
+                    + session.getAllNodeIds().stream().filter(id -> !LabelNormalizer.isNoteKey(id)).toList();
+        }
+        changes.put(key, anchorId);
+        return null;
+    }
+
+    /**
      * Undo the last action.
      */
     @SuppressWarnings("unchecked")
@@ -690,6 +732,13 @@ public class WorkflowBuilderModifier {
                     }
                     if (outgoingEdges != null) {
                         session.getEdges().addAll(outgoingEdges);
+                    }
+
+                    List<Map<String, Object>> attachedNotes = (List<Map<String, Object>>) data.get("attachedNotes");
+                    if (attachedNotes != null) {
+                        for (Map<String, Object> note : attachedNotes) {
+                            session.getNotes().add(new LinkedHashMap<>(note));
+                        }
                     }
 
                     description = "Restored node \"" + nodeId + "\" with all connections";
@@ -814,6 +863,7 @@ public class WorkflowBuilderModifier {
                 // Re-remove the node
                 if (nodeId != null && session.removeNode(nodeId)) {
                     session.removeEdgesForNode(nodeId);
+                    session.removeNotesAttachedTo(nodeId);
                                 description = "Re-removed node \"" + nodeId + "\"";
                 } else {
                     description = "Could not re-remove node";
@@ -846,7 +896,13 @@ public class WorkflowBuilderModifier {
                     Map<String, Object> node = findNodeById(session, nodeId);
                     if (node != null && newValues != null) {
                         for (Map.Entry<String, Object> entry : newValues.entrySet()) {
-                            node.put(entry.getKey(), entry.getValue());
+                            // A null was a deletion (NodeFieldMerger contract), so redo deletes too
+                            // rather than leaving the key present-and-null.
+                            if (entry.getValue() == null) {
+                                node.remove(entry.getKey());
+                            } else {
+                                node.put(entry.getKey(), entry.getValue());
+                            }
                         }
                         description = "Re-applied changes to \"" + nodeId + "\"";
                     } else {

@@ -39,6 +39,7 @@ import type { StorageExplorerEntry } from '@/lib/api/storage-api';
 import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 import { fileService } from '@/lib/api/orchestrator/file.service';
 import { applicationPanelTabId, workflowPanelTabId } from '@/lib/sidePanel/tabResource';
+import { urlEnum, useUrlState } from '@/hooks/useUrlState';
 
 
 type TabKey = 'workflows' | 'agents' | 'interfaces' | 'tables' | 'applications' | 'files';
@@ -52,6 +53,8 @@ const TABS: { key: TabKey; icon: React.ElementType; labelKey: string }[] = [
   { key: 'files', icon: FileText, labelKey: 'tabs.files' },
 ];
 
+const TAB_KEYS: readonly TabKey[] = TABS.map((tab) => tab.key);
+
 interface ProjectDetailViewProps {
   projectId: string;
 }
@@ -64,7 +67,12 @@ export function ProjectDetailView({ projectId }: ProjectDetailViewProps) {
   const { resources, loading: resourcesLoading, refetch: refetchResources } = useProjectResources(projectId);
   const permissions = useProjectPermissions(project);
 
-  const [activeTab, setActiveTab] = useState<TabKey>('agents');
+  // The open tab lives in the address (`?tab=`), so a reload stays on it and Back undoes it.
+  // Nothing to clear with it: the tabs are plain grids with no search, sort or paging of their own.
+  const [activeTab, setActiveTab] = useUrlState<TabKey>('tab', 'agents', {
+    codec: urlEnum(TAB_KEYS),
+    history: 'push',
+  });
   const [showModal, setShowModal] = useState(false);
   const [modalStep, setModalStep] = useState(1);
 

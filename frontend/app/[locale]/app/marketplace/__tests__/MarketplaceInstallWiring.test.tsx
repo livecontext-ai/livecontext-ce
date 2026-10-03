@@ -58,6 +58,9 @@ vi.mock('next/navigation', () => ({
  */
 const historyReplace = vi.fn();
 const realReplaceState = window.history.replaceState;
+// A TAB, unlike a refinement, is a step: it is pushed, so Back returns to the tab before it.
+const historyPush = vi.fn();
+const realPushState = window.history.pushState;
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn().mockResolvedValue(undefined) }),
 }));
@@ -197,6 +200,9 @@ beforeEach(() => {
   historyReplace.mockClear();
   window.history.replaceState = ((_d: unknown, _u: string, url?: string) =>
     historyReplace(url)) as unknown as typeof window.history.replaceState;
+  historyPush.mockClear();
+  window.history.pushState = ((_d: unknown, _u: string, url?: string) =>
+    historyPush(url)) as unknown as typeof window.history.pushState;
   vi.clearAllMocks();
   searchParamsState.params = new URLSearchParams();
   orgResetCallbacks.list = [];
@@ -210,6 +216,7 @@ beforeEach(() => {
 
 afterEach(() => {
   window.history.replaceState = realReplaceState;
+  window.history.pushState = realPushState;
   cleanup();
   useMarketplaceInstallStore.setState({ active: null });
 });
@@ -758,7 +765,7 @@ describe('Marketplace - tab is query-param backed too', () => {
 
     // Selecting the fallback tab drops only `tab` and preserves `type`.
     fireEvent.click(screen.getByText('tabExplore'));
-    expect(historyReplace).toHaveBeenCalledWith(
+    expect(historyPush).toHaveBeenCalledWith(
       '/app/marketplace?type=agents');
   });
 
@@ -772,7 +779,7 @@ describe('Marketplace - tab is query-param backed too', () => {
 
     fireEvent.click(screen.getByText('tabMyPurchases'));
 
-    expect(historyReplace).toHaveBeenCalledWith(
+    expect(historyPush).toHaveBeenCalledWith(
       '/app/marketplace?tab=purchases');
   });
 

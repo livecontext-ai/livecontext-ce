@@ -193,7 +193,10 @@ public class InterfaceHelpModule implements ToolModule {
             "Add the interface to the marketplace. Params: interface_id (required), title (required), " +
             "visibility ('PRIVATE' default, 'PUBLIC', 'UNLISTED'), credits_per_use (default 0). " +
             "An interface IS its own landing page - no separate landing interface_id is accepted here. " +
-            "PUBLIC listings go through platform review; PRIVATE/UNLISTED activate immediately.");
+            "PUBLIC listings go through platform review; PRIVATE/UNLISTED activate immediately. " +
+            "Refused with RESTRICTED_DATA_PROVIDER_NOT_ALLOWED once this conversation has read Gmail or Google Drive " +
+            "(a listing copies the page and the rows of the table it shows); unpublish still works. Table rows that " +
+            "came from Gmail or Google Drive are never copied into a listing: acquirers get the table without them.");
         actions.put("unpublish",
             "Mark the interface's marketplace listing inactive. Params: interface_id (required). " +
             "Existing acquirers keep their copies - only new installs are blocked.");

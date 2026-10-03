@@ -39,6 +39,95 @@ class RssNodeTest {
     private ExecutionContext context;
 
     @Test
+    @DisplayName("regression: a 400 KB feed is read whole (WebClient's default buffer stopped at 256 KB)")
+    void largeFeedIsReadWhole() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        String feed = "<rss><channel>" + "<item><title>x</title></item>".repeat(14_000) + "</channel></rss>";
+        server.createContext("/feed", exchange -> {
+            byte[] body = feed.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            RssNode node = new RssNode("core:rss", new Core.RssConfig("http://test", 20),
+                    RssNode.buildWebClient(address -> false));
+            Method fetch = RssNode.class.getDeclaredMethod("fetchFeedContent", String.class);
+            fetch.setAccessible(true);
+
+            Object content = fetch.invoke(node, "http://127.0.0.1:" + server.getAddress().getPort() + "/feed");
+
+            assertTrue(feed.length() > 256 * 1024);
+            assertEquals(feed.length(), String.valueOf(content).length());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    @DisplayName("a feed above the 16 MB ceiling fails as an error the node reports, never by exhausting memory")
+    void feedAboveTheCeilingFailsCleanly() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        byte[] chunk = "<item><title>x</title></item>".repeat(1_000).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        long total = RssNode.MAX_FEED_BYTES + chunk.length;
+        server.createContext("/feed", exchange -> {
+            exchange.sendResponseHeaders(200, 0);
+            try (var out = exchange.getResponseBody()) {
+                for (long sent = 0; sent < total; sent += chunk.length) {
+                    out.write(chunk);
+                }
+            } catch (java.io.IOException clientStopped) {
+                // The client refused the rest: exactly what the ceiling is for.
+            }
+        });
+        server.start();
+        try {
+            RssNode node = new RssNode("core:rss", new Core.RssConfig("http://test", 20),
+                    RssNode.buildWebClient(address -> false));
+            Method fetch = RssNode.class.getDeclaredMethod("fetchFeedContent", String.class);
+            fetch.setAccessible(true);
+
+            java.lang.reflect.InvocationTargetException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                    java.lang.reflect.InvocationTargetException.class,
+                    () -> fetch.invoke(node, "http://127.0.0.1:" + server.getAddress().getPort() + "/feed"));
+
+            // The buffer limit itself, surfaced as the failure the node turns into its error output.
+            org.junit.jupiter.api.Assertions.assertInstanceOf(
+                    org.springframework.core.io.buffer.DataBufferLimitException.class, refused.getCause());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    @DisplayName("regression: a feed served with a 20 KB response header is fetched (Netty's default refused anything over 8 KB)")
+    void largeResponseHeaderIsAccepted() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/feed", exchange -> {
+            exchange.getResponseHeaders().add("Set-Cookie", "session=" + "a".repeat(20 * 1024));
+            byte[] body = "<rss><channel/></rss>".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            // Same seam as the redirect test below: the connect-time pin is off for a loopback server.
+            RssNode node = new RssNode("core:rss", new Core.RssConfig("http://test", 20),
+                    RssNode.buildWebClient(address -> false));
+            Method fetch = RssNode.class.getDeclaredMethod("fetchFeedContent", String.class);
+            fetch.setAccessible(true);
+
+            Object content = fetch.invoke(node, "http://127.0.0.1:" + server.getAddress().getPort() + "/feed");
+
+            assertTrue(String.valueOf(content).contains("<rss>"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     @DisplayName("Should not follow HTTP redirects when fetching feeds")
     void shouldNotFollowRedirectsWhenFetchingFeeds() throws Exception {
         AtomicInteger targetHits = new AtomicInteger();
@@ -58,7 +147,12 @@ class RssNodeTest {
         server.start();
 
         try {
-            RssNode node = new RssNode("core:rss", new Core.RssConfig("http://test", 20));
+            // Test seam (LC-002/LC-006): a local test server IS loopback, so the connect-time
+            // pin is off here too - the redirect-refusal logic under test is exercised on its
+            // own, against the real fetch stack minus only the SSRF guard. The guard itself is
+            // proven separately, below, against this SAME loopback server.
+            RssNode node = new RssNode("core:rss", new Core.RssConfig("http://test", 20),
+                    RssNode.buildWebClient(address -> false));
             Method fetch = RssNode.class.getDeclaredMethod("fetchFeedContent", String.class);
             fetch.setAccessible(true);
             String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/redirect";
@@ -71,6 +165,63 @@ class RssNodeTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    /**
+     * LC-002 / LC-006, CASA readiness round 3 (DNS rebinding): {@code fetchFeedContent} itself
+     * does not re-check the URL - {@code execute()} validates it once, up front, with
+     * {@code UrlSafetyValidator.validateUrl}. Pre-fix, the transport underneath then resolved the
+     * SAME name again at connect time; this proves the PRODUCTION transport refuses an internal
+     * peer regardless of what any pre-flight check approved, by invoking fetchFeedContent directly
+     * (bypassing execute()'s own check entirely, exactly as a rebound name would) against a real
+     * loopback server.
+     */
+    @Test
+    @DisplayName("regression LC-002/LC-006: the production transport refuses an internal peer at connect, whatever the pre-flight approved")
+    void connectTimeGuardRefusesAnInternalPeerRegardlessOfPreflight() throws Exception {
+        AtomicInteger targetHits = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            targetHits.incrementAndGet();
+            byte[] body = "<rss><channel/></rss>".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+
+        try {
+            // Production constructor: the real UrlSafetyValidator::isUnsafeAddress predicate.
+            RssNode node = new RssNode("core:rss", new Core.RssConfig("http://test", 20));
+            Method fetch = RssNode.class.getDeclaredMethod("fetchFeedContent", String.class);
+            fetch.setAccessible(true);
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
+
+            InvocationTargetException ex = assertThrows(InvocationTargetException.class,
+                    () -> fetch.invoke(node, url));
+
+            assertNotNull(ex.getCause());
+            assertEquals(0, targetHits.get(),
+                    "the loopback target must never receive the request: the pre-fix "
+                            + "java.net.http.HttpClient would have connected");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    @DisplayName("the pinning resolver refuses a name that resolves to ANY internal address")
+    void pinningResolverRefusesARebindingAnswer() throws Exception {
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                () -> com.apimarketplace.common.web.SafeAddressResolverGroup.vet(
+                        "rebind.example.com",
+                        com.apimarketplace.common.web.UrlSafetyValidator::isUnsafeAddress,
+                        host -> new java.net.InetAddress[] {
+                                java.net.InetAddress.getByName("93.184.216.34"),
+                                java.net.InetAddress.getByName("10.0.0.7")}));
+
+        assertTrue(refused.getMessage()
+                .contains(com.apimarketplace.common.web.SafeAddressResolverGroup.INTERNAL_TARGET_MESSAGE));
     }
 
     @BeforeEach

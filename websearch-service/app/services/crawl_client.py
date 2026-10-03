@@ -15,6 +15,11 @@ import httpx
 from app.config import settings
 from app.models.crawl import CrawlRequest, CrawlResponse
 from app.services.browser_client import crawl_page
+from app.services.crawl_filter import (
+    crawl_block_reason,
+    is_callback_url_allowed,
+    is_url_safe_for_navigation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +67,21 @@ async def crawl(request: CrawlRequest) -> CrawlResponse:
     Screenshot upload + callback are fired as a background task so that
     the text result is returned to the caller (Redis BLPOP) immediately.
     """
+    # Every entry point (/crawl, /jobs/submit fetch, batch fetch) lands here,
+    # so the entry URL is checked here once; redirects and subresources are
+    # checked by the browser-wide request guard (browser_request_guard).
+    safe, reason = await asyncio.to_thread(is_url_safe_for_navigation, request.url)
+    if not safe:
+        logger.warning("Crawl refused for %s: %s", request.url, reason)
+        return CrawlResponse(
+            url=request.url,
+            markdown="",
+            metadata={"title": "", "blocked_reason": crawl_block_reason(reason)},
+            screenshots=[],
+            screenshot_key=None,
+            crawl_time_ms=0,
+        )
+
     async with _get_crawl_semaphore():
         start = time.monotonic()
         logger.info("[TIMING] crawl() start for %s", request.url)
@@ -130,10 +150,18 @@ async def _async_screenshot_upload(url: str, screenshot_bytes: bytes, callback_u
 
 
 async def _notify_screenshot_ready(callback_url: str, url: str, screenshot_key: str):
-    """POST screenshot key to orchestrator callback endpoint."""
+    """POST screenshot key to orchestrator callback endpoint.
+
+    The callback URL comes from the request, so it is only used when it
+    targets a configured orchestrator origin (WEBSEARCH_CALLBACK_ALLOWED_ORIGINS).
+    """
+    allowed, reason = is_callback_url_allowed(callback_url, settings.callback_allowed_origins)
+    if not allowed:
+        logger.warning("[CALLBACK] Refused callback for %s: %s", url, reason)
+        return
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(callback_url, json={
+            resp = await client.post(callback_url, follow_redirects=False, json={
                 "url": url,
                 "screenshot_key": screenshot_key,
                 "screenshot_index": 0,

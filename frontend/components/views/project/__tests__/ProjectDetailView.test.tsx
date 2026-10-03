@@ -8,6 +8,12 @@ vi.mock('next-intl', () => ({
   useTranslations: (ns?: string) => (key: string) => `${ns}.${key}`,
 }));
 
+// The open tab lives in the address (`?tab=`), so the router is backed by a real in-memory URL.
+vi.mock('next/navigation', async () => {
+  const mod = await import('@/lib/folders/testing/fakeFolderRouter');
+  return mod.fakeFolderRouter.nextNavigationModule();
+});
+
 const { useProject, useProjectResources, useProjectPermissions, openTab, removeTab } = vi.hoisted(() => ({
   useProject: vi.fn(),
   useProjectResources: vi.fn(),
@@ -76,7 +82,12 @@ vi.mock('@/components/applications/ApplicationCard', () => ({
   ),
 }));
 
+import { fakeFolderRouter } from '@/lib/folders/testing/fakeFolderRouter';
 import { ProjectDetailView } from '../ProjectDetailView';
+
+const PROJECT_PATH = '/en/app/project/p1';
+// Every test starts on a clean address: a tab opened by one must not be the tab the next opens on.
+beforeEach(() => fakeFolderRouter.reset(PROJECT_PATH));
 
 const baseResources = {
   workflows: [], agents: [], interfaces: [], datasources: [], applications: [], files: [],
@@ -228,5 +239,50 @@ describe('ProjectDetailView - Applications tab', () => {
     openTabByLabel('project.tabs.applications');
     // The card still renders (no crash from category being a string vs the object it reads).
     expect(screen.getByTestId('app-a2')).toHaveTextContent('Slugged');
+  });
+});
+
+describe('ProjectDetailView - the open tab lives in the address', () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => cleanup());
+
+  const resources = {
+    files: [{ id: 'f1', fileName: 'report.pdf', mimeType: 'application/pdf', sizeBytes: 2048, createdAt: '2026-05-29T10:00:00Z' }],
+    datasources: [{ id: 10, name: 'Emails' }],
+  };
+
+  it('opens on the tab the address names, which is what a reload does', () => {
+    setup(resources);
+    fakeFolderRouter.navigate(`${PROJECT_PATH}?tab=files`, 'replace');
+
+    render(<ProjectDetailView projectId="p1" />);
+
+    expect(screen.getByTestId('file-f1')).toBeInTheDocument();
+  });
+
+  it('falls back to the default tab on a tab that does not exist', () => {
+    setup(resources);
+    fakeFolderRouter.navigate(`${PROJECT_PATH}?tab=secrets`, 'replace');
+
+    render(<ProjectDetailView projectId="p1" />);
+
+    // The default tab is Agents, which is empty here: neither of the other tabs' content shows.
+    expect(screen.queryByTestId('file-f1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('ds-10')).not.toBeInTheDocument();
+    expect(screen.getByText('project.noResourcesInTab')).toBeInTheDocument();
+  });
+
+  it('writes the tab to the address as a step Back can undo, and drops it on the default', () => {
+    setup(resources);
+    render(<ProjectDetailView projectId="p1" />);
+
+    openTabByLabel('project.tabs.tables');
+
+    expect(fakeFolderRouter.search()).toBe('tab=tables');
+    expect(fakeFolderRouter.navigations.at(-1)?.method).toBe('push');
+    expect(screen.getByTestId('ds-10')).toBeInTheDocument();
+
+    openTabByLabel('project.tabs.agents');
+    expect(fakeFolderRouter.search()).toBe('');
   });
 });

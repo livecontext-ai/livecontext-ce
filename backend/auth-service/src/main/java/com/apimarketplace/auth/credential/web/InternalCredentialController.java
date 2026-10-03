@@ -47,6 +47,22 @@ public class InternalCredentialController {
     private final PricingVersionService pricingVersionService;
     private final CredentialEncryptionService encryptionService;
 
+    /** LC-058: every hand-off of credential material is an audit event. Optional for tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.credential.service.CredentialAuditRecorder auditRecorder;
+
+    private void auditReadByName(String userId, String name, String accessPath) {
+        if (auditRecorder != null) {
+            auditRecorder.recordSecretReadByName(userId, name, accessPath);
+        }
+    }
+
+    private void auditReadById(String userId, Long credentialId, String accessPath) {
+        if (auditRecorder != null) {
+            auditRecorder.recordSecretRead(userId, credentialId, null, accessPath);
+        }
+    }
+
     public InternalCredentialController(InternalCredentialService credentialService,
                                          CredentialService userCredentialService,
                                          PlatformCredentialService platformCredentialService,
@@ -72,7 +88,9 @@ public class InternalCredentialController {
     @GetMapping("/configured-integrations/{tenantId}")
     public ResponseEntity<java.util.Set<String>> getConfiguredIntegrations(
             @PathVariable String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        tenantId = InternalCallerIdentity.bind(signedUserId, tenantId);
         return ResponseEntity.ok(
                 userCredentialService.findActiveIntegrationsForScope(tenantId, organizationId));
     }
@@ -86,7 +104,9 @@ public class InternalCredentialController {
     @GetMapping("/state-version")
     public ResponseEntity<Map<String, Object>> getCredentialStateVersion(
             @RequestParam String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        userId = InternalCallerIdentity.bind(signedUserId, userId);
         return ResponseEntity.ok(Map.of(
                 "version", userCredentialService.getCredentialStateVersion(userId, organizationId)));
     }
@@ -95,7 +115,10 @@ public class InternalCredentialController {
     public ResponseEntity<Map<String, Object>> getAccessToken(
             @RequestParam String userId,
             @RequestParam String name,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        userId = InternalCallerIdentity.bind(signedUserId, userId);
+        final String auditUserId = userId;
         return credentialService.getAccessTokenInfo(userId, name, organizationId)
                 .<ResponseEntity<Map<String, Object>>>map(info -> {
                     // V103: include the auth type so catalog-service can pick the
@@ -106,6 +129,7 @@ public class InternalCredentialController {
                     body.put("accessToken", info.accessToken());
                     body.put("found", true);
                     if (info.type() != null) body.put("type", info.type());
+                    auditReadByName(auditUserId, name, "access_token");
                     return ResponseEntity.ok(body);
                 })
                 .orElse(ResponseEntity.ok(Map.of("found", false)));
@@ -115,13 +139,17 @@ public class InternalCredentialController {
     public ResponseEntity<Map<String, Object>> getAccessTokenById(
             @RequestParam String userId,
             @RequestParam Long credentialId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        userId = InternalCallerIdentity.bind(signedUserId, userId);
+        final String auditUserId = userId;
         return credentialService.getAccessTokenInfoById(userId, credentialId, organizationId)
                 .<ResponseEntity<Map<String, Object>>>map(info -> {
                     Map<String, Object> body = new HashMap<>();
                     body.put("accessToken", info.accessToken());
                     body.put("found", true);
                     if (info.type() != null) body.put("type", info.type());
+                    auditReadById(auditUserId, credentialId, "access_token");
                     return ResponseEntity.ok(body);
                 })
                 .orElse(ResponseEntity.ok(Map.of("found", false)));
@@ -130,11 +158,13 @@ public class InternalCredentialController {
     @PostMapping("/refresh-token")
     public ResponseEntity<Map<String, Object>> refreshToken(
             @RequestBody Map<String, String> body,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
-        String userId = body.get("userId");
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        String userId = InternalCallerIdentity.bind(signedUserId, body.get("userId"));
         String credentialName = body.get("credentialName");
         Optional<String> token = credentialService.refreshAccessToken(userId, credentialName, organizationId);
         if (token.isPresent()) {
+            auditReadByName(userId, credentialName, "refreshed_access_token");
             return ResponseEntity.ok(Map.of("accessToken", token.get(), "found", true));
         }
         return ResponseEntity.ok(Map.of("found", false));
@@ -143,11 +173,13 @@ public class InternalCredentialController {
     @PostMapping("/force-refresh-token")
     public ResponseEntity<Map<String, Object>> forceRefreshToken(
             @RequestBody Map<String, String> body,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
-        String userId = body.get("userId");
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        String userId = InternalCallerIdentity.bind(signedUserId, body.get("userId"));
         String credentialName = body.get("credentialName");
         Optional<String> token = credentialService.forceRefreshAndGetToken(userId, credentialName, organizationId);
         if (token.isPresent()) {
+            auditReadByName(userId, credentialName, "refreshed_access_token");
             return ResponseEntity.ok(Map.of("accessToken", token.get(), "found", true));
         }
         return ResponseEntity.ok(Map.of("found", false));
@@ -156,11 +188,13 @@ public class InternalCredentialController {
     @PostMapping("/force-refresh-token/by-id")
     public ResponseEntity<Map<String, Object>> forceRefreshTokenById(
             @RequestBody Map<String, Object> body,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
-        String userId = (String) body.get("userId");
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        String userId = InternalCallerIdentity.bind(signedUserId, (String) body.get("userId"));
         Long credentialId = toLong(body.get("credentialId"));
         Optional<String> token = credentialService.forceRefreshAndGetTokenById(userId, credentialId, organizationId);
         if (token.isPresent()) {
+            auditReadById(userId, credentialId, "refreshed_access_token");
             return ResponseEntity.ok(Map.of("accessToken", token.get(), "found", true));
         }
         return ResponseEntity.ok(Map.of("found", false));
@@ -170,8 +204,13 @@ public class InternalCredentialController {
     public ResponseEntity<Map<String, Object>> getCredentialDataMap(
             @RequestParam String userId,
             @RequestParam String name,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        userId = InternalCallerIdentity.bind(signedUserId, userId);
         Map<String, String> data = credentialService.getCredentialDataMap(userId, name, organizationId);
+        if (data != null && !data.isEmpty()) {
+            auditReadByName(userId, name, "data_map");
+        }
         return ResponseEntity.ok(Map.of("data", data));
     }
 
@@ -179,8 +218,13 @@ public class InternalCredentialController {
     public ResponseEntity<Map<String, Object>> getCredentialDataMapById(
             @RequestParam String userId,
             @RequestParam Long credentialId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        userId = InternalCallerIdentity.bind(signedUserId, userId);
         Map<String, String> data = credentialService.getCredentialDataMapById(userId, credentialId, organizationId);
+        if (data != null && !data.isEmpty()) {
+            auditReadById(userId, credentialId, "data_map");
+        }
         return ResponseEntity.ok(Map.of("data", data));
     }
 
@@ -207,7 +251,9 @@ public class InternalCredentialController {
     public ResponseEntity<Map<String, Object>> getCredentialScopes(
             @RequestParam String userId,
             @RequestParam String name,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        userId = InternalCallerIdentity.bind(signedUserId, userId);
         // Resolves the credential the EXECUTION will use, through the same path as
         // /access-token above. It used to resolve by NAME alone, which is free text the
         // user typed: in production the two Gmail credentials are named "Jaden" and
@@ -239,7 +285,9 @@ public class InternalCredentialController {
     public ResponseEntity<Map<String, Object>> getCredentialScopesById(
             @RequestParam String userId,
             @RequestParam Long credentialId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        userId = InternalCallerIdentity.bind(signedUserId, userId);
         return credentialService.getActiveUserCredentialById(userId, credentialId, organizationId)
                 .<ResponseEntity<Map<String, Object>>>map(c -> {
                     Map<String, Object> body = new LinkedHashMap<>();
@@ -402,6 +450,7 @@ public class InternalCredentialController {
         // null org falls back to tenant-keyed for backward compatibility.
         Optional<String> token = credentialService.getPlatformAccessToken(integrationName, tenantId, organizationId);
         if (token.isPresent()) {
+            auditReadByName(tenantId, integrationName, "platform_access_token");
             return ResponseEntity.ok(Map.of("accessToken", token.get(), "found", true));
         }
         return ResponseEntity.ok(Map.of("found", false));

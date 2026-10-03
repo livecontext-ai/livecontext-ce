@@ -278,7 +278,10 @@ public class AgentHelpModule implements ToolModule {
             "title (required), interface_id (REQUIRED - UUID of the landing interface shown to acquirers before install), " +
             "visibility ('PRIVATE' default, 'PUBLIC', 'UNLISTED'), credits_per_use (default 0). " +
             "PUBLIC listings go through a platform review before becoming visible; PRIVATE/UNLISTED activate immediately. " +
-            "Response: status='PUBLISHED', publication_id, visibility, credits_per_use.");
+            "Response: status='PUBLISHED', publication_id, visibility, credits_per_use. " +
+            "Refused with RESTRICTED_DATA_PROVIDER_NOT_ALLOWED once this conversation has read Gmail or Google Drive " +
+            "(a listing is public); unpublish still works. Table rows that came from Gmail or Google Drive are never " +
+            "copied into a listing: acquirers get the agent's tables without them.");
         actions.put("unpublish",
             "Mark the agent's marketplace listing inactive. Params: agent_id (required). " +
             "Existing acquirers keep their installed copies - only new installs are blocked. " +
@@ -316,6 +319,18 @@ public class AgentHelpModule implements ToolModule {
             "REVIEWER LOOP CAP: max_review_attempts ([1, 20], default 3) bounds reviewer rejections - once " +
             "hit, the task is AUTO-FAILED (not auto-approved) with the last reviewer feedback as " +
             "error_message, so unvalidated work is never silently promoted. " +
+            "GMAIL / GOOGLE DRIVE CONTENT: once this conversation has read Gmail or Google Drive, a task you " +
+            "assign, complete or reject, or whose title or instructions you change with task_update, is marked " +
+            "restricted when the call succeeds (a refused call, or a task_update that only changes status, " +
+            "priority, assignee or reviewer, does not mark it). The assignee and the reviewer then " +
+            "run it only on an Anthropic or OpenAI model used through their direct API: on any other model the " +
+            "run is refused with RESTRICTED_DATA_PROVIDER_NOT_ALLOWED and the task fails with that message. " +
+            "The result of a restricted task is restricted too, and so is any response that returns a restricted " +
+            "task's text (inbox or outbox with task_id, claim, task_update, task_get_context, task_get_execution): " +
+            "after reading one, this conversation counts as having read Gmail or Google Drive. The LISTS (inbox and " +
+            "outbox without task_id, review_inbox, backlog) never do that: a restricted task appears there with " +
+            "restricted=true, its title, instructions and result left out, and a note naming the call that opens it, " +
+            "so browsing a list does not change this conversation. " +
             "PERMISSION: if you are a persisted agent, agent_id and reviewer_agent_id must be in your " +
             "toolsConfig.agents list. Empty list or absent === no delegation allowed (security rule: " +
             "absent === []). Only the user's primary chat (which has no agent row) can assign tenant-wide. " +
@@ -329,6 +344,8 @@ public class AgentHelpModule implements ToolModule {
         actions.put("inbox",
             "ASSIGNEE workflow - lists or fetches tasks where YOU are the assignee (work to do). " +
             "Without task_id: returns up to 20 pending/in_progress tasks assigned to YOU, ordered by creation time. " +
+            "A task holding Gmail or Google Drive content is listed with restricted=true and no title, instructions " +
+            "or result: fetch it with task_id to read it. " +
             "With task_id: fetch one task AND auto-transition it from pending → in_progress, so the next inbox " +
             "call won't return it again. " +
             "NEXT ACTION: do the work, then call task_complete(task_id=…, result=…) - or task_reject(task_id=…, reason=…) if blocked. " +
@@ -337,13 +354,16 @@ public class AgentHelpModule implements ToolModule {
         actions.put("review_inbox",
             "REVIEWER workflow - lists tasks awaiting YOUR review (you are the configured reviewer and the task is in 'in_review' status). " +
             "These are tasks another agent submitted; your job is to read the result and decide. " +
-            "Returns up to 20 items. Each shows the submitted result/error_message so you can judge without extra fetches. " +
+            "Returns up to 20 items. Each shows the submitted result/error_message so you can judge without extra fetches, " +
+            "except a task holding Gmail or Google Drive content: it is listed with restricted=true and no title, " +
+            "instructions or result, and task_get_context(task_id) returns them. " +
             "NEXT ACTION: for each task, call task_approve(task_id=…) to accept, or " +
             "task_reject_review(task_id=…, reason=…) to send back to the assignee for a new attempt. " +
             "NEVER call task_complete on a review task - that's the assignee's verb, not the reviewer's.");
         actions.put("outbox",
             "Without task_id: list up to 20 tasks YOU created for others (including backlog items you posted). " +
-            "Filter with status. With task_id: fetch one of your own tasks including its current result/" +
+            "Filter with status. A task holding Gmail or Google Drive content is listed with restricted=true and no " +
+            "title, instructions or result. With task_id: fetch one of your own tasks including its current result/" +
             "error_message - this is how you read back what the worker produced.");
         actions.put("task_complete",
             "ASSIGNEE-ONLY - submit your finished work on a task you are the assignee of. Requires task_id + result (max 50KB). " +
@@ -440,7 +460,9 @@ public class AgentHelpModule implements ToolModule {
             "it' flows. OPT-IN: only an agent whose backlog_enabled=true may browse or claim the shared backlog " +
             "(set it via agent(action='update', params={agent_id:'...', backlog_enabled:true})). A non-participating " +
             "agent gets a permission error here and should work its directly-assigned inbox instead. Browsing it as " +
-            "a human (general chat, no attached agent) is always allowed.");
+            "a human (general chat, no attached agent) is always allowed. A task holding Gmail or Google Drive " +
+            "content is listed with restricted=true and no title, instructions or result; its note names the call " +
+            "that opens it (claim for an agent, task_get_context for a human).");
         actions.put("claim",
             "Atomically take ownership of a backlog task (first-come-first-served). Returns the task on success " +
             "(status→in_progress, assignee=you) or {claimed:false} if another agent got it first. OPT-IN: requires " +
@@ -453,7 +475,9 @@ public class AgentHelpModule implements ToolModule {
             "instructions, cron, timezone, target_agent_id (NULL = backlog), priority, task_context. Use this " +
             "when you want periodic work with full audit trail (each fire = one trackable task with result). " +
             "For stateless routine work without tracking, use schedule_cron + schedule_prompt on the agent " +
-            "itself instead.");
+            "itself instead. Refused (RESTRICTED_DATA_PROVIDER_NOT_ALLOWED) once this conversation has read " +
+            "Gmail or Google Drive, because the template is kept and replayed indefinitely; recurrence_update " +
+            "changing title or instructions is refused the same way.");
         actions.put("recurrence_list",
             "List recurrence templates. scope='created_by_me' (default, your templates), 'targeting_me' " +
             "(templates that will drop tasks in your inbox), or 'all_in_tenant'.");

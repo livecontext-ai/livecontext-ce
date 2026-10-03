@@ -67,6 +67,37 @@ class PersonalOfferServiceTest {
     }
 
     @Test
+    @DisplayName("the preview carries the offer's bonus tiers, the same steps the email states, for the page's ladder")
+    void previewCarriesTheTiers() {
+        offer.setValidUntil(Instant.now().plusSeconds(3600));
+        PersonalOfferFirstPaidPurchase history = new PersonalOfferFirstPaidPurchase();
+        history.setStatus("VERIFIED_NEW");
+        when(firstPaid.findById(7L)).thenReturn(Optional.of(history));
+        List<PersonalOfferMatrix> cells = new java.util.ArrayList<>();
+        for (String plan : List.of("STARTER", "PRO", "TEAM")) {
+            for (int pack : new int[] {5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 5_000_000, 10_000_000}) {
+                if (plan.equals("STARTER") && pack > 100_000) continue;
+                PersonalOfferMatrix cell = new PersonalOfferMatrix();
+                cell.setPlanCode(plan);
+                cell.setMonthlyCredits(pack);
+                cell.setBonusCredits(pack >= 500_000 ? 80_000 : pack >= 250_000 ? 40_000 : pack >= 50_000 ? 8_000 : 0);
+                cells.add(cell);
+            }
+        }
+        when(matrix.findByPolicyId(3L)).thenReturn(cells);
+        when(matrix.findByPolicyIdAndPlanCodeAndMonthlyCredits(eq(3L), anyString(), eq(5_000)))
+                .thenReturn(Optional.of(cells.get(0)));
+
+        var preview = service.preview(7L, null, "OWNEDCODE123", 0, "monthly");
+
+        assertThat(preview.steps()).containsExactly(
+                new PersonalOfferSteps.Step(50_000, 8_000),
+                new PersonalOfferSteps.Step(250_000, 40_000),
+                new PersonalOfferSteps.Step(500_000, 80_000));
+        assertThat(preview.nextEligibleMonthlyCredits()).isEqualTo(50_000);
+    }
+
+    @Test
     void expiredMarketingCodeStillPreviewsSameLiveReservation() {
         PersonalOfferCheckoutAttempt reserved = reservation();
         when(attempts.findByRecipientUserIdOrderByCreatedAtDesc(7L)).thenReturn(List.of(reserved));
@@ -114,6 +145,70 @@ class PersonalOfferServiceTest {
         assertThat(prepared.reused()).isTrue();
         assertThat(prepared.attempt().getId()).isEqualTo(reserved.getId());
         verify(attempts, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("regression: past the deadline, another choice is refused before the reservation's Stripe session is expired, so the reservation stays payable")
+    void otherChoicePastDeadlineKeepsTheReservation() {
+        PersonalOfferCheckoutAttempt reserved = reservation();
+        reserved.setStripeSessionId("cs_reserved");
+        User user = new User();
+        user.setId(7L);
+        when(users.lockForPersonalOffer(7L)).thenReturn(Optional.of(user));
+        when(attempts.findPayableForUpdate(7L)).thenReturn(List.of(reserved));
+        PersonalOfferFirstPaidPurchase history = new PersonalOfferFirstPaidPurchase();
+        history.setStatus("VERIFIED_NEW");
+        when(firstPaid.findById(7L)).thenReturn(Optional.of(history));
+        Plan free = new Plan();
+        free.setCode("FREE");
+        Subscription subscription = new Subscription();
+        subscription.setPlan(free);
+        when(subscriptions.findActiveByUserId(7L)).thenReturn(Optional.of(subscription));
+        PersonalOfferMatrix row = new PersonalOfferMatrix();
+        row.setBonusCredits(8_000);
+        when(matrix.findByPolicyIdAndPlanCodeAndMonthlyCredits(3L, "TEAM", 5_000)).thenReturn(Optional.of(row));
+
+        assertThatThrownBy(() -> service.prepareCheckout(7L, 50L, 2, "TEAM", 0, "monthly", "price_team", null))
+                .isInstanceOf(PersonalOfferService.OfferException.class)
+                .hasMessage("OFFER_EXPIRED");
+        verifyNoInteractions(stripe);
+        assertThat(reserved.getStatus()).isEqualTo("OPEN");
+        verify(attempts, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("before the deadline, another choice replaces the open checkout: its Stripe session is expired and a new reservation is prepared")
+    void otherChoiceBeforeDeadlineReplacesTheReservation() throws Exception {
+        StripeClient deepStripe = mock(StripeClient.class, RETURNS_DEEP_STUBS);
+        service = new PersonalOfferService(policies, matrix, attempts, firstPaid, codes,
+                redemptions, users, subscriptions, customers, deepStripe, new UsernameValidator(users));
+        offer.setValidUntil(Instant.now().plusSeconds(3600));
+        PersonalOfferCheckoutAttempt reserved = reservation();
+        reserved.setStripeSessionId("cs_old");
+        User user = new User();
+        user.setId(7L);
+        when(users.lockForPersonalOffer(7L)).thenReturn(Optional.of(user));
+        when(attempts.findPayableForUpdate(7L)).thenReturn(List.of(reserved));
+        PersonalOfferFirstPaidPurchase history = new PersonalOfferFirstPaidPurchase();
+        history.setStatus("VERIFIED_NEW");
+        when(firstPaid.findById(7L)).thenReturn(Optional.of(history));
+        Plan free = new Plan();
+        free.setCode("FREE");
+        Subscription subscription = new Subscription();
+        subscription.setPlan(free);
+        when(subscriptions.findActiveByUserId(7L)).thenReturn(Optional.of(subscription));
+        PersonalOfferMatrix row = new PersonalOfferMatrix();
+        row.setBonusCredits(8_000);
+        when(matrix.findByPolicyIdAndPlanCodeAndMonthlyCredits(3L, "TEAM", 5_000)).thenReturn(Optional.of(row));
+        when(attempts.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        var prepared = service.prepareCheckout(7L, 50L, 2, "TEAM", 0, "monthly", "price_team", null);
+
+        verify(deepStripe.checkout().sessions()).expire("cs_old");
+        assertThat(reserved.getStatus()).isEqualTo("EXPIRED");
+        assertThat(prepared.reused()).isFalse();
+        assertThat(prepared.attempt().getPlanCode()).isEqualTo("TEAM");
+        assertThat(prepared.attempt().getId()).isNotEqualTo(reserved.getId());
     }
 
     @Test
@@ -198,6 +293,83 @@ class PersonalOfferServiceTest {
         assertThat(current.status()).isEqualTo("ALREADY_USED");
         assertThat(current.code()).isNull();
         assertThat(current.offerAttemptId()).isNull();
+    }
+
+    @Test
+    @DisplayName("regression: an open checkout names the plan, pack and cycle it holds, so the offer page can open on it once the offer's own deadline has passed")
+    void openCheckoutNamesItsReservation() {
+        when(codes.findByRecipientUserIdAndCampaignKey(7L, "free-credit-upgrade"))
+                .thenReturn(Optional.of(offer));
+        PersonalOfferCheckoutAttempt reserved = reservation();
+        reserved.setPlanCode("TEAM");
+        reserved.setCreditTierIndex(4);
+        reserved.setCadence("yearly");
+        when(attempts.findByRecipientUserIdOrderByCreatedAtDesc(7L)).thenReturn(List.of(reserved));
+        when(firstPaid.findById(7L)).thenReturn(Optional.empty());
+
+        var current = service.current(7L);
+
+        assertThat(current.status()).isEqualTo("CHECKOUT_OPEN");
+        assertThat(current.reservedPlanCode()).isEqualTo("TEAM");
+        assertThat(current.reservedCreditTierIndex()).isEqualTo(4);
+        assertThat(current.reservedBillingCycle()).isEqualTo("yearly");
+        assertThat(current.sessionExpiresAt()).isEqualTo(reserved.getSessionExpiresAt());
+    }
+
+    @Test
+    @DisplayName("regression: a checkout still being created reads as such, not as another benefit in the way")
+    void creatingCheckoutIsNotAConflict() {
+        offer.setValidUntil(Instant.now().plusSeconds(3600));
+        when(codes.findByRecipientUserIdAndCampaignKey(7L, "free-credit-upgrade")).thenReturn(Optional.of(offer));
+        PersonalOfferCheckoutAttempt creating = reservation();
+        creating.setStatus("CREATING");
+        when(attempts.findByRecipientUserIdOrderByCreatedAtDesc(7L)).thenReturn(List.of(creating));
+        when(firstPaid.findById(7L)).thenReturn(Optional.empty());
+
+        assertThat(service.current(7L).status()).isEqualTo("CHECKOUT_CREATING");
+    }
+
+    @Test
+    @DisplayName("regression: the preview refuses a bonus another conversion benefit stands in the way of, as the checkout would")
+    void previewSaysTheConflict() {
+        offer.setValidUntil(Instant.now().plusSeconds(3600));
+        PersonalOfferFirstPaidPurchase history = new PersonalOfferFirstPaidPurchase();
+        history.setStatus("VERIFIED_NEW");
+        when(firstPaid.findById(7L)).thenReturn(Optional.of(history));
+        for (RewardProgram program : List.of(RewardProgram.REFERRAL, RewardProgram.PARTNER)) {
+            when(redemptions.findByRedeemerUserIdAndProgram(eq(7L), any())).thenReturn(Optional.empty());
+            when(redemptions.findByRedeemerUserIdAndProgram(7L, program)).thenReturn(Optional.of(new RewardRedemption()));
+            assertThatThrownBy(() -> service.preview(7L, null, "OWNEDCODE123", 0, "monthly"))
+                    .as(program.name())
+                    .isInstanceOf(PersonalOfferService.OfferException.class)
+                    .hasMessage("OFFER_CONFLICT");
+        }
+
+        // A policy that allows stacking shows the bonus.
+        policy.setAllowConversionStack(true);
+        PersonalOfferMatrix row = new PersonalOfferMatrix();
+        row.setBonusCredits(8_000);
+        when(matrix.findByPolicyIdAndPlanCodeAndMonthlyCredits(eq(3L), anyString(), eq(5_000))).thenReturn(Optional.of(row));
+        assertThat(service.preview(7L, null, "OWNEDCODE123", 0, "monthly").plans())
+                .filteredOn(p -> p.planCode().equals("PRO"))
+                .singleElement().satisfies(p -> assertThat(p.bonusCredits()).isEqualTo(8_000));
+    }
+
+    @Test
+    @DisplayName("no reservation is named outside an open checkout")
+    void noReservationOutsideAnOpenCheckout() {
+        offer.setValidUntil(Instant.now().plusSeconds(3600));
+        when(codes.findByRecipientUserIdAndCampaignKey(7L, "free-credit-upgrade"))
+                .thenReturn(Optional.of(offer));
+        when(attempts.findByRecipientUserIdOrderByCreatedAtDesc(7L)).thenReturn(List.of());
+        when(firstPaid.findById(7L)).thenReturn(Optional.empty());
+
+        var current = service.current(7L);
+
+        assertThat(current.status()).isEqualTo("AVAILABLE");
+        assertThat(current.reservedPlanCode()).isNull();
+        assertThat(current.reservedCreditTierIndex()).isNull();
+        assertThat(current.reservedBillingCycle()).isNull();
     }
 
     @ParameterizedTest

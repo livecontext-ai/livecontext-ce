@@ -47,6 +47,8 @@ export interface ApiKeyEntry {
   scopes: string[] | null;
   createdAt: string | null;
   lastUsedAt: string | null;
+  /** When the key stops working; null for keys created before expiry existed (never expire). */
+  expiresAt?: string | null;
 }
 
 /** The create response: the entry plus the one-time plaintext key. */

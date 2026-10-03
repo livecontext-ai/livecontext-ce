@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { ShieldAlert, Shield, ClipboardCheck, Loader2, Inbox, Bot, Workflow, Clock, Coins, Eye, Monitor, Table2, Zap } from "lucide-react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
+import { urlPageIndex, useUrlState } from "@/hooks/useUrlState";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { useTranslations } from "next-intl";
 import Toast, { useToast } from "@/components/Toast";
@@ -25,7 +26,8 @@ export default function PublicationReviewPage() {
   const [publications, setPublications] = useState<WorkflowPublication[]>([]);
   const [stats, setStats] = useState<ModerationStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(0);
+  // In the address, so a reload stays on the same page of the queue.
+  const [page, setPage] = useUrlState("page", 0, { codec: urlPageIndex });
   const [totalPages, setTotalPages] = useState(0);
   const [reviewingPublication, setReviewingPublication] = useState<WorkflowPublication | null>(null);
 
@@ -56,13 +58,16 @@ export default function PublicationReviewPage() {
       ]);
       setPublications(pendingRes.publications);
       setTotalPages(pendingRes.totalPages);
+      // A page restored from the address can be past the end once the queue has shrunk.
+      const lastPage = Math.max(0, pendingRes.totalPages - 1);
+      if (page > lastPage) setPage(lastPage);
       setStats(statsRes);
     } catch {
       addToast({ type: "error", title: t("loadFailed"), message: "" });
     } finally {
       setLoading(false);
     }
-  }, [page, addToast]);
+  }, [page, addToast, setPage]);
 
   useEffect(() => {
     if (isAdmin) fetchData();
@@ -142,7 +147,7 @@ export default function PublicationReviewPage() {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <PageHeader icon={ClipboardCheck} title={t("title")} subtitle={t("subtitle")} />
         <div className="flex items-center gap-2">
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs font-medium">

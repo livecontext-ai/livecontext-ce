@@ -169,6 +169,21 @@ public interface FileStorageService {
     boolean delete(String key);
 
     /**
+     * Owner-aware delete, mirror of {@link #download(String, String)}: the remote
+     * internal delete route authorizes by KEY-OWNER prefix (isKeyOwnedByTenant),
+     * so a caller with no request-scope identity (agent tool thread, async) must
+     * present the owner's tenant or the call is refused with 403 and reported as
+     * {@code false}. Local/mock implementations ignore the tenant.
+     *
+     * @param ownerTenantId Tenant that owns the key (its prefix)
+     * @param key S3 object key
+     * @return true if deleted, false if not found or refused
+     */
+    default boolean delete(String ownerTenantId, String key) {
+        return delete(key);
+    }
+
+    /**
      * Deletes all files for a specific run.
      * Used for cleanup when a run is deleted.
      *

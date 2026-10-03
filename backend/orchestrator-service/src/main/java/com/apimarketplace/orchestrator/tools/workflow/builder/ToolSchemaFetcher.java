@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder;
 
+import com.apimarketplace.common.web.GatewaySignatureV2Interceptor;
 import com.apimarketplace.common.web.InternalGatewaySigner;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -39,6 +40,12 @@ public class ToolSchemaFetcher {
 
     public ToolSchemaFetcher() {
         this.restTemplate = new RestTemplate();
+        // CASA LC-035: the v2 signature (method + path + roles) is added at send time to the
+        // slug lookup stamped with v1 below; without it the call 401s once
+        // gateway.signature.accept-v1 is false. Unstamped calls (the public /api/catalog and
+        // /api/v1 lookups) go out unchanged. The secret is a field-injected @Value, hence the
+        // supplier.
+        this.restTemplate.getInterceptors().add(new GatewaySignatureV2Interceptor(() -> gatewaySecretKey));
     }
 
     /**

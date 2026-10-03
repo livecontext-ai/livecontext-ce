@@ -57,6 +57,8 @@ export function BrowserAgentParametersForm({
   handleParamExpressionChange,
 }: BrowserAgentParametersFormProps) {
   const t = useTranslations('workflowBuilder.forms.browserAgent');
+  // Heading of the model picker's group of unlisted (hidden) models.
+  const tActions = useTranslations('actions');
   // Optional browser stack availability - null while unknown (no false warning).
   const { capabilities } = useFeatureCapabilities();
   const browserAgentMissing = capabilities !== null && !capabilities.browserAgent;
@@ -181,6 +183,7 @@ export function BrowserAgentParametersForm({
           provider/model is the most prominent control. Browser-agent steps
           each cost an LLM call, so the choice belongs at the top. */}
       <ModelPicker
+        hiddenModelsLabel={tActions('unlistedModels')}
         value={modelSelection}
         onChange={handleModelPick}
         disabled={isRunMode}

@@ -152,6 +152,76 @@ class PublishAgentValidation422ContractTest {
         assertThat(body).containsEntry("sizeBytes", 34_000_000L);
     }
 
+    private static PublicationValidationException tableRowsRefusal() {
+        return new PublicationValidationException(
+                PublicationValidationException.PUBLICATION_SNAPSHOT_TOO_LARGE,
+                "Table 'Orders' has more than 5000 rows (max 5000 rows per published table). "
+                        + "Delete rows from the table, then publish again.",
+                Map.of("maxTableRows", 5000,
+                        "breakdown", List.of(Map.of("type", "datasource", "name", "Orders", "items", 5001))));
+    }
+
+    @Test
+    @DisplayName("regression (budget): INTERNAL /publish-resource maps a too-large table to 422 with the toBody() shape (MCP path)")
+    void internalResourcePublishReturns422() {
+        when(resourcePublicationService.publishResource(any(), any(), any())).thenThrow(tableRowsRefusal());
+        InternalPublicationController controller = new InternalPublicationController(
+                publicationRepository, publicationService, agentPublicationService,
+                resourcePublicationService, orchestratorClient, backfillService,
+                org.mockito.Mockito.mock(com.apimarketplace.publication.service.ShowcaseFileNamespaceRepairService.class),
+                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+
+        ResponseEntity<?> response = controller.publishResource(TENANT, null, Map.of("type", "TABLE", "resourceId", "7"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(422);
+        Map<String, Object> body = asBody(response);
+        assertThat(body).containsEntry("error", "PUBLICATION_SNAPSHOT_TOO_LARGE");
+        assertThat(body).containsEntry("maxTableRows", 5000);
+        assertThat(body.get("message")).asString().contains("'Orders'").contains("5000");
+    }
+
+    @Test
+    @DisplayName("regression (budget): PUBLIC /publish-resource maps a too-large table to 422 (share modal shows the message)")
+    void publicResourcePublishReturns422() {
+        when(resourcePublicationService.publishResource(any(), any(), any())).thenThrow(tableRowsRefusal());
+        WorkflowPublicationController controller = new WorkflowPublicationController(
+                publicationService, agentPublicationService, listQueryService,
+                reviewService, resourcePublicationService, orchestratorClient,
+                landingInterfaceSnapshotter, showcaseSnapshotReader, fileRefRewriter,
+                new OnboardingCategoryMapper(), orgAccessGuard,
+                org.mockito.Mockito.mock(ApplicationTemplateResetService.class));
+
+        ResponseEntity<?> response = controller.publishResource(TENANT, null, null,
+                Map.of("type", "TABLE", "resourceId", "7"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(422);
+        Map<String, Object> body = asBody(response);
+        assertThat(body).containsEntry("error", "PUBLICATION_SNAPSHOT_TOO_LARGE");
+        assertThat(body.get("message")).asString().contains("'Orders'");
+    }
+
+    @Test
+    @DisplayName("a TABLE_COPY_FAILED refusal reaches the caller as a 422 carrying retryable=true (internal agent publish)")
+    void tableCopyFailureReachesThe422Body() {
+        when(agentPublicationService.publishAgent(any(), any(), any())).thenThrow(new PublicationValidationException(
+                PublicationValidationException.TABLE_COPY_FAILED,
+                "The rows of table 'Orders' (id 9) could not be read just now, so nothing was published. "
+                        + "This is temporary: publish again in a moment.",
+                Map.of("retryable", true, "tableId", "9", "tableName", "Orders")));
+        InternalPublicationController controller = new InternalPublicationController(
+                publicationRepository, publicationService, agentPublicationService,
+                resourcePublicationService, orchestratorClient, backfillService,
+                org.mockito.Mockito.mock(com.apimarketplace.publication.service.ShowcaseFileNamespaceRepairService.class),
+                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+
+        ResponseEntity<?> response = controller.publishAgent(
+                TENANT, null, Map.of("agentConfigId", UUID.randomUUID().toString()));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(422);
+        assertThat(asBody(response)).containsEntry("error", "TABLE_COPY_FAILED").containsEntry("retryable", true)
+                .containsEntry("tableId", "9");
+    }
+
     @SuppressWarnings("unchecked")
     private static Map<String, Object> asBody(ResponseEntity<?> response) {
         return (Map<String, Object>) response.getBody();

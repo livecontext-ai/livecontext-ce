@@ -11,10 +11,10 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 // non-localized public pages (no NextIntlClientProvider) - it must stay
 // intl-context-free and use plain next/navigation. Mocked here so the test drives
 // the current pathname and observes navigation.
-const h = vi.hoisted(() => ({ push: vi.fn(), assign: vi.fn(), pathname: '/', search: '', hash: '' }));
+const h = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn(), assign: vi.fn(), pathname: '/', search: '', hash: '' }));
 vi.mock('next/navigation', () => ({
   usePathname: () => h.pathname,
-  useRouter: () => ({ push: h.push }),
+  useRouter: () => ({ push: h.push, refresh: h.refresh }),
 }));
 
 import LandingLanguageSelect from '../LandingLanguageSelect';
@@ -26,6 +26,7 @@ function clearNextLocaleCookie() {
 describe('LandingLanguageSelect', () => {
   beforeEach(() => {
     h.push.mockClear();
+    h.refresh.mockClear();
     h.assign.mockClear();
     h.pathname = '/';
     h.search = '';
@@ -122,6 +123,26 @@ describe('LandingLanguageSelect', () => {
     expect(h.push).not.toHaveBeenCalled();
   });
 
+  it('regression: the partner page loads its URL in the chosen language, whatever the cookie said (the bare URL is English)', () => {
+    h.pathname = '/partners';
+    document.cookie = 'NEXT_LOCALE=fr; path=/';
+    render(<LandingLanguageSelect />);
+    expect(screen.getByRole('combobox', { name: 'Language' })).toHaveValue('en');
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Language' }), { target: { value: 'pt' } });
+
+    expect(h.assign).toHaveBeenCalledWith('/pt/partners');
+    expect(document.cookie).toContain('NEXT_LOCALE=pt');
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('from a translated partner page back to English, the bare URL', () => {
+    h.pathname = '/de/partners';
+    render(<LandingLanguageSelect />);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Language' }), { target: { value: 'en' } });
+    expect(h.assign).toHaveBeenCalledWith('/partners');
+  });
+
   it('keeps the persona when changing between translated pages', () => {
     h.pathname = '/fr/for/sales';
     render(<LandingLanguageSelect />);
@@ -166,7 +187,7 @@ describe('LandingLanguageSelect', () => {
     expect(h.push).toHaveBeenCalledWith('/de/foreign/creator');
   });
 
-  it('on a non-localized public page: sets the cookie but does NOT navigate (single English version)', () => {
+  it('on a non-localized public page: sets the cookie and re-renders the page in place, never navigates', () => {
     h.pathname = '/about';
     render(<LandingLanguageSelect />);
 
@@ -174,6 +195,29 @@ describe('LandingLanguageSelect', () => {
 
     expect(document.cookie).toContain('NEXT_LOCALE=pt');
     expect(h.push).not.toHaveBeenCalled();
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('regression: a page localized by the cookie (a partner offer) re-renders in the language picked', () => {
+    h.pathname = '/offer/Abc23XyZ9k';
+    render(<LandingLanguageSelect compact />);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Language' }), { target: { value: 'fr' } });
+
+    expect(document.cookie).toContain('NEXT_LOCALE=fr');
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.push).not.toHaveBeenCalled();
+    expect(h.assign).not.toHaveBeenCalled();
+  });
+
+  it('a localized page navigates to its sibling and needs no refresh', () => {
+    h.pathname = '/fr/models';
+    render(<LandingLanguageSelect />);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Language' }), { target: { value: 'de' } });
+
+    expect(h.push).toHaveBeenCalledWith('/de/models');
+    expect(h.refresh).not.toHaveBeenCalled();
   });
 
   it('does not import any intl context (shared footer has no NextIntlClientProvider)', () => {

@@ -8,10 +8,10 @@ import { getAuthGateStrings, authGateBody } from '@/lib/i18n/authGateMessages';
 interface SessionGateProps {
   /**
    * True iff a previously-valid session ended (cross-tab logout, the persisted
-   * OIDC user vanished, or the login-redirect loop breaker tripped). When true the
-   * body prepends "Your session has expired."; when false (cold first visit on a
-   * fresh slot / CE with no prior login, or a transient post-signin 401) the body
-   * is the neutral "sign in to continue" copy only.
+   * OIDC user vanished, or a login-redirect loop guard refused an automatic
+   * redirect). When true the body prepends "Your session has expired."; when false
+   * (cold first visit on a fresh slot / CE with no prior login) the body is the
+   * neutral "sign in to continue" copy only.
    */
   sessionExpired: boolean;
   /** Invoked when the user clicks the sign-in button. */

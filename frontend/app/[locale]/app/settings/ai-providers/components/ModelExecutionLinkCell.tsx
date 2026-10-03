@@ -17,6 +17,7 @@ import {
   type ModelExecutionLinkScope,
 } from "@/lib/api/model-config.service";
 import { ServiceLogo } from '@/components/ui/service-logo';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 interface ModelExecutionLinkCellProps {
   model: ModelConfigEntry;
@@ -71,12 +72,14 @@ export default function ModelExecutionLinkCell({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   /**
-   * Wraps the trigger AND the panel. Scoping it to the panel alone made the badge count
-   * as "outside": a real click there fires mousedown (closing) before click (reopening),
-   * so the toggle could never close. RateLimitCell gets away with a panel-only ref
-   * because it does not render its trigger while open; both are on screen here.
+   * The badge is a plain button until the model is linked, then the popover's trigger: a
+   * different place in the tree, so React remounts it, both ways, and keyboard focus drops to
+   * <body> after the click that linked or unlinked it. Set by every write of this cell, read
+   * when the links flip; focus is only moved back if it was actually lost, so a flag left by a
+   * write that failed can never pull focus away from where the person has gone since.
    */
-  const popoverRef = useRef<HTMLDivElement>(null);
+  const badgeRef = useRef<HTMLButtonElement>(null);
+  const refocusBadge = useRef(false);
 
   const cli = model.cliBridgeProvider;
   const hasLinks = links.length > 0;
@@ -134,29 +137,18 @@ export default function ModelExecutionLinkCell({
   // for links that no longer exist.
   useEffect(() => {
     if (!hasLinks) setOpen(false);
+    if (refocusBadge.current) {
+      refocusBadge.current = false;
+      const active = document.activeElement;
+      if (!active || active === document.body) badgeRef.current?.focus();
+    }
   }, [hasLinks]);
-
-  // Close on outside click / Escape, like the rate-limit popover.
-  useEffect(() => {
-    if (!open) return;
-    const onClickOutside = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onClickOutside);
-    document.addEventListener("keydown", onEscape);
-    return () => {
-      document.removeEventListener("mousedown", onClickOutside);
-      document.removeEventListener("keydown", onEscape);
-    };
-  }, [open]);
 
   // Not memoised: it is only ever called from this component's own click handlers,
   // never passed to a memoised child or an effect, so a dependency array would be
   // bookkeeping with nothing depending on it.
   const run = async (fn: () => Promise<unknown>) => {
+    refocusBadge.current = true;
     setBusy(true);
     try {
       await fn();
@@ -259,175 +251,184 @@ export default function ModelExecutionLinkCell({
         : t("routedViaDisabled", { target: targetLabel })
       : t("linkToCliHint", { cli: cliLabel });
 
-  return (
-    <div ref={popoverRef} className="relative flex-shrink-0">
-      <button
-        type="button"
-        onClick={() => (hasLinks ? setOpen((v) => !v) : createAllScopesLink())}
-        disabled={busy}
-        title={badgeTitle}
-        aria-label={badgeTitle}
-        data-testid={`model-exec-link-${model.provider}-${model.id}`}
-        className={cn(
-          "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs whitespace-nowrap transition-colors disabled:opacity-50",
-          cliUnavailable
-            ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-            : hasLinks
-              ? anyEnabled
-                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                : "bg-theme-tertiary text-theme-muted"
-              : "border border-dashed border-theme text-theme-secondary opacity-60 hover:opacity-100",
-        )}
-      >
-        {busy ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : cliUnavailable ? (
-          <AlertTriangle className="h-3 w-3" />
-        ) : (
-          <ArrowRight className="h-3 w-3" />
-        )}
-        {/* Icon only, and the target's NAME is carried by the title/aria-label, which is
-            also what a screen reader announces. getProviderIconSrc always resolves a
-            path (it falls back to the provider slug), so the guard below is belt and
-            braces; a provider outside the icon map has no file behind that path, and the
-            tooltip is what identifies it. */}
-        {targetIcon && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <ServiceLogo src={targetIcon} alt="" className="h-3 w-3 object-contain" />
-        )}
-        {/* Only meaningful when surfaces are routed one by one: with ALL active every
-            surface runs on it, so a count would just be "how many rows exist". */}
-        {!allActive && routedLinks.length > 1 && (
-          <span className="tabular-nums">{routedLinks.length}</span>
-        )}
-      </button>
-
-      {open && hasLinks && (
-        <div
-          className="absolute left-0 top-full z-50 mt-1 w-72 rounded-xl border border-theme bg-theme-primary p-3 shadow-lg"
-        >
-          <p className="text-sm font-medium text-theme-primary">
-            {anyEnabled
-              ? t("routedViaTitle", { target: targetLabel })
-              // Nothing runs: "Executed via X" would contradict the Disabled chip below.
-              : t("routedViaDisabled", { target: targetLabel })}
-          </p>
-          {targetTemplate?.executionModel && (
-            <p
-              className="mt-0.5 truncate text-sm text-theme-muted"
-              title={targetTemplate.executionModel}
-            >
-              {targetTemplate.executionModel}
-            </p>
-          )}
-          {cliUnavailable && (
-            <p className="mt-1 text-sm text-amber-600 dark:text-amber-400">
-              {t("cliNotAvailable", { cli: cliLabel })}
-            </p>
-          )}
-          {allScopeHitsCli && (
-            <p className="mt-1 text-sm text-amber-600 dark:text-amber-400">
-              {t("allScopeCliCaveat", { cli: targetLabel })}
-            </p>
-          )}
-          {/* The badge can only see whether the CLI is installed and logged in. Its
-              access policy is a second gate, shipped admin-only (V270 over V118's
-              disabled seed), so the admin reading this panel is precisely the person it
-              lets through while everyone else is denied - which an ALL-scoped link on a
-              shared model makes everyone else's problem. */}
-          {routesToABridge && (
-            <p className="mt-1 text-sm text-theme-muted">{t("accessPolicyCaveat")}</p>
-          )}
-          <p className="mt-2 text-sm text-theme-muted">{t("appliesTo")}</p>
-          <div className="mt-1 space-y-0.5">
-            {EXECUTION_LINK_SCOPES.map((scope) => {
-              const existing = linkFor(scope.value);
-              const isWildcard = scope.value === "ALL";
-              // While ALL routes everything, a click here could only write a no-op or
-              // silently split the model across two targets, so the row is rendered as
-              // the consequence it is rather than as a switch.
-              // A row that would resolve to exactly what ALL already does adds nothing,
-              // so it reads as covered. Same provider but a different execution MODEL
-              // is still a real override (resolution takes the exact row), and has to
-              // say so rather than hide behind the wildcard.
-              const sameAsWildcard =
-                existing?.executionProvider === targetProvider
-                && (existing?.executionModel ?? null) === (targetTemplate?.executionModel ?? null);
-              const coveredByAll =
-                !isWildcard && allActive && (!isActive(existing) || sameAsWildcard);
-              const routed = isWildcard ? allActive : coveredByAll || isActive(existing);
-              const interactive = isWildcard || !allActive;
-              const rowClass = cn(
-                "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm",
-                interactive
-                  ? "text-theme-primary hover:bg-[var(--bg-secondary)] disabled:opacity-50"
-                  : "text-theme-muted",
-              );
-              const rowBody = (
-                <>
-                  <Check
-                    className={cn(
-                      "h-3.5 w-3.5 flex-shrink-0",
-                      routed ? "text-emerald-500" : "opacity-0",
-                    )}
-                  />
-                  <span className="flex-1 truncate">{t(scope.labelKey)}</span>
-                  {coveredByAll && <span className="text-xs">{t("coveredByAll")}</span>}
-                  {existing && existing.enabled === false && !allActive && (
-                    <span className="text-xs text-theme-muted">{t("disabled")}</span>
-                  )}
-                  {isActive(existing) && !sameAsWildcard && (
-                    <span className="max-w-[9rem] truncate text-xs text-theme-muted">
-                      {existing!.executionProvider === targetProvider
-                        // Same provider, different model: naming the provider again would
-                        // read as agreement, so name what actually differs.
-                        ? existing!.executionModel
-                        : getProviderDisplayName(existing!.executionProvider)}
-                    </span>
-                  )}
-                </>
-              );
-              return interactive ? (
-                <button
-                  key={scope.value}
-                  type="button"
-                  role="checkbox"
-                  aria-checked={routed}
-                  disabled={busy}
-                  onClick={() => toggleScope(scope.value, existing)}
-                  className={rowClass}
-                >
-                  {rowBody}
-                </button>
-              ) : (
-                // Still a checkbox for assistive tech, just not operable: the row IS
-                // routed, and announcing only the label would leave a screen reader
-                // with the green tick as the sole carrier of that state.
-                <div
-                  key={scope.value}
-                  role="checkbox"
-                  aria-checked={routed}
-                  aria-disabled="true"
-                  tabIndex={0}
-                  className={rowClass}
-                >
-                  {rowBody}
-                </div>
-              );
-            })}
-          </div>
-          {allActive && <p className="mt-1 text-sm text-theme-muted">{t("perSurfaceHint")}</p>}
-          <button
-            type="button"
-            onClick={removeRouting}
-            disabled={busy}
-            className="mt-2 flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-sm text-theme-secondary hover:bg-[var(--bg-secondary)] hover:text-red-500 disabled:opacity-50"
-          >
-            <Unlink className="h-3.5 w-3.5" />
-            {t("removeRouting")}
-          </button>
-        </div>
+  const badge = (
+    <button
+      type="button"
+      // Not linked yet: a one-click action. Linked: the popover trigger below toggles it.
+      ref={badgeRef}
+      onClick={hasLinks ? undefined : () => void createAllScopesLink()}
+      disabled={busy}
+      title={badgeTitle}
+      aria-label={badgeTitle}
+      data-testid={`model-exec-link-${model.provider}-${model.id}`}
+      className={cn(
+        "inline-flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs whitespace-nowrap transition-colors disabled:opacity-50",
+        cliUnavailable
+          ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+          : hasLinks
+            ? anyEnabled
+              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+              : "bg-theme-tertiary text-theme-muted"
+            : "border border-dashed border-theme text-theme-secondary opacity-60 hover:opacity-100",
       )}
-    </div>
+    >
+      {busy ? (
+        <Loader2 className="h-3 w-3 animate-spin" />
+      ) : cliUnavailable ? (
+        <AlertTriangle className="h-3 w-3" />
+      ) : (
+        <ArrowRight className="h-3 w-3" />
+      )}
+      {/* Icon only, and the target's NAME is carried by the title/aria-label, which is
+          also what a screen reader announces. getProviderIconSrc always resolves a
+          path (it falls back to the provider slug), so the guard below is belt and
+          braces; a provider outside the icon map has no file behind that path, and the
+          tooltip is what identifies it. */}
+      {targetIcon && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <ServiceLogo src={targetIcon} alt="" className="h-3 w-3 object-contain" />
+      )}
+      {/* Only meaningful when surfaces are routed one by one: with ALL active every
+          surface runs on it, so a count would just be "how many rows exist". */}
+      {!allActive && routedLinks.length > 1 && (
+        <span className="tabular-nums">{routedLinks.length}</span>
+      )}
+    </button>
+  );
+
+  // Not linked yet: a plain button, which does not announce a popup it never opens.
+  if (!hasLinks) return badge;
+
+  // The app's Popover, portalled to <body>: the panel used to be an absolute box inside the
+  // row, and the model list scrolls (overflow auto), so it was clipped by the list's edges
+  // and cut off on the right for any badge not at the far left. Radix also owns what the
+  // hand-rolled listeners did: Escape, an outside click, and a second click on the badge.
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{badge}</PopoverTrigger>
+
+      <PopoverContent align="start" className="w-72 border-theme p-3">
+        <p className="text-sm font-medium text-theme-primary">
+          {anyEnabled
+            ? t("routedViaTitle", { target: targetLabel })
+            // Nothing runs: "Executed via X" would contradict the Disabled chip below.
+            : t("routedViaDisabled", { target: targetLabel })}
+        </p>
+        {targetTemplate?.executionModel && (
+          <p
+            className="mt-0.5 truncate text-sm text-theme-muted"
+            title={targetTemplate.executionModel}
+          >
+            {targetTemplate.executionModel}
+          </p>
+        )}
+        {cliUnavailable && (
+          <p className="mt-1 text-sm text-amber-600 dark:text-amber-400">
+            {t("cliNotAvailable", { cli: cliLabel })}
+          </p>
+        )}
+        {allScopeHitsCli && (
+          <p className="mt-1 text-sm text-amber-600 dark:text-amber-400">
+            {t("allScopeCliCaveat", { cli: targetLabel })}
+          </p>
+        )}
+        {/* The badge can only see whether the CLI is installed and logged in. Its
+            access policy is a second gate, shipped admin-only (V270 over V118's
+            disabled seed), so the admin reading this panel is precisely the person it
+            lets through while everyone else is denied - which an ALL-scoped link on a
+            shared model makes everyone else's problem. */}
+        {routesToABridge && (
+          <p className="mt-1 text-sm text-theme-muted">{t("accessPolicyCaveat")}</p>
+        )}
+        <p className="mt-2 text-sm text-theme-muted">{t("appliesTo")}</p>
+        <div className="mt-1 space-y-0.5">
+          {EXECUTION_LINK_SCOPES.map((scope) => {
+            const existing = linkFor(scope.value);
+            const isWildcard = scope.value === "ALL";
+            // While ALL routes everything, a click here could only write a no-op or
+            // silently split the model across two targets, so the row is rendered as
+            // the consequence it is rather than as a switch.
+            // A row that would resolve to exactly what ALL already does adds nothing,
+            // so it reads as covered. Same provider but a different execution MODEL
+            // is still a real override (resolution takes the exact row), and has to
+            // say so rather than hide behind the wildcard.
+            const sameAsWildcard =
+              existing?.executionProvider === targetProvider
+              && (existing?.executionModel ?? null) === (targetTemplate?.executionModel ?? null);
+            const coveredByAll =
+              !isWildcard && allActive && (!isActive(existing) || sameAsWildcard);
+            const routed = isWildcard ? allActive : coveredByAll || isActive(existing);
+            const interactive = isWildcard || !allActive;
+            const rowClass = cn(
+              "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm",
+              interactive
+                ? "text-theme-primary hover:bg-[var(--bg-secondary)] disabled:opacity-50"
+                : "text-theme-muted",
+            );
+            const rowBody = (
+              <>
+                <Check
+                  className={cn(
+                    "h-3.5 w-3.5 flex-shrink-0",
+                    routed ? "text-emerald-500" : "opacity-0",
+                  )}
+                />
+                <span className="flex-1 truncate">{t(scope.labelKey)}</span>
+                {coveredByAll && <span className="text-xs">{t("coveredByAll")}</span>}
+                {existing && existing.enabled === false && !allActive && (
+                  <span className="text-xs text-theme-muted">{t("disabled")}</span>
+                )}
+                {isActive(existing) && !sameAsWildcard && (
+                  <span className="max-w-[9rem] truncate text-xs text-theme-muted">
+                    {existing!.executionProvider === targetProvider
+                      // Same provider, different model: naming the provider again would
+                      // read as agreement, so name what actually differs.
+                      ? existing!.executionModel
+                      : getProviderDisplayName(existing!.executionProvider)}
+                  </span>
+                )}
+              </>
+            );
+            return interactive ? (
+              <button
+                key={scope.value}
+                type="button"
+                role="checkbox"
+                aria-checked={routed}
+                disabled={busy}
+                onClick={() => toggleScope(scope.value, existing)}
+                className={rowClass}
+              >
+                {rowBody}
+              </button>
+            ) : (
+              // Still a checkbox for assistive tech, just not operable: the row IS
+              // routed, and announcing only the label would leave a screen reader
+              // with the green tick as the sole carrier of that state.
+              <div
+                key={scope.value}
+                role="checkbox"
+                aria-checked={routed}
+                aria-disabled="true"
+                tabIndex={0}
+                className={rowClass}
+              >
+                {rowBody}
+              </div>
+            );
+          })}
+        </div>
+        {allActive && <p className="mt-1 text-sm text-theme-muted">{t("perSurfaceHint")}</p>}
+        <button
+          type="button"
+          onClick={removeRouting}
+          disabled={busy}
+          className="mt-2 flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-sm text-theme-secondary hover:bg-[var(--bg-secondary)] hover:text-red-500 disabled:opacity-50"
+        >
+          <Unlink className="h-3.5 w-3.5" />
+          {t("removeRouting")}
+        </button>
+      </PopoverContent>
+    </Popover>
   );
 }

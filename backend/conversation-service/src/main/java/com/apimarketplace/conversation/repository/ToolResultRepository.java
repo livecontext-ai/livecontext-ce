@@ -66,7 +66,7 @@ public interface ToolResultRepository extends JpaRepository<ToolResult, UUID> {
      */
     @Query(value = "SELECT id, conversation_id, tenant_id, tool_name, tool_call_id, " +
            "success, duration_ms, NULL AS content_full, content_preview, error_message, " +
-           "metadata, execution_id, created_at " +
+           "metadata, execution_id, data_sensitivity, created_at " +
            "FROM conversation.tool_results " +
            "WHERE conversation_id = :conversationId AND tenant_id = :tenantId " +
            "ORDER BY created_at ASC", nativeQuery = true)

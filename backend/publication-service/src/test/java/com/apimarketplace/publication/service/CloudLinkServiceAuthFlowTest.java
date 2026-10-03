@@ -45,6 +45,7 @@ class CloudLinkServiceAuthFlowTest {
     private final MutableClock clock = new MutableClock(Instant.parse("2026-09-25T10:00:00Z"));
 
     private CloudLinkService service(String cloudApiUrl, String webUrl, Duration ttl) {
+        CloudLinkTokenColumnsFake.backByStubbedEntity(cloudLinkRepository);
         return new CloudLinkService(cloudLinkRepository,
                 "https://auth.example.com/realms/livecontext",
                 CLIENT_ID, REDIRECT_URI,

@@ -99,6 +99,14 @@ class BillingControllerRewardRedeemTest {
     }
 
     @Test
+    @DisplayName("PARTNER_ACCOUNT -> 409 with its own typed code: a partner is told why another partner's code is refused")
+    void partnerAccount() {
+        var resp = redeemReturning(RedeemStatus.PARTNER_ACCOUNT, null);
+        assertThat(resp.getStatusCode().value()).isEqualTo(409);
+        assertThat(resp.getBody().get("code")).isEqualTo("PARTNER_ACCOUNT");
+    }
+
+    @Test
     @DisplayName("PENDING_CONVERSION -> 202")
     void pending() {
         var resp = redeemReturning(RedeemStatus.PENDING_CONVERSION, withStatus(RewardStatus.PENDING));

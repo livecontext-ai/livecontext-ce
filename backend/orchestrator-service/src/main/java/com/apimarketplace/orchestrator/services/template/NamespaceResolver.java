@@ -189,7 +189,7 @@ public class NamespaceResolver {
 
         Object result = navigateWithOutputFallback(stepData, remainingPath);
         logger.info("[resolveStepsNamespace] navigateWithOutputFallback result: path={}, result={}",
-            remainingPath, result != null ? result.getClass().getSimpleName() + ":" + (result.toString().length() > 100 ? result.toString().substring(0, 100) + "..." : result) : "NULL");
+            remainingPath, result != null ? result.getClass().getSimpleName() + ":" + com.apimarketplace.common.logging.PayloadLogSafety.describeText(result.toString(), 100) : "NULL");
         return result;
     }
 

@@ -129,6 +129,11 @@ public class StorageClientAdapter implements FileStorageService {
     }
 
     @Override
+    public boolean delete(String ownerTenantId, String key) {
+        return storageClient.delete(ownerTenantId, key);
+    }
+
+    @Override
     public int deleteRunFiles(String tenantId, String workflowId, String runId) {
         return storageClient.deleteRunFiles(tenantId, workflowId, runId);
     }

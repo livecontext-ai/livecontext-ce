@@ -176,7 +176,7 @@ public class InterfaceController {
     public ResponseEntity<InterfaceDto> getInterface(@PathVariable UUID id, HttpServletRequest request) {
         String tenantId = tenantResolver.resolve(request);
         String orgId = tenantResolver.resolveOrgId(request);
-        // A share-link holder is authenticated AS THE OWNER, so the scope lookup below would hand
+        // A share-link holder is authenticated AS THE OWNER (CASA LC-037), so the scope lookup below would hand
         // them every interface of the owner's workspace. Serve only the shared application's own
         // interfaces; anything else is a 404, like an unknown id.
         if (!shareContextPermitsInterface(request, id, orgId)) {

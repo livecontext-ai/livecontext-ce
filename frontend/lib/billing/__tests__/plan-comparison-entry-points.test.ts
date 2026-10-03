@@ -38,7 +38,9 @@ const ALLOWED = [
 const ALLOWED_HOSTS = [
   // Wraps the app tree, which is where the pricing page lives. Mounted at the
   // layout rather than in the page because the dialog listens on a window event.
-  'app/[locale]/app/layout.tsx',
+  // The layout's client body lives in AppLayoutClient.tsx since layout.tsx became a
+  // thin server component (it reads the per-request CSP nonce).
+  'app/[locale]/app/AppLayoutClient.tsx',
   // The landing section mounts its own: it is outside the app tree.
   'app/[locale]/_landing/PricingSection.tsx',
   // The host component itself.

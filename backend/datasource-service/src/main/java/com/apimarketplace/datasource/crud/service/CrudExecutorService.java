@@ -1,5 +1,6 @@
 package com.apimarketplace.datasource.crud.service;
 
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.common.storage.service.StorageBreakdownService;
 import com.apimarketplace.datasource.crud.domain.CrudOperation;
 import com.apimarketplace.datasource.crud.domain.CrudResult;
@@ -234,10 +235,14 @@ public class CrudExecutorService {
             }
         }
 
+        // LC-066/LC-011 re-audit item 2: tag every inserted row with the calling context's
+        // restricted-data classification (set by orchestrator's CrudToolExecutor from
+        // StepPayloadService.isRunRestricted).
         List<Long> insertedIds = crudRepository.createRows(
             dataSource.id(),
             tenantId,
-            request.getRows()
+            request.getRows(),
+            (request.isRestricted() ? DataSensitivity.RESTRICTED : DataSensitivity.NORMAL).name()
         );
 
         // Batch insert vectors into the separate vector table
@@ -402,7 +407,7 @@ public class CrudExecutorService {
             return CrudResult.success(
                 CrudOperation.READ_ROW,
                 String.format("Read 0 row(s) from datasource '%s'", dataSource.name()),
-                CrudResult.ResultData.forRead(List.of(), false, offset)
+                CrudResult.ResultData.forRead(List.of(), false, offset, readResultSensitivity(null, request.isRestricted()))
             );
         }
 
@@ -420,6 +425,12 @@ public class CrudExecutorService {
         boolean hasMore = rawRows.size() > limit;
         List<Map<String, Object>> rows = hasMore ? rawRows.subList(0, limit) : rawRows;
 
+        // LC-066/LC-011 re-audit item 2 - "interim guard": the read result is RESTRICTED when
+        // EITHER a returned row's own stored tag says so, OR the calling context is itself
+        // restricted (a step in a restricted run can echo restricted content into a table without
+        // the row's own write having been flagged - see CrudRequest.isRestricted javadoc).
+        String dataSensitivity = readResultSensitivity(rows, request.isRestricted());
+
         // Flatten the data JSONB column into top-level fields
         List<Map<String, Object>> flattenedRows =
             mediaCellHydrator.hydrateRows(flattenRows(rows), dataSource.mappingSpec());
@@ -427,8 +438,22 @@ public class CrudExecutorService {
         return CrudResult.success(
             CrudOperation.READ_ROW,
             String.format("Read %d row(s) from datasource '%s'", flattenedRows.size(), dataSource.name()),
-            CrudResult.ResultData.forRead(flattenedRows, hasMore, offset)
+            CrudResult.ResultData.forRead(flattenedRows, hasMore, offset, dataSensitivity)
         );
+    }
+
+    /**
+     * See {@link #executeReadRow} - OR of every row's stored {@code data_sensitivity} and the
+     * request's own restricted flag. Package-visible for unit testing.
+     */
+    static String readResultSensitivity(List<Map<String, Object>> rows, boolean requestRestricted) {
+        DataSensitivity sensitivity = requestRestricted ? DataSensitivity.RESTRICTED : DataSensitivity.NORMAL;
+        if (rows != null) {
+            for (Map<String, Object> row : rows) {
+                sensitivity = sensitivity.max(DataSensitivity.parse(row.get("data_sensitivity")));
+            }
+        }
+        return sensitivity.name();
     }
 
     /**
@@ -497,10 +522,15 @@ public class CrudExecutorService {
         List<Map<String, Object>> flattenedRows =
             mediaCellHydrator.hydrateRows(flattenRows(rawRows), dataSource.mappingSpec());
 
+        // LC-066/LC-011 re-audit item 2: VectorRepository.similaritySearch now joins
+        // data_source_items.data_sensitivity, so a RESTRICTED matched row ORs into the result the
+        // same way executeReadRow already does - no longer just the calling context's flag.
+        String dataSensitivity = readResultSensitivity(rawRows, request.isRestricted());
+
         return CrudResult.success(
             CrudOperation.READ_ROW,
             String.format("Found %d similar row(s) in datasource '%s'", flattenedRows.size(), dataSource.name()),
-            CrudResult.ResultData.forRead(flattenedRows, false, 0)
+            CrudResult.ResultData.forRead(flattenedRows, false, 0, dataSensitivity)
         );
     }
 
@@ -618,18 +648,22 @@ public class CrudExecutorService {
         // event emission can expose `previous_row` for each row_updated event.
         // We resolve ids independently of vectorUpdates because events always need them.
         List<Long> affectedItemIds = crudRepository.findIdsMatching(dataSource.id(), tenantId, where);
-        Map<Long, Map<String, Object>> beforeSnapshots = snapshotRowsById(dataSource, tenantId, affectedItemIds);
+        RowSnapshots beforeSnapshots = snapshotRowsById(dataSource, tenantId, affectedItemIds);
 
         int affectedRows;
         if (request.getSet().isEmpty()) {
             // Only vector columns were in the set - no JSONB update needed
             affectedRows = affectedItemIds.size();
         } else {
+            // LC-066/LC-011 re-audit item 2: ratchets data_sensitivity to RESTRICTED when this
+            // update runs inside a restricted run/conversation - never downgrades a row a prior
+            // restricted write already tagged.
             affectedRows = crudRepository.updateRows(
                 dataSource.id(),
                 tenantId,
                 where,
-                request.getSet()
+                request.getSet(),
+                request.isRestricted()
             );
         }
 
@@ -674,7 +708,7 @@ public class CrudExecutorService {
         // Capture last-known snapshots BEFORE the delete so row_deleted events can
         // expose `row` = pre-delete state (the row is gone after the DML runs).
         List<Long> affectedIds = crudRepository.findIdsMatching(dataSource.id(), tenantId, where);
-        Map<Long, Map<String, Object>> lastKnown = snapshotRowsById(dataSource, tenantId, affectedIds);
+        RowSnapshots lastKnown = snapshotRowsById(dataSource, tenantId, affectedIds);
 
         int deletedRows = crudRepository.deleteRows(
             dataSource.id(),
@@ -730,7 +764,10 @@ public class CrudExecutorService {
         }
 
         for (Map.Entry<String, Object> entry : row.entrySet()) {
-            if (!"data".equals(entry.getKey())) {
+            // "data_sensitivity" is internal classification metadata (LC-066/LC-011), surfaced via
+            // CrudResult.ResultData.dataSensitivity, not as a pseudo user column mixed into row
+            // content that isn't declared in the datasource's mappingSpec.
+            if (!"data".equals(entry.getKey()) && !"data_sensitivity".equals(entry.getKey())) {
                 flat.put(entry.getKey(), entry.getValue());  // system cols override on collision
             }
         }
@@ -876,34 +913,58 @@ public class CrudExecutorService {
     // ==================== Event emission helpers ====================
 
     /**
-     * Snapshot rows by id, returning a map id → flattened row. Used by UPDATE/DELETE
-     * to capture before-state for trigger events.
+     * Snapshot of rows by id: flattened row content plus each row's own stored
+     * {@code data_sensitivity}, kept alongside rather than folded into the flattened row map
+     * ({@link #flattenRow} deliberately strips {@code data_sensitivity} - it is internal
+     * classification metadata, not a user column).
      */
-    private Map<Long, Map<String, Object>> snapshotRowsById(DataSource dataSource, String tenantId, List<Long> ids) {
-        if (ids == null || ids.isEmpty()) return Map.of();
+    private record RowSnapshots(Map<Long, Map<String, Object>> rows, Map<Long, String> sensitivities) {
+        static final RowSnapshots EMPTY = new RowSnapshots(Map.of(), Map.of());
+
+        String sensitivityOf(Long id) {
+            return sensitivities.getOrDefault(id, DataSensitivity.NORMAL.name());
+        }
+    }
+
+    /**
+     * Snapshot rows by id, returning flattened row content and each row's own
+     * {@code data_sensitivity}. Used by CREATE/UPDATE/DELETE to capture state for trigger events.
+     *
+     * <p>LC-066 re-audit item 1: a row that FIRES a table trigger must be tagged the same way a
+     * row a workflow READS already is (see {@link #readResultSensitivity}) - the stored tag,
+     * captured here, is what {@link #publishCreatedEvents}/{@link #publishUpdatedEvents}/
+     * {@link #publishDeletedEvents} attach to the event so the orchestrator can mark the
+     * triggered run restricted (mirrors {@code SubWorkflowNode} tainting a child run from its
+     * parent's {@code StepPayloadService.isRunRestricted}).
+     */
+    private RowSnapshots snapshotRowsById(DataSource dataSource, String tenantId, List<Long> ids) {
+        if (ids == null || ids.isEmpty()) return RowSnapshots.EMPTY;
         Map<Long, Map<String, Object>> out = new LinkedHashMap<>();
+        Map<Long, String> sensitivities = new LinkedHashMap<>();
         for (Map<String, Object> raw : crudRepository.findRowsByIds(dataSource.id(), tenantId, ids)) {
             Long id = toLong(raw.get("id"));
             if (id == null) continue;
             out.put(id, flattenRow(raw));
+            sensitivities.put(id, DataSensitivity.parse(raw.get("data_sensitivity")).name());
         }
         // A row that FIRES a workflow must look like a row a workflow READS. This snapshot becomes
         // the table trigger's row / previous_row, so leaving it in the stored text form would make
         // the same cell an object on one path and a string on the other: the file-taking parameter
         // the docs point at would work after find_rows and fail after a table trigger.
         mediaCellHydrator.hydrateRows(out.values(), dataSource.mappingSpec());
-        return out;
+        return new RowSnapshots(out, sensitivities);
     }
 
     private void publishCreatedEvents(DataSource dataSource, String tenantId,
                                       String organizationId, List<Long> insertedIds) {
         if (rowEventPublisher == null || insertedIds == null || insertedIds.isEmpty()) return;
-        Map<Long, Map<String, Object>> snapshots = snapshotRowsById(dataSource, tenantId, insertedIds);
+        RowSnapshots snapshots = snapshotRowsById(dataSource, tenantId, insertedIds);
         for (Long id : insertedIds) {
-            Map<String, Object> row = snapshots.get(id);
+            Map<String, Object> row = snapshots.rows().get(id);
             if (row == null) continue;
             try {
-                rowEventPublisher.publishCreated(dataSource.id(), id, tenantId, organizationId, row);
+                rowEventPublisher.publishCreated(dataSource.id(), id, tenantId, organizationId, row,
+                        snapshots.sensitivityOf(id));
             } catch (Exception e) {
                 log.warn("Failed to publish row_created event for datasource={} row={}: {}",
                         dataSource.id(), id, e.getMessage());
@@ -914,15 +975,22 @@ public class CrudExecutorService {
     private void publishUpdatedEvents(DataSource dataSource, String tenantId,
                                       String organizationId,
                                       List<Long> ids,
-                                      Map<Long, Map<String, Object>> beforeSnapshots) {
+                                      RowSnapshots beforeSnapshots) {
         if (rowEventPublisher == null || ids == null || ids.isEmpty()) return;
-        Map<Long, Map<String, Object>> afterSnapshots = snapshotRowsById(dataSource, tenantId, ids);
+        RowSnapshots afterSnapshots = snapshotRowsById(dataSource, tenantId, ids);
         for (Long id : ids) {
-            Map<String, Object> after = afterSnapshots.get(id);
-            Map<String, Object> before = beforeSnapshots.get(id);
+            Map<String, Object> after = afterSnapshots.rows().get(id);
+            Map<String, Object> before = beforeSnapshots.rows().get(id);
             if (after == null) continue; // row no longer exists (concurrent delete) - skip
+            // Ratchet-only classification never downgrades, so the AFTER row's tag already covers
+            // the BEFORE one - max() taken anyway as defense-in-depth against that invariant ever
+            // slipping (see CrudRepository.updateRows javadoc on the ratchet).
+            String sensitivity = DataSensitivity.parse(afterSnapshots.sensitivityOf(id))
+                    .max(DataSensitivity.parse(beforeSnapshots.sensitivityOf(id)))
+                    .name();
             try {
-                rowEventPublisher.publishUpdated(dataSource.id(), id, tenantId, organizationId, after, before);
+                rowEventPublisher.publishUpdated(dataSource.id(), id, tenantId, organizationId, after, before,
+                        sensitivity);
             } catch (Exception e) {
                 log.warn("Failed to publish row_updated event for datasource={} row={}: {}",
                         dataSource.id(), id, e.getMessage());
@@ -933,13 +1001,14 @@ public class CrudExecutorService {
     private void publishDeletedEvents(DataSource dataSource, String tenantId,
                                       String organizationId,
                                       List<Long> ids,
-                                      Map<Long, Map<String, Object>> lastKnown) {
+                                      RowSnapshots lastKnown) {
         if (rowEventPublisher == null || ids == null || ids.isEmpty()) return;
         for (Long id : ids) {
-            Map<String, Object> row = lastKnown.get(id);
+            Map<String, Object> row = lastKnown.rows().get(id);
             if (row == null) continue;
             try {
-                rowEventPublisher.publishDeleted(dataSource.id(), id, tenantId, organizationId, row);
+                rowEventPublisher.publishDeleted(dataSource.id(), id, tenantId, organizationId, row,
+                        lastKnown.sensitivityOf(id));
             } catch (Exception e) {
                 log.warn("Failed to publish row_deleted event for datasource={} row={}: {}",
                         dataSource.id(), id, e.getMessage());

@@ -41,6 +41,8 @@ import java.util.function.Supplier;
 public class MonolithSecurityFilter implements Filter {
 
     private static final Logger log = LoggerFactory.getLogger(MonolithSecurityFilter.class);
+    /** Clock-skew allowance on {@code exp}, in seconds (matches the cloud gateway, CASA LC-014). */
+    static final long EXP_LEEWAY_SECONDS = 30;
 
     private static final String AUTHORIZATION_HEADER = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
@@ -83,14 +85,70 @@ public class MonolithSecurityFilter implements Filter {
             SHARE_CONTEXT_HEADER,
             SHARE_RESOURCE_TYPE_HEADER,
             SHARE_RESOURCE_TOKEN_HEADER,
-            SHARE_RESOURCE_ID_HEADER
+            SHARE_RESOURCE_ID_HEADER,
+            MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER
     );
+
+    /**
+     * Header carrying this JVM's per-boot in-process call secret (CASA LC-032). Presenting it is
+     * what makes a loopback request "the monolith calling itself" instead of "something on this
+     * host (or in this container) calling the monolith". See {@link #isLoopbackRequest}.
+     */
+    public static final String IN_PROCESS_SECRET_HEADER = "X-LiveContext-In-Process";
+
+    /**
+     * This JVM's in-process call secret, generated once per boot and held ONLY in this heap: not
+     * a property, not an environment variable, not a file. The CE image runs user-authored code
+     * (the embedded code executor) as child processes in the same container; they inherit the
+     * environment, can read the filesystem and can open http://127.0.0.1:8080, but they cannot
+     * read this value. Regenerated on every restart, which is free: the only holders are this
+     * JVM's own outbound clients, which read it at call time.
+     */
+    private static final String IN_PROCESS_SECRET =
+            Base64.getUrlEncoder().withoutPadding().encodeToString(newSecretBytes());
+
+    private static byte[] newSecretBytes() {
+        byte[] bytes = new byte[32];
+        new java.security.SecureRandom().nextBytes(bytes);
+        return bytes;
+    }
+
+    /**
+     * The in-process secret, for the monolith's OWN outbound clients to stamp on calls addressed
+     * to this monolith's own loopback host and port (never anywhere else).
+     */
+    public static String inProcessSecret() {
+        return IN_PROCESS_SECRET;
+    }
+
+    /** CASA LC-032 in-process secret enforcement; on by default, see {@link #withInProcessSecretRequired}. */
+    private volatile boolean inProcessSecretRequired = true;
+
+    /**
+     * CASA LC-036 deny-by-default gate; OFF by default this release, see {@link #withDenyByDefault}.
+     */
+    private volatile boolean denyByDefaultRequired = false;
 
     private final Supplier<Key> verificationKeySupplier;
     private final List<String> publicPaths;
     private final Function<String, ShareTokenContext> shareTokenResolver;
     private final Function<String, ApiKeyAuth> apiKeyResolver;
     private final LongSupplier nowMillis;
+
+    /**
+     * CASA LC-015 / LC-083 token binding, all optional (null = not checked) and set once by the
+     * host through {@link #withTokenBinding}. See {@link #checkTokenBinding}.
+     */
+    private volatile String expectedIssuer;
+    private volatile String expectedAudience;
+    private volatile java.util.function.Predicate<String> sessionActive;
+    /**
+     * Epoch second this filter was created. A token that lacks the claims this version of the
+     * product always issues ({@code aud}, {@code sid}) is only accepted when it was issued BEFORE
+     * this boot, i.e. by the previous version: those tokens expire on their own within the access
+     * TTL, and requiring the claims from them would sign every user out on upgrade.
+     */
+    private final long bootEpochSeconds;
 
     /**
      * @param verificationKeySupplier provides the RSA public key for JWT verification
@@ -144,6 +202,70 @@ public class MonolithSecurityFilter implements Filter {
         this.shareTokenResolver = shareTokenResolver;
         this.apiKeyResolver = apiKeyResolver;
         this.nowMillis = nowMillis;
+        this.bootEpochSeconds = nowMillis.getAsLong() / 1000;
+    }
+
+    /**
+     * Binds CE access tokens beyond their signature (CASA LC-015, LC-083).
+     *
+     * @param issuer        required {@code iss}; null skips the check
+     * @param audience      required {@code aud}; null skips the check
+     * @param sessionActive answers whether the login session named by the token's {@code sid}
+     *                      claim is still live (false after logout, password change, refresh
+     *                      reuse detection); null skips the check
+     * @return this filter
+     */
+    /**
+     * Operator kill switch for the LC-032 in-process secret ({@code auth.in-process-secret.required},
+     * default true). Off, a loopback request is trusted on its peer address alone (the pre-LC-032
+     * behaviour and the hole: code running in this container can act as any tenant). It exists
+     * only to get an install running again if one of its internal hops is built somewhere the
+     * stamping does not reach; the endpoint should then be reported.
+     */
+    public MonolithSecurityFilter withInProcessSecretRequired(boolean required) {
+        this.inProcessSecretRequired = required;
+        if (!required) {
+            log.warn("CE in-process call secret is DISABLED (auth.in-process-secret.required=false): any "
+                    + "process able to open a loopback connection to this port is trusted as an internal caller.");
+        }
+        return this;
+    }
+
+    /**
+     * Rollout switch for the LC-036 deny-by-default gate ({@code auth.deny-by-default}, OFF this
+     * release). Before this switch, a request with no usable credential (no bearer token, no
+     * {@code X-API-Key}, no share token, no loopback trust) on a path {@link #isPublicPath} does
+     * NOT recognise was passed through to the controller anyway - authentication then depended on
+     * every one of the monolith's controllers choosing a throwing {@code TenantResolver.resolve}
+     * over the silent {@code resolveOrNull}, with nothing to catch the one that gets it wrong.
+     *
+     * <p>ON, that same request is refused with 401 here, before any controller runs, UNLESS the
+     * path is in {@link #isPublicPath}'s explicit list (already the allow-list every currently
+     * public endpoint - health, auth, webhook/chat/form/widget receivers, shares, ... - relies on
+     * to accept anonymous traffic). A path an operator's own deployment needs to reach anonymously
+     * that this list does not yet know about would start refusing at 401 the moment this is armed;
+     * the intended remedy is extending {@link #isPublicPath}; the switch exists so the arming can
+     * be rolled back to the pre-LC-036 behaviour without a redeploy if one turns up.
+     *
+     * <p>Shipped OFF (disarmed) in this release, matching every other CASA rollout switch: the
+     * public-path list has not been proven against the ENTIRE installed base's traffic yet, so
+     * flipping it on by default would risk 401ing a legitimate anonymous flow with no notice.
+     */
+    public MonolithSecurityFilter withDenyByDefault(boolean required) {
+        this.denyByDefaultRequired = required;
+        if (required) {
+            log.info("CE deny-by-default is ARMED (auth.deny-by-default=true): a request with no usable "
+                    + "credential on a non-public path is refused with 401 before reaching any controller.");
+        }
+        return this;
+    }
+
+    public MonolithSecurityFilter withTokenBinding(String issuer, String audience,
+                                                   java.util.function.Predicate<String> sessionActive) {
+        this.expectedIssuer = issuer != null && !issuer.isBlank() ? issuer : null;
+        this.expectedAudience = audience != null && !audience.isBlank() ? audience : null;
+        this.sessionActive = sessionActive;
+        return this;
     }
 
     @Override
@@ -183,8 +305,13 @@ public class MonolithSecurityFilter implements Filter {
             return;
         }
 
+        // The in-process secret is consumed HERE and must not travel any further: a controller
+        // that reflects its request headers would otherwise hand this JVM's trust marker to
+        // whoever reads that response. The stripped wrapper hides it on the external path (it is
+        // in TRUSTED_IDENTITY_HEADERS); the in-process path keeps every OTHER header.
+        HttpServletRequest inProcessRequest = new InProcessSecretHiddenRequestWrapper(httpRequest);
         HttpServletRequest trustedRequest = loopbackRequest && !protectedMonolithPath
-                ? httpRequest
+                ? inProcessRequest
                 : new StrippedIdentityHeadersRequestWrapper(httpRequest);
         String authHeader = trustedRequest.getHeader(AUTHORIZATION_HEADER);
         boolean hasBearerToken = authHeader != null && authHeader.startsWith(BEARER_PREFIX);
@@ -200,7 +327,7 @@ public class MonolithSecurityFilter implements Filter {
         // Internal loopback calls already carry trusted headers from a previous
         // monolith filter pass. External requests never get this bypass.
         if (loopbackRequest && !protectedMonolithPath && httpRequest.getHeader("X-User-ID") != null) {
-            doFilterWithBoundRequest(httpRequest, response, chain);
+            doFilterWithBoundRequest(inProcessRequest, response, chain);
             return;
         }
 
@@ -300,14 +427,23 @@ public class MonolithSecurityFilter implements Filter {
         }
 
         if (authHeader == null || !authHeader.startsWith(BEARER_PREFIX)) {
-            // No auth header - pass through (some endpoints may be optional-auth)
-            // The controller/service layer decides if auth is required
+            // No usable credential reached this point (no bearer token, no X-API-Key, no share
+            // token, no loopback trust). Pre-LC-036: pass through regardless, and the
+            // controller/service layer decides if auth is required - the gap LC-036 closes.
+            if (denyByDefaultRequired && !publicPath) {
+                writeUnauthorized(httpResponse, "Authentication required.");
+                return;
+            }
             doFilterWithBoundRequest(trustedRequest, response, chain);
             return;
         }
 
         String token = authHeader.substring(BEARER_PREFIX.length()).trim();
         if (token.isEmpty()) {
+            if (denyByDefaultRequired && !publicPath) {
+                writeUnauthorized(httpResponse, "Authentication required.");
+                return;
+            }
             doFilterWithBoundRequest(trustedRequest, response, chain);
             return;
         }
@@ -491,8 +627,13 @@ public class MonolithSecurityFilter implements Filter {
             } else {
                 expSeconds = Long.parseLong(expObj.toString());
             }
-            if (nowMillis.getAsLong() / 1000 > expSeconds) {
+            // Same 30 s clock-skew / in-flight allowance as the cloud gateway (JwtValidationService
+            // CLOCK_SKEW_LEEWAY), so a request sent just as the token expires is not a 401.
+            if (nowMillis.getAsLong() / 1000 > expSeconds + EXP_LEEWAY_SECONDS) {
                 log.debug("JWT expired");
+                return null;
+            }
+            if (!checkTokenBinding(payload)) {
                 return null;
             }
 
@@ -530,6 +671,67 @@ public class MonolithSecurityFilter implements Filter {
             log.debug("JWT parsing failed: {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * CASA LC-083: {@code iss} must be this install's issuer and {@code aud} this install's
+     * audience, so a token signed with the same key for another purpose or environment is not
+     * accepted on signature alone. CASA LC-015: {@code sid} must name a login session that is
+     * still live, so logout and password change withdraw an access token instead of leaving it
+     * valid for the rest of its 14-day TTL. A token without {@code aud} / {@code sid} is accepted
+     * only when issued before this boot (see {@link #bootEpochSeconds}).
+     */
+    private boolean checkTokenBinding(Map<String, Object> payload) {
+        if (expectedIssuer != null && !expectedIssuer.equals(stringValue(payload.get("iss")))) {
+            log.debug("JWT issuer mismatch");
+            return false;
+        }
+        boolean issuedBeforeBoot = issuedBefore(payload.get("iat"), bootEpochSeconds);
+        if (expectedAudience != null) {
+            Object aud = payload.get("aud");
+            if (aud == null) {
+                if (!issuedBeforeBoot) {
+                    log.debug("JWT without audience issued after boot");
+                    return false;
+                }
+            } else if (!audienceContains(aud, expectedAudience)) {
+                log.debug("JWT audience mismatch");
+                return false;
+            }
+        }
+        java.util.function.Predicate<String> sessions = sessionActive;
+        if (sessions != null) {
+            String sid = stringValue(payload.get("sid"));
+            if (sid == null || sid.isBlank()) {
+                if (!issuedBeforeBoot) {
+                    log.debug("JWT without session id issued after boot");
+                    return false;
+                }
+            } else if (!sessions.test(sid)) {
+                log.debug("JWT session {} is no longer active", sid);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean issuedBefore(Object iat, long epochSeconds) {
+        if (iat == null) {
+            return false;
+        }
+        try {
+            long issuedAt = iat instanceof Number n ? n.longValue() : Long.parseLong(iat.toString());
+            return issuedAt < epochSeconds;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private static boolean audienceContains(Object aud, String expected) {
+        if (aud instanceof List<?> list) {
+            return list.stream().anyMatch(a -> expected.equals(String.valueOf(a)));
+        }
+        return expected.equals(String.valueOf(aud));
     }
 
     private List<OrgMembershipClaim> parseMembershipClaims(Object membershipsObj) {
@@ -607,6 +809,13 @@ public class MonolithSecurityFilter implements Filter {
             log.error("Failed to parse JWT payload JSON", e);
             return null;
         }
+    }
+
+    /** CASA LC-036: the 401 a deny-by-default refusal answers with, before any controller runs. */
+    private static void writeUnauthorized(HttpServletResponse httpResponse, String message) throws IOException {
+        httpResponse.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        httpResponse.setContentType("application/json");
+        httpResponse.getWriter().write("{\"error\":\"Unauthorized\",\"message\":\"" + message + "\"}");
     }
 
     private boolean isPublicPath(String path) {
@@ -839,7 +1048,37 @@ public class MonolithSecurityFilter implements Filter {
         return out.toString(StandardCharsets.UTF_8);
     }
 
+    /**
+     * "The monolith calling itself" (CASA LC-032). In order: this boot's in-process secret, a
+     * loopback peer, no relay marker, no browser marker. The peer address alone never grants it:
+     * user-authored code in this container can open http://127.0.0.1:8080 and send no forwarding
+     * or browser header, and would otherwise look exactly like an internal hop. The secret is
+     * stamped on the monolith's own loopback calls by the monolith-service in-process stamping
+     * (every RestTemplate / WebClient.Builder reachable from a bean, own loopback host and port
+     * only). The last three checks are defence in depth. The CLI bridge container reaches the app
+     * at a compose-network address, so it never was a loopback caller and is unaffected.
+     */
     private boolean isLoopbackRequest(HttpServletRequest request) {
+        if (inProcessSecretRequired && !hasValidInProcessSecret(request)) {
+            return false;
+        }
+        return isLoopbackPeer(request);
+    }
+
+    /**
+     * Constant-time: a byte-at-a-time comparison against a value an in-container process can
+     * retry freely would be guessable.
+     */
+    private static boolean hasValidInProcessSecret(HttpServletRequest request) {
+        String presented = request.getHeader(IN_PROCESS_SECRET_HEADER);
+        if (presented == null || presented.isEmpty()) {
+            return false;
+        }
+        return java.security.MessageDigest.isEqual(presented.getBytes(StandardCharsets.UTF_8),
+                IN_PROCESS_SECRET.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private boolean isLoopbackPeer(HttpServletRequest request) {
         try {
             String remoteAddr = request.getRemoteAddr();
             if (remoteAddr == null || remoteAddr.isBlank()) {
@@ -863,9 +1102,69 @@ public class MonolithSecurityFilter implements Filter {
             boolean proxied = (xff != null && !xff.isBlank())
                     || (xRealIp != null && !xRealIp.isBlank())
                     || (forwarded != null && !forwarded.isBlank());
-            return !proxied;
+            if (proxied) {
+                return false;
+            }
+            // Defence in depth (CASA LC-032): a BROWSER on the same host reaches 127.0.0.1 too.
+            // Browsers mark their requests (Origin on cross-origin requests, Sec-Fetch-* on every
+            // request of a modern browser). The monolith's own Java clients (RestTemplate,
+            // WebClient) send neither. NOTE: Node's built-in fetch (undici) DOES send
+            // sec-fetch-mode, so a Node process calling loopback is treated as external too; no
+            // in-process caller is Node, and the in-process secret above is the real gate.
+            return !isBrowserRequest(request);
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    private static boolean isBrowserRequest(HttpServletRequest request) {
+        return hasValue(request.getHeader("Origin"))
+                || hasValue(request.getHeader("Sec-Fetch-Site"))
+                || hasValue(request.getHeader("Sec-Fetch-Mode"));
+    }
+
+    private static boolean hasValue(String header) {
+        return header != null && !header.isBlank();
+    }
+
+    /**
+     * Hides {@link #IN_PROCESS_SECRET_HEADER} from everything downstream of this filter on the
+     * in-process path, which otherwise keeps every header the caller sent.
+     */
+    static class InProcessSecretHiddenRequestWrapper extends HttpServletRequestWrapper {
+
+        InProcessSecretHiddenRequestWrapper(HttpServletRequest request) {
+            super(request);
+        }
+
+        private static boolean isSecret(String name) {
+            return IN_PROCESS_SECRET_HEADER.equalsIgnoreCase(name);
+        }
+
+        @Override
+        public String getHeader(String name) {
+            return isSecret(name) ? null : super.getHeader(name);
+        }
+
+        @Override
+        public Enumeration<String> getHeaders(String name) {
+            return isSecret(name) ? Collections.emptyEnumeration() : super.getHeaders(name);
+        }
+
+        @Override
+        public Enumeration<String> getHeaderNames() {
+            Enumeration<String> original = super.getHeaderNames();
+            if (original == null) {
+                return Collections.emptyEnumeration();
+            }
+            List<String> names = new ArrayList<>();
+            while (original.hasMoreElements()) {
+                String name = original.nextElement();
+                if (!isSecret(name)) {
+                    names.add(name);
+                }
+            }
+            return Collections.enumeration(names);
         }
     }
 

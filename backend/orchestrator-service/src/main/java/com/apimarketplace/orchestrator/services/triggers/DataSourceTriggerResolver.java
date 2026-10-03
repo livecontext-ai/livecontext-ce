@@ -2,7 +2,9 @@ package com.apimarketplace.orchestrator.services.triggers;
 
 import com.apimarketplace.datasource.client.DataSourceClient;
 import com.apimarketplace.datasource.client.dto.DataSourceDto;
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.datasource.client.dto.DataSourceItemDto;
+import com.apimarketplace.datasource.client.dto.DataSourceItemsPage;
 import com.apimarketplace.orchestrator.domain.workflow.Trigger;
 import com.apimarketplace.orchestrator.domain.workflow.TriggerBatchResult;
 import com.apimarketplace.orchestrator.config.WorkflowExecutionConfig;
@@ -100,21 +102,24 @@ public class DataSourceTriggerResolver implements TriggerTypeHandler {
             throw new IllegalArgumentException("Datasource " + trigger.id() + " not found for tenant " + tenantId);
         }
 
-        List<DataSourceItemDto> items = dataSourceClient.getItems(datasourceId.longValue(), tenantId, effectiveOffset, effectiveLimit);
+        DataSourceItemsPage page = dataSourceClient.getItemsPage(datasourceId.longValue(), tenantId, effectiveOffset, effectiveLimit);
+        List<DataSourceItemDto> items = page.items();
         int declaredTotal = dataSourceClient.getItemsCount(datasourceId.longValue(), tenantId);
 
         log.info("[DataSourceTriggerResolver] Retrieved {} items from DB for datasourceId={}, offset={}, limit={}",
                 items.size(), datasourceId, effectiveOffset, effectiveLimit);
 
+        // CASA LC-066: every row of a page holding Gmail / Drive content is tagged, so the trigger
+        // output that carries it is stored RESTRICTED, whichever path runs it (per item or whole).
         List<Map<String, Object>> data = items.stream()
-                .map(this::buildEnrichedItem)
+                .map(item -> buildEnrichedItem(item, page.restricted()))
                 .toList();
 
         int nextOffset = Math.min(declaredTotal, effectiveOffset + data.size());
         boolean hasMore = nextOffset < declaredTotal;
 
         return new TriggerBatchResult(trigger, tenantId, data, effectiveOffset, effectiveLimit,
-                data.size(), hasMore, nextOffset, declaredTotal);
+                data.size(), hasMore, nextOffset, declaredTotal, page.restricted());
     }
 
     /**
@@ -130,6 +135,7 @@ public class DataSourceTriggerResolver implements TriggerTypeHandler {
 
         List<Map<String, Object>> aggregatedItems = new ArrayList<>();
         TriggerBatchResult lastBatch = null;
+        boolean restrictedData = false;
         int offset = 0;
 
         while (true) {
@@ -140,6 +146,7 @@ public class DataSourceTriggerResolver implements TriggerTypeHandler {
 
             TriggerBatchResult batch = resolveTriggerBatch(trigger, tenantId, offset, requestLimit, Map.of());
             lastBatch = batch;
+            restrictedData |= batch.restrictedData();
 
             if (batch.items().isEmpty()) break;
 
@@ -152,7 +159,8 @@ public class DataSourceTriggerResolver implements TriggerTypeHandler {
             if (!unlimited && aggregatedItems.size() >= maxItems) break;
         }
 
-        return buildAggregatedResult(trigger, tenantId, aggregatedItems, lastBatch, perBatchLimit, maxItems, unlimited);
+        return buildAggregatedResult(trigger, tenantId, aggregatedItems, lastBatch, perBatchLimit, maxItems, unlimited,
+                restrictedData);
     }
 
     private void validateTriggerBatchInput(Trigger trigger, String tenantId) {
@@ -167,8 +175,11 @@ public class DataSourceTriggerResolver implements TriggerTypeHandler {
         }
     }
 
-    private Map<String, Object> buildEnrichedItem(DataSourceItemDto item) {
+    private Map<String, Object> buildEnrichedItem(DataSourceItemDto item, boolean restricted) {
         Map<String, Object> enrichedItem = new HashMap<>();
+        if (restricted) {
+            enrichedItem.put(DataSensitivity.CREDENTIAL_KEY, DataSensitivity.RESTRICTED.name());
+        }
         enrichedItem.put("data", item.data());
         enrichedItem.put("priority", item.priority());
         enrichedItem.put("created_at", item.createdAt() != null ? item.createdAt().toString() : null);
@@ -179,7 +190,7 @@ public class DataSourceTriggerResolver implements TriggerTypeHandler {
 
     private TriggerBatchResult buildAggregatedResult(Trigger trigger, String tenantId,
             List<Map<String, Object>> aggregatedItems, TriggerBatchResult lastBatch,
-            int perBatchLimit, int maxItems, boolean unlimited) {
+            int perBatchLimit, int maxItems, boolean unlimited, boolean restrictedData) {
 
         if (lastBatch == null) {
             return new TriggerBatchResult(trigger, tenantId, List.of(), 0, perBatchLimit, 0, false, 0, 0);
@@ -196,6 +207,6 @@ public class DataSourceTriggerResolver implements TriggerTypeHandler {
         int nextOffsetValue = hasMore ? lastBatch.nextOffset() : aggregatedItems.size();
 
         return new TriggerBatchResult(trigger, tenantId, aggregatedItems, 0, Math.max(1, limitValue),
-                aggregatedItems.size(), hasMore, nextOffsetValue, lastBatch.realTotalCount());
+                aggregatedItems.size(), hasMore, nextOffsetValue, lastBatch.realTotalCount(), restrictedData);
     }
 }

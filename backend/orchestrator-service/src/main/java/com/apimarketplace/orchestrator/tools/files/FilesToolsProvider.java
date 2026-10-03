@@ -787,7 +787,21 @@ public class FilesToolsProvider implements ToolsProvider {
                   + e.getId() + "') to read the content"
                 : "files(action='view', file_id='" + e.getId() + "') to read the content or get the file's url");
 
-        return ToolExecutionResult.success(ToolResultSizeCap.capLargeStrings(out));
+        return ToolExecutionResult.success(ToolResultSizeCap.capLargeStrings(out), sensitivityMetadata(e));
+    }
+
+    /**
+     * LC-004: a file tagged RESTRICTED (a Gmail attachment, a Drive download, a step output of a
+     * run that read them) carries the tag in the tool-result metadata, so the agent loop and the
+     * CLI bridge withhold it from any provider outside the restricted-data allow-list.
+     */
+    static Map<String, Object> sensitivityMetadata(StorageEntity e) {
+        Map<String, Object> metadata = new HashMap<>();
+        if (e != null && "RESTRICTED".equals(e.getDataSensitivity())) {
+            metadata.put(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY,
+                com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+        }
+        return metadata;
     }
 
     // ==================== view (content + offset expand) ====================
@@ -863,7 +877,7 @@ public class FilesToolsProvider implements ToolsProvider {
         // METADATA, never in the agent-visible text above (that would blow up the context and
         // be size-capped). The in-process metadata sinks strip it (see ToolMediaMetadata) so it
         // never bloats the chat stream or observability rows.
-        Map<String, Object> metadata = new HashMap<>();
+        Map<String, Object> metadata = sensitivityMetadata(e);
         attachImageMediaIfEligible(e, mime, tenantId, metadata, out);
 
         return ToolExecutionResult.success(ToolResultSizeCap.capLargeStrings(out), metadata);

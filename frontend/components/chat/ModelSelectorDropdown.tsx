@@ -36,6 +36,7 @@ import { PROVIDER_ICON_MAP, getProviderDisplayName } from '@/lib/ai-providers/pr
 import { SelectedModel, modelMatches, selectedModelFromAIModel, AIModel } from '@/hooks/useModels';
 import { ModelOptionDisplay, ModelInfoPopover } from '@/components/ai/ModelInfo';
 import { useModelCostBasis } from '@/lib/hooks/useModelCostBasis';
+import { freeTierFirst } from '@/lib/models/freeTierModel';
 import { REASONING_EFFORT_LEVELS, supportsReasoningEffort } from '@/lib/ai-providers/reasoningEffort';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SELECT_EMPTY_VALUE_SENTINEL } from '@/components/ui/select';
 import { ServiceLogo } from '@/components/ui/service-logo';
@@ -212,16 +213,13 @@ export function ModelSelectorDropdown({
   // answer once per catalogue entry.
   const { basis: costBasis } = useModelCostBasis();
 
-  // Free-tier models lead for an account on the Free plan. A STABLE partition, so the admin's catalogue order survives
-  // inside each half. Driven by a PROP, not a hook: this component is
+  // Free-tier models lead for an account on the Free plan, in the free tier's own
+  // ranking; the rest keeps the admin's catalogue order. Driven by a PROP, not a hook: this component is
   // translation-free and data-hook-free by design (see the file header), and the
   // panels render it without a query client.
   const orderedModels = React.useMemo(() => {
     if (!prefersFreeTierModels) return availableModels;
-    return [
-      ...availableModels.filter((m) => m.freeTierEnabled === true),
-      ...availableModels.filter((m) => m.freeTierEnabled !== true),
-    ];
+    return freeTierFirst(availableModels);
   }, [availableModels, prefersFreeTierModels]);
 
   // The notice under the list must agree with the rows above it. Left on the

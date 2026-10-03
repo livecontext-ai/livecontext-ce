@@ -1,11 +1,13 @@
 package com.apimarketplace.orchestrator.tools.websearch;
 
+import com.apimarketplace.agent.config.ToolAccessControl;
 import com.apimarketplace.agent.domain.ToolParameter;
 import com.apimarketplace.agent.registry.AgentToolDefinition;
 import com.apimarketplace.agent.registry.ToolCategory;
 import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider;
 import com.apimarketplace.agent.tools.common.ToolResultPersistEnricher;
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.interfaces.client.InterfaceClient;
 import com.apimarketplace.interfaces.client.dto.AgentBrowseInterfaceRequest;
 import com.apimarketplace.interfaces.client.dto.InterfaceDto;
@@ -121,6 +123,31 @@ public class WebSearchToolsProvider implements ToolsProvider {
                 "action is required. Valid actions: " + String.join(", ", VALID_ACTIONS));
         }
 
+        // The two documentation actions reach nothing and cost nothing, so they stay
+        // callable in every mode - an agent that cannot read the contract cannot use the
+        // tool correctly, and denying help teaches it nothing about why.
+        boolean isDocumentationAction = "help".equals(action) || "help_models".equals(action);
+        if (!isDocumentationAction) {
+            // LC-029 (1/2): honour the agent's own read/write mode. This tool never asked
+            // the shared gate, so a read-only agent could still drive a browser session.
+            // ONLY 'search' is classified READ (its destination is the platform's own search
+            // backend). 'fetch' is WRITE alongside agent_browse and the browse_* controls:
+            // fetch issues a request to a URL the model produced, so it is an egress channel
+            // for whatever the agent has read, not a read. All four are refused when
+            // web_search is configured read-only. See ToolAccessControl.READ_ACTIONS.
+            var accessDenied = ToolAccessControl.checkWriteAccess(
+                    context != null ? context.credentials() : null, "web_search", action);
+            if (accessDenied.isPresent()) {
+                return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get());
+            }
+
+            // LC-029 (2/2): destination allow-list for executions carrying restricted-scope data.
+            String egressDenial = checkRestrictedScopeEgress(action, parameters, context);
+            if (egressDenial != null) {
+                return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, egressDenial);
+            }
+        }
+
         try {
             ToolExecutionResult result;
 
@@ -168,6 +195,251 @@ public class WebSearchToolsProvider implements ToolsProvider {
 
     private static String tenantId(ToolExecutionContext context) {
         return context != null ? context.tenantId() : null;
+    }
+
+    // ── LC-029 restricted-scope egress allow-list ─────────────────────
+    //
+    // The gate above (ToolAuthorizationPolicy + ToolAccessControl) asks a human and
+    // honours the agent's mode. This second control bounds WHERE the request may go
+    // when the execution carries restricted-scope content (Google Workspace restricted
+    // scopes such as gmail.readonly), because an approved fetch to an attacker's host is
+    // still an exfiltration. The SSRF filter does not cover this: it blocks internal
+    // targets, and an attacker's host is perfectly external.
+    //
+    // The classification itself is NOT redefined here: it comes from the platform-wide
+    // RestrictedDataPolicy / DataSensitivity (common-lib, LC-066), the same pair StorageEntity
+    // stores and the retention policy reads, so the vocabulary cannot drift between sinks.
+    //
+    // TWO sources of evidence feed the gate, and they carry DIFFERENT weight:
+    //
+    //  1. STRONG - the execution itself is tagged restricted on its credentials, under a
+    //     plain key plus its "__key__" namespaced form (the convention ToolAccessControl
+    //     already uses for access modes). That is a statement about THIS execution, so it
+    //     is enforced fail-closed: with no destination configured, nothing may leave.
+    //     The namespaced form is com.apimarketplace.common.classification.DataSensitivity
+    //     .CREDENTIAL_KEY ("__dataSensitivity__"), the same literal AgentNode writes into
+    //     an execution's credentials when it treats a run as restricted-scope, so the one
+    //     producer arms both this gate and RestrictedScopeTenantDetector's evidence below.
+    //
+    //  2. INFERRED - one of the TENANT's credentials was granted a restricted Google scope
+    //     (RestrictedScopeTenantDetector, reading the granted scopes against
+    //     RestrictedDataPolicy.RESTRICTED_GOOGLE_SCOPES). Enforced fail-closed by default
+    //     (mode=strict): agent_browse is refused, and fetch is refused unless
+    //     websearch.egress.restricted-allowed-hosts lists destinations, in which case it is
+    //     bounded to them. An operator can relax the empty-list case with
+    //     websearch.egress.restricted-scope-mode=bound.
+    //
+    // Residual channels, accepted and documented in the agent help: the SEARCH query itself
+    // reaches the platform's search backend (and through it the public engines), so text an
+    // agent puts in a query leaves the platform; and fetch runs in a real browser, so the
+    // allow-list bounds the URL the agent chooses, not every redirect or sub-resource an
+    // allowed page triggers. Operators should only list hosts they trust not to redirect.
+    static final String SENSITIVITY_CREDENTIAL_KEY = "dataSensitivity";
+
+    /**
+     * Supplies evidence 2 above. Field-injected and optional so a unit-constructed provider
+     * (and any context without a credential client) simply has no tenant-level evidence
+     * rather than inventing a denial.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    RestrictedScopeTenantDetector restrictedScopeTenantDetector;
+
+    /**
+     * Host suffixes a restricted-scope run may reach, comma separated
+     * ({@code websearch.egress.restricted-allowed-hosts}). An entry matches the exact
+     * host or any sub-domain of it.
+     *
+     * <p>Empty is the default, and what empty MEANS depends on which evidence classified the
+     * run. On the strong evidence (the execution itself tagged) it is the fail-closed
+     * reading: an operator who has not decided where mailbox-derived content may be sent has
+     * not authorised anywhere, so fetch is refused. The inferred evidence (the tenant holds a
+     * restricted Google scope) gets the same reading by default; only an operator who sets
+     * {@code websearch.egress.restricted-scope-mode=bound} lets fetch run unbounded while the
+     * list is empty - see {@link RestrictedScopeTenantDetector.Mode}. {@code agent_browse} is refused on
+     * either evidence regardless of this list.
+     */
+    @org.springframework.beans.factory.annotation.Value("${websearch.egress.restricted-allowed-hosts:}")
+    private String restrictedAllowedHostsRaw;
+
+    /** Which of the two evidence sources classified this execution, if either. */
+    enum RestrictedEvidence {
+        /** Neither source says restricted: the call is unaffected. */
+        NONE,
+        /** The execution itself is tagged. Enforced fail-closed. */
+        TAGGED,
+        /** The tenant holds a restricted-scope credential. Enforced per the configured mode. */
+        TENANT
+    }
+
+    /**
+     * @return null when the call is allowed, otherwise the agent-facing denial message
+     */
+    String checkRestrictedScopeEgress(String action, Map<String, Object> parameters,
+                                      ToolExecutionContext context) {
+        RestrictedEvidence evidence = classifyExecution(context);
+        if (evidence == RestrictedEvidence.NONE) {
+            return null;
+        }
+        if (!"fetch".equals(action) && !"agent_browse".equals(action)) {
+            // search reaches the platform's own search backend and the browse_* controls
+            // address a session that was already authorised, so neither opens a new
+            // destination.
+            return null;
+        }
+
+        List<String> allowed = allowedHostSuffixes();
+
+        if ("agent_browse".equals(action)) {
+            // A browser session navigates on its own after the first page, so no
+            // per-parameter check can bound where it ends up. Refuse it outright for a
+            // restricted execution and point at the action that can be bounded. This is the
+            // one denial that applies on either evidence: an unbounded destination cannot be
+            // made proportionate, only refused or allowed.
+            return "This run is treated as carrying restricted-scope data, so agent_browse is "
+                    + "not available: a browser session navigates on its own and its destinations "
+                    + "cannot be bounded in advance. Use action='fetch' with an explicit url, "
+                    + "which is checked against the allowed destinations"
+                    + (allowed.isEmpty() ? "" : " (" + String.join(", ", allowed) + ")") + ".";
+        }
+
+        if (allowed.isEmpty()) {
+            if (evidence == RestrictedEvidence.TENANT && !isStrictTenantMode()) {
+                // Only when the operator explicitly chose mode=bound: inferred evidence plus
+                // no operator-stated destination lets fetch run. The default (strict) refuses.
+                return null;
+            }
+            return "This run is treated as carrying restricted-scope data and no outbound "
+                    + "destination is allowed for it, so fetch cannot run. Continue without "
+                    + "fetching, or ask the user to have an allowed destination configured for "
+                    + "restricted-scope runs.";
+        }
+
+        for (String url : collectFetchUrls(parameters)) {
+            String host = hostOf(url);
+            if (host == null) {
+                return "Cannot check '" + url + "' against the allowed destinations for a "
+                        + "restricted-scope run because it is not a parseable absolute URL. "
+                        + "Pass a full http(s) URL.";
+            }
+            if (!isHostAllowed(host, allowed)) {
+                return "Destination '" + host + "' is not allowed for a run treated as carrying "
+                        + "restricted-scope data. Allowed destinations: "
+                        + String.join(", ", allowed) + ". Fetch one of those, or continue "
+                        + "without fetching.";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Which evidence, if any, makes this execution restricted. The explicit per-execution tag
+     * wins over the tenant-level inference because it is the stronger statement and carries
+     * the stricter enforcement.
+     */
+    private RestrictedEvidence classifyExecution(ToolExecutionContext context) {
+        if (isRestrictedExecution(context)) {
+            return RestrictedEvidence.TAGGED;
+        }
+        if (isRestrictedScopeTenant(context, restrictedScopeTenantDetector)) {
+            return RestrictedEvidence.TENANT;
+        }
+        return RestrictedEvidence.NONE;
+    }
+
+    private boolean isStrictTenantMode() {
+        return restrictedScopeTenantDetector != null
+                && restrictedScopeTenantDetector.mode() == RestrictedScopeTenantDetector.Mode.STRICT;
+    }
+
+    /**
+     * True when the execution's TENANT holds an active restricted-scope credential.
+     *
+     * <p>Package-private and static so the CE twin ({@link CloudRelayBrowserAgentToolsProvider})
+     * asks the same question of the same component instead of re-deriving it. A null detector
+     * (unit-constructed provider, or a context with no credential client) answers false: a
+     * caller that cannot ask must not invent a denial.
+     */
+    static boolean isRestrictedScopeTenant(ToolExecutionContext context,
+                                           RestrictedScopeTenantDetector detector) {
+        if (context == null || detector == null) {
+            return false;
+        }
+        return detector.holdsRestrictedScopeCredential(context.tenantId());
+    }
+
+    /**
+     * True when this execution is tagged as carrying restricted-scope content.
+     *
+     * <p>Package-private and static so the CE twin ({@link CloudRelayBrowserAgentToolsProvider},
+     * which registers the browser-agent capability as its own top-level tool when
+     * {@code websearch.enabled=false}) reads the SAME tag from the SAME key rather than
+     * re-deriving the convention. One producer therefore arms both editions.
+     */
+    static boolean isRestrictedExecution(ToolExecutionContext context) {
+        if (context == null || context.credentials() == null) {
+            return false;
+        }
+        // Either key being RESTRICTED is enough: reading the plain key first and stopping there
+        // let a plain NORMAL mask a namespaced RESTRICTED.
+        return isRestrictedTag(context.credentials().get(SENSITIVITY_CREDENTIAL_KEY))
+                || isRestrictedTag(context.credentials().get("__" + SENSITIVITY_CREDENTIAL_KEY + "__"));
+    }
+
+    private static boolean isRestrictedTag(Object value) {
+        if (value instanceof DataSensitivity sensitivity) {
+            return sensitivity.isRestricted();
+        }
+        // DataSensitivity.parse tolerates null, blank and unknown by answering NORMAL,
+        // so a malformed tag never turns into an accidental denial.
+        return value != null && DataSensitivity.parse(String.valueOf(value)).isRestricted();
+    }
+
+    private List<String> allowedHostSuffixes() {
+        if (restrictedAllowedHostsRaw == null || restrictedAllowedHostsRaw.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(restrictedAllowedHostsRaw.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(s -> s.toLowerCase(java.util.Locale.ROOT))
+                .toList();
+    }
+
+    private static List<String> collectFetchUrls(Map<String, Object> parameters) {
+        List<String> urls = new java.util.ArrayList<>();
+        if (parameters == null) {
+            return urls;
+        }
+        Object single = parameters.get("url");
+        if (single != null) {
+            urls.add(String.valueOf(single));
+        }
+        if (parameters.get("urls") instanceof List<?> batch) {
+            for (Object u : batch) {
+                if (u != null) {
+                    urls.add(String.valueOf(u));
+                }
+            }
+        }
+        return urls;
+    }
+
+    private static String hostOf(String url) {
+        try {
+            String host = java.net.URI.create(url.trim()).getHost();
+            return host == null || host.isBlank() ? null : host.toLowerCase(java.util.Locale.ROOT);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean isHostAllowed(String host, List<String> allowedSuffixes) {
+        for (String suffix : allowedSuffixes) {
+            if (host.equals(suffix) || host.endsWith("." + suffix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -540,7 +812,8 @@ public class WebSearchToolsProvider implements ToolsProvider {
         actions.put("search", Map.of(
             "summary", "Multi-engine web search (~1s). First-pass for any factual lookup.",
             "params", Map.of(
-                "query", "required - the search query",
+                "query", "required - the search query. It is sent to external search engines: "
+                    + "never put private data (mail content, personal details, secrets) in it.",
                 "max_results", "optional, default 10, cap 50",
                 "time_range", "optional - 'day' | 'week' | 'month' | 'year'"),
             "returns", "results[]: {url, title, snippet}"
@@ -552,12 +825,22 @@ public class WebSearchToolsProvider implements ToolsProvider {
             "params", Map.of(
                 "url", "string - single page (use 'urls' for batch)",
                 "urls", "array, max " + maxFetches + " - parallel fetch"),
-            "returns", "pages[]: {url, title, content (markdown)}"
+            "returns", "pages[]: {url, title, content (markdown)}",
+            "note", "Does not pause for approval. Refused (PERMISSION_DENIED) when your run is "
+                + "configured read-only for web_search. When the workspace holds restricted "
+                + "Google data (for example Gmail read access), fetch only reaches the "
+                + "destinations the operator allowed, and is refused entirely when none are "
+                + "allowed (PERMISSION_DENIED names them). See the approval_and_destinations "
+                + "concept."
         ));
 
         actions.put("agent_browse", Map.of(
             "summary", "Spawn an LLM-driven browser. ONLY when fetch cannot reach the target. "
-                + "concurrency=1 per host - a second call returns RATE_LIMITED.",
+                + "concurrency=1 per host - a second call returns RATE_LIMITED. "
+                + "Pauses for user approval in the general chat the user is watching (not when "
+                + "you run as a configured agent, in a workflow run, or as a sub-agent), and is "
+                + "unavailable (PERMISSION_DENIED) whenever the workspace can reach "
+                + "restricted-scope data such as a connected Gmail account.",
             "params", new LinkedHashMap<String, Object>() {{
                 put("task", "required - natural-language goal. Be specific.");
                 put("start_url", "optional - if omitted, the agent picks one from the task");
@@ -640,6 +923,24 @@ public class WebSearchToolsProvider implements ToolsProvider {
             + "as 'model_substituted'. Call web_search(action='help_models') only when you "
             + "specifically want to override the default - the same source the UI model "
             + "picker uses, so providers without a configured API key never appear.");
+        out.put("approval_and_destinations",
+            "agent_browse drives a browser against a host you chose, so in the general chat "
+            + "the user is watching it pauses for the user to approve the call before it runs. "
+            + "That pause does NOT happen when you run as a configured agent, inside a workflow "
+            + "run, as a scheduled task or as a sub-agent: nobody is there to approve, so the "
+            + "call proceeds and the responsibility for the destination is yours. Approve "
+            + "requests are shown to the user, not to you: expect the call to take longer, and "
+            + "do not retry it in a loop. search and fetch never pause, but fetch is refused "
+            + "when your run is configured read-only for web_search. Separately, when the "
+            + "workspace holds restricted Google data (for example Gmail read access), "
+            + "agent_browse is unavailable and fetch only reaches the destinations the operator "
+            + "allowed (none allowed means fetch is refused) - both refuse with PERMISSION_DENIED "
+            + "and the message names the allowed destinations. That applies to the whole workspace, not only to a turn that read "
+            + "a mailbox, so expect it on the first call. Treat the refusal as final: report it "
+            + "and continue without the fetch rather than trying another URL. search still "
+            + "works and is the way to answer. search queries are sent to external search "
+            + "engines, so never put private data (mail content, personal details, secrets) in "
+            + "a search query.");
         out.put("credentials",
             "You don't pass an LLM API key - the platform resolves it from "
             + "platform_credentials (DB) or env vars based on llm.provider. credentials_ref "

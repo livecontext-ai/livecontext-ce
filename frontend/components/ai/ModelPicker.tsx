@@ -8,6 +8,8 @@
  * - `AgentConfigurationPanel` (workflow agent node inspector)
  * - `ClassifyParametersForm` (workflow classify node inspector)
  * - `GuardrailParametersForm` (workflow guardrail node inspector)
+ * - `BrowserAgentParametersForm` (workflow browser agent node inspector)
+ * - `ChatConfigPanel` (compaction model)
  *
  * Centralising this widget eliminates the four near-identical copies that
  * previously drifted on casing / fallback semantics, and enforces the typed
@@ -31,8 +33,9 @@ import {
   toSelectedModel,
   ModelCapability,
   modelHasCapability,
-  modelMatches,
   isBridgeModel,
+  type AIModel,
+  type AIProvider,
 } from '@/hooks/useModels';
 import { getProviderIconSlug, getProviderDisplayName } from '@/lib/ai-providers/providerIcons';
 import { ModelOptionDisplay, ModelInfoPopover } from '@/components/ai/ModelInfo';
@@ -43,6 +46,7 @@ import { useModelCostBasis } from '@/lib/hooks/useModelCostBasis';
 import type { CostProfileId } from '@/lib/billing/model-cost-estimate';
 import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { IS_CE } from '@/lib/edition';
+import { freeTierFirst, freeTierProvidersFirst } from '@/lib/models/freeTierModel';
 import { cn } from '@/lib/utils';
 import { ServiceLogo } from '@/components/ui/service-logo';
 
@@ -96,6 +100,11 @@ export interface ModelPickerProps {
    */
   excludeBridgeProviders?: boolean;
   /**
+   * Heading of the group that lists the models an admin UNLISTED (V554), under the offered
+   * ones in each provider's model list. Caller-translated like the two labels above.
+   */
+  hiddenModelsLabel?: string;
+  /**
    * Which shape of work the credit estimate beside each model should price.
    * The surface knows what it is configuring and the caller must say so: an
    * agent that calls tools costs roughly a hundred times a classify step, so a
@@ -142,6 +151,28 @@ function mergeProviders(
   return merged;
 }
 
+/** A provider's models with the offered ones first and the UNLISTED ones (V554) after, stable. */
+function withListedFirst<P extends { models: AIModel[] }>(provider: P): P {
+  if (!provider.models.some(m => m.unlisted === true)) return provider;
+  return {
+    ...provider,
+    models: [...provider.models.filter(m => m.unlisted !== true), ...provider.models.filter(m => m.unlisted === true)],
+  };
+}
+
+/**
+ * Providers with at least one offered model first, those made only of unlisted models after,
+ * stable: a fallback that reads index 0 must never land on a model the admin stopped offering.
+ */
+function withListedProvidersFirst<P extends { models: AIModel[] }>(providers: P[]): P[] {
+  return [...providers.filter(hasOfferedModel), ...providers.filter(p => !hasOfferedModel(p))];
+}
+
+/** Does this provider still offer a model, i.e. hold one that is not unlisted? */
+function hasOfferedModel(provider: { models: AIModel[] }): boolean {
+  return provider.models.some(m => m.unlisted !== true);
+}
+
 /**
  * Two stacked {@code <Select>}s: provider first, then the models available
  * for that provider. Selection state flows through the typed
@@ -159,38 +190,35 @@ export function ModelPicker({
   excludeBridgeProviders = false,
   costProfile = 'chatConversation',
   unionCategory = null,
+  hiddenModelsLabel = 'Hidden models',
 }: ModelPickerProps) {
   const { providers: chatProviders, unlistedModels, defaultModel, defaultProvider, isLoading, error } =
     useVisibleModels();
   // A category the chat catalogue does not carry, merged in for surfaces that run more
   // than one kind of model. Null for every other picker, which then fetches nothing.
   const { data: extraCategoryModels } = useCategoryModels(unionCategory ?? null);
-  // V554: an UNLISTED model is not offered here, but an agent or a node already on one still
-  // runs on it, so the picker must SHOW it rather than display a fallback the run will not
-  // use. Only the value's own model is brought back, never the rest of the unlisted set.
-  const valueIfUnlisted = React.useMemo(() => {
-    if (!value.id) return undefined;
-    const match = (unlistedModels ?? []).find(m => modelMatches(m, value));
-    if (!match) return undefined;
-    return [{
-      name: match.provider,
-      defaultModel: match.id,
-      supportsStreaming: true,
-      supportsToolCalling: true,
-      models: [match],
-    }];
-  }, [unlistedModels, value]);
-  // The extra slice comes from the raw category catalogue, so it still carries unlisted models:
-  // dropped here like the chat slice drops them, the value's own model excepted.
-  const extraOffered = React.useMemo(
-    () => extraCategoryModels?.providers
-      ?.map(p => ({ ...p, models: p.models.filter(m => m.unlisted !== true || modelMatches(m, value)) }))
-      .filter(p => p.models.length > 0),
-    [extraCategoryModels, value],
-  );
+  // V554: UNLISTED models stay available, so an agent, a node or a chat can still be put on
+  // one: they join their provider here, and every list below keeps them LAST, under their own
+  // heading (see `withListedFirst`). The extra category slice already carries them flagged.
+  const unlistedProviders = React.useMemo(() => {
+    const byProvider = new Map<string, AIProvider>();
+    for (const m of unlistedModels ?? []) {
+      const entry = byProvider.get(m.provider);
+      if (entry) entry.models.push(m);
+      else byProvider.set(m.provider, {
+        name: m.provider,
+        defaultModel: m.id,
+        supportsStreaming: true,
+        supportsToolCalling: true,
+        displayOrder: 999,
+        models: [m],
+      });
+    }
+    return [...byProvider.values()];
+  }, [unlistedModels]);
   const providers = React.useMemo(
-    () => mergeProviders(mergeProviders(chatProviders, extraOffered), valueIfUnlisted),
-    [chatProviders, extraOffered, valueIfUnlisted],
+    () => mergeProviders(mergeProviders(chatProviders, extraCategoryModels?.providers), unlistedProviders),
+    [chatProviders, extraCategoryModels, unlistedProviders],
   );
   // Asked ONCE for the whole list: the underlying balance is about the account,
   // and a query observer per option would be a waste of the same cached answer.
@@ -212,7 +240,7 @@ export function ModelPicker({
   // provider dropdown never shows an entry that resolves to an empty model
   // dropdown).
   const filteredProviders = React.useMemo(() => {
-    return providers
+    const filtered = providers
       .map(p => ({
         ...p,
         models: p.models.filter(
@@ -222,7 +250,9 @@ export function ModelPicker({
               !isBridgeModel({ providerKind: m.providerKind, provider: m.provider ?? p.name })),
         ),
       }))
-      .filter(p => p.models.length > 0);
+      .filter(p => p.models.length > 0)
+      .map(withListedFirst);
+    return withListedProvidersFirst(filtered);
     // capabilityKey, not filterCapability: a caller passing an inline array literal
     // hands a new identity on every render, which would make this memo recompute the
     // whole list every time and defeat the point of computing it once.
@@ -232,19 +262,16 @@ export function ModelPicker({
   // On the Free plan, the models opened to the free tier are the ones the
   // account's monthly credits can actually pay for, so they lead - both the provider list and each provider's models.
   //
-  // A STABLE partition, not a re-sort: within each group the admin's global
-  // drag-and-drop ranking is preserved exactly. The admin still decides the
-  // order; this only decides which half a reader meets first.
+  // Both levels follow the free tier's own ranking: the covered models of a provider
+  // (`freeTierFirst`) and the providers that offer one (`freeTierProvidersFirst`). The
+  // rest is a STABLE partition that keeps the admin's global drag-and-drop order.
   const orderedProviders = React.useMemo(() => {
     if (!prefersFreeTierModels) return filteredProviders;
-    const freeFirst = <T,>(items: T[], isFree: (item: T) => boolean): T[] => [
-      ...items.filter(isFree),
-      ...items.filter(i => !isFree(i)),
-    ];
-    return freeFirst(
-      filteredProviders.map(p => ({ ...p, models: freeFirst(p.models, m => m.freeTierEnabled === true) })),
-      p => p.models.some(m => m.freeTierEnabled === true),
-    );
+    // Re-partitioned after the free-first pass: a free-tier model the admin unlisted still
+    // belongs in the hidden group, not at the top.
+    return withListedProvidersFirst(freeTierProvidersFirst(
+      filteredProviders.map(p => withListedFirst({ ...p, models: freeTierFirst(p.models) })),
+    ));
   }, [filteredProviders, prefersFreeTierModels]);
 
   // Resolve the current provider record with a cascading fallback:
@@ -263,7 +290,9 @@ export function ModelPicker({
     // default: a node inspector showing a model the run will not use. The surfaces
     // that steer the opening selection do it where it is real, by writing the value
     // (usePreferFreeTierModel for chat, the panels' own effectiveDefault effect).
-    if (defaultProvider && orderedProviders.some(p => p.name === defaultProvider)) {
+    // Only while it still OFFERS a model here: once the capability / bridge filters leave it
+    // nothing but unlisted models (V554), following it would display a hidden model nobody chose.
+    if (defaultProvider && orderedProviders.some(p => p.name === defaultProvider && hasOfferedModel(p))) {
       return defaultProvider;
     }
     // filteredProviders, NOT orderedProviders: the free-tier partition changes which
@@ -289,7 +318,8 @@ export function ModelPicker({
     // back to the first filtered model so the trigger never displays an
     // option the dropdown does not offer.
     const providerDefault = currentProviderData?.defaultModel;
-    if (providerDefault && availableModels.some(m => m.id === providerDefault)) {
+    // Never an unlisted model (V554): this branch DISPLAYS a value the caller did not choose.
+    if (providerDefault && availableModels.some(m => m.id === providerDefault && m.unlisted !== true)) {
       return providerDefault;
     }
     // Same reason as the provider above: fall back on the CATALOGUE order, so the
@@ -306,6 +336,7 @@ export function ModelPicker({
     // provider.defaultModel since it may target a chat model the filter
     // would have excluded (e.g. defaultModel='gemini-2.5-flash' for a
     // google entry where filterCapability='image' wants gemini-2.5-flash-image).
+    // models are listed-first, so this is never an unlisted model while a listed one exists.
     const nextId = provider?.models?.[0]?.id ?? '';
     onChange(toSelectedModel({ provider: providerName, id: nextId }));
   };
@@ -361,8 +392,21 @@ export function ModelPicker({
               AttachmentHandler) - the default SelectContent z-[10001] would paint the
               list BEHIND that host. z-[100000] matches ChatConfigPanel's convention. */}
           <SelectContent className="z-[100000]">
-            {orderedProviders.map(provider => (
-              <SelectItem key={provider.name} value={provider.name}>
+            {orderedProviders.map((provider, index) => (
+              <React.Fragment key={provider.name}>
+              {/* Providers made only of unlisted models come last, under the same heading as
+                  the hidden models: picking one stores a hidden model in a single click, so
+                  it must say so before the click. */}
+              {!hasOfferedModel(provider) && (index === 0 || hasOfferedModel(orderedProviders[index - 1])) && (
+                <div
+                  role="presentation"
+                  data-testid="model-picker-hidden-providers"
+                  className={cn('px-2 pb-1 pt-2 text-xs text-theme-secondary', index > 0 && 'mt-1 border-t border-theme')}
+                >
+                  {hiddenModelsLabel}
+                </div>
+              )}
+              <SelectItem value={provider.name}>
                 <div className="flex items-center gap-2">
                   <ServiceLogo as={Image}
                     src={`/icons/services/${getProviderIconSlug(provider.name)}.svg`}
@@ -374,6 +418,7 @@ export function ModelPicker({
                   <span>{getProviderDisplayName(provider.name)}</span>
                 </div>
               </SelectItem>
+              </React.Fragment>
             ))}
           </SelectContent>
         </Select>
@@ -432,13 +477,26 @@ export function ModelPicker({
             </div>
           </SelectTrigger>
           <SelectContent className="z-[100000]">
-            {availableModels.map(model => {
+            {availableModels.map((model, index) => {
               // Asked once per row, as the composer menu does: the same answer is
               // needed by the dimming, the lock and the chip.
               const blocked = blockedForModel(model);
               const free = freeTierForModel(model);
+              // The hidden group starts at the first unlisted model (they are always last).
+              const startsHiddenGroup = model.unlisted === true
+                && (index === 0 || availableModels[index - 1].unlisted !== true);
               return (
-              <SelectItem key={model.id} value={model.id}>
+              <React.Fragment key={model.id}>
+              {startsHiddenGroup && (
+                <div
+                  role="presentation"
+                  data-testid="model-picker-hidden-group"
+                  className={cn('px-2 pb-1 pt-2 text-xs text-theme-secondary', index > 0 && 'mt-1 border-t border-theme')}
+                >
+                  {hiddenModelsLabel}
+                </div>
+              )}
+              <SelectItem value={model.id}>
                 <div
                   className="flex items-center gap-2 min-w-0 w-full"
                   data-testid={blocked ? 'model-row-blocked' : undefined}
@@ -468,6 +526,7 @@ export function ModelPicker({
                   />
                 </div>
               </SelectItem>
+              </React.Fragment>
               );
             })}
           </SelectContent>

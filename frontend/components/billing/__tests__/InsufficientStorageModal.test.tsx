@@ -42,9 +42,10 @@ vi.mock('@/lib/hooks/smart-hooks-complete', () => ({
   useSubscription: () => ({ createSubscription: mocks.createSubscription }),
   usePlans: () => ({ plans: mocks.plans.value }),
 }));
+const storageOfferRefresh = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/hooks/usePersonalOffer', () => ({
   usePersonalOffer: () => ({ current: { status: 'NONE' }, preview: null, candidateCode: null,
-    isLoading: false, isError: false, refresh: vi.fn() }),
+    isLoading: false, isError: false, refresh: storageOfferRefresh }),
 }));
 
 vi.mock('@/lib/api/storage-api', () => ({
@@ -90,6 +91,20 @@ describe('InsufficientStorageModal', () => {
     const text = dialogText();
     expect(text).toContain('modals.insufficientStorage.features.freeStorage');
     expect(text).toContain('modals.insufficientStorage.features.freeCredits');
+  });
+
+  it('a checkout already in progress is said in words and the offer is read again', async () => {
+    const { ApiError } = await import('@/lib/api/api-client');
+    mocks.createSubscription.mockRejectedValue(new ApiError('busy', 409, 'CHECKOUT_IN_PROGRESS'));
+    storageOfferRefresh.mockReset();
+    render(<InsufficientStorageModal />);
+    openViaEvent();
+
+    const upgrade = screen.getAllByRole('button', { name: /modals.insufficientStorage.upgrade/ })[0];
+    await act(async () => { upgrade.click(); });
+
+    expect((await screen.findByRole('alert')).textContent).toContain('reward.personalOffer.errors.checkoutActive');
+    expect(storageOfferRefresh).toHaveBeenCalled();
   });
 
   it('regression: names no separate AI credits line, even if a plan row still carries one', () => {

@@ -7,6 +7,7 @@ import com.apimarketplace.orchestrator.domain.workflow.Trigger;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowExecution;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
+import com.apimarketplace.orchestrator.services.persistence.StepPayloadService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
@@ -54,16 +55,19 @@ public class WorkflowTriggerDispatchService {
     private final WorkflowRunRepository runRepository;
     private final ReusableTriggerService triggerService;
     private final ProductionRunResolver productionRunResolver;
+    private final StepPayloadService stepPayloadService;
 
     public WorkflowTriggerDispatchService(
             WorkflowTriggerLookupService triggerLookupService,
             WorkflowRunRepository runRepository,
             ReusableTriggerService triggerService,
-            ProductionRunResolver productionRunResolver) {
+            ProductionRunResolver productionRunResolver,
+            StepPayloadService stepPayloadService) {
         this.triggerLookupService = triggerLookupService;
         this.runRepository = runRepository;
         this.triggerService = triggerService;
         this.productionRunResolver = productionRunResolver;
+        this.stepPayloadService = stepPayloadService;
     }
 
     /**
@@ -243,6 +247,12 @@ public class WorkflowTriggerDispatchService {
         // Parent's cycle result may include node outputs containing arbitrary
         // user-defined keys - strip the internal plan-control marker.
         enrichedPayload = ReusableTriggerService.sanitizePlanMarker(enrichedPayload);
+        // LC-066: the parent's step outputs ARE this fire's payload, so a parent run holding
+        // Gmail / Drive data makes the downstream run restricted too - the same taint a
+        // restricted parent gives a sub-workflow.
+        if (stepPayloadService != null && stepPayloadService.isRunRestricted(parentRunId)) {
+            enrichedPayload = ReusableTriggerService.withRestrictedDataMarker(enrichedPayload);
+        }
 
         // Execute the trigger via ReusableTriggerService
         try {

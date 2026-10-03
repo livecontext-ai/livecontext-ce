@@ -446,6 +446,47 @@ public class InternalCredentialService {
     }
 
     /**
+     * A usable OAuth2 access token for a concrete credential id: the stored one while it is
+     * valid for at least another minute, otherwise a provider refresh. OAuth2 rows only, so an
+     * API key is never handed out. Unlike {@link #forceRefreshAndGetTokenById} it does not hit the
+     * provider on every call (the Picker asks on every open).
+     */
+    public Optional<String> getOrRefreshOAuth2AccessTokenById(String userId, Long credentialId, String organizationId) {
+        if (userId == null || credentialId == null) return Optional.empty();
+        Credential cred = findActiveCredentialById(userId, credentialId, organizationId);
+        if (cred == null || cred.type() != com.apimarketplace.auth.credential.domain.CredentialModels.CredentialType.OAuth2 || cred.credentialData() == null) {
+            return Optional.empty();
+        }
+        Object expiresAt = cred.credentialData().get("expires_at");
+        if (expiresAt instanceof String exp && !exp.isBlank()) {
+            try {
+                if (java.time.Instant.parse(exp).isAfter(java.time.Instant.now().plusSeconds(60))) {
+                    String stored = getDecryptedField(cred.credentialData(), "access_token");
+                    if (stored != null && !stored.isBlank()) {
+                        markUsed(cred);
+                        return Optional.of(stored);
+                    }
+                }
+            } catch (java.time.format.DateTimeParseException malformed) {
+                // Unknown expiry: refresh below.
+            }
+        }
+        return forceRefreshAndGetTokenById(userId, credentialId, organizationId);
+    }
+
+    /**
+     * The active credential the by-name paths ({@link #refreshAccessToken},
+     * {@link #getCredentialDataMap}) would use for {@code credentialName}, with the same
+     * resolution rules. Lets a caller inspect the ROW (its integration) before minting anything
+     * from it, then mint from that exact row by id (LC-028).
+     */
+    public Optional<Credential> findActiveCredential(String userId, String credentialName, String organizationId) {
+        if (userId == null || userId.isBlank() || credentialName == null) return Optional.empty();
+        String integrationName = credentialName.replaceAll("-credential$", "");
+        return Optional.ofNullable(findCredential(userId, credentialName, integrationName, organizationId));
+    }
+
+    /**
      * Get platform credential access token for an integration, tenant-aware.
      * Checks api_key first, then clientId/clientSecret for OAuth2 flows.
      */

@@ -4,6 +4,8 @@ import com.apimarketplace.conversation.dto.AttachmentUploadResponse;
 import com.apimarketplace.conversation.service.AttachmentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import com.apimarketplace.common.web.ContentDispositions;
+import com.apimarketplace.common.web.SafeFileServeHeaders;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -88,9 +90,12 @@ public class AttachmentController {
             var data = attachmentData.get();
             String mimeType = data.mimeType() != null ? data.mimeType() : "application/octet-stream";
 
-            // Return with proper content type and cache headers
-            return ResponseEntity.ok()
+            // Uploader-declared type: active types (html, xml, js, unknown) download instead of
+            // rendering on the app origin; nosniff + sandboxed CSP on every response (LC-020).
+            return SafeFileServeHeaders.applyTo(ResponseEntity.ok(), mimeType)
                 .header(HttpHeaders.CONTENT_TYPE, mimeType)
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDispositions.of(
+                        SafeFileServeHeaders.dispositionType(mimeType, true), data.fileName()))
                 .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
                 .body(data.data());
 

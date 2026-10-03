@@ -503,7 +503,7 @@ public class ChatDispatchService {
                     // Storage wraps actual output inside "output" key
                     String responseMessage = extractResponseMessage(data);
                     if (responseMessage != null) {
-                        logger.info("Response from workflow: {}", responseMessage);
+                        logger.info("Response from workflow: {}", com.apimarketplace.common.logging.PayloadLogSafety.describeAny(responseMessage));
                         return Map.of("status", "ok", "content", responseMessage);
                     }
                 }

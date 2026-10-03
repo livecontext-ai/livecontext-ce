@@ -56,6 +56,9 @@ class AgentRemoteExecutionServiceTest {
 
     @BeforeEach
     void setUp() {
+        // A bridge run resolves its budget server-side (LC-056); none by default here.
+        org.mockito.Mockito.lenient().when(guardChainFactory.bridgeBudget(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(new com.apimarketplace.agent.service.budget.GuardChainFactory.BridgeBudget(null, null, null));
         service = new AgentRemoteExecutionService(
             agentLoopService,
             new ObjectMapper(),
@@ -403,6 +406,9 @@ class AgentRemoteExecutionServiceTest {
         assertThat(dispatched.getValue().reasoningEffort()).isEqualTo("high");
         // The direct-API agent loop was never used (the link forced the bridge).
         verify(agentLoopService, never()).execute(any(), any(StreamingCallback.class));
+        // LC-056: the balance the bridge enforces is the one of the BILLED model, not the CLI's.
+        verify(guardChainFactory).bridgeBudget(any(), any(),
+            org.mockito.ArgumentMatchers.eq("anthropic"), org.mockito.ArgumentMatchers.eq("claude-opus-4-8"));
         // BILLING-CRITICAL: the response carries the BILLED identity, not the bridge's, so the
         // orchestrator's observability/credit consumption charge the Anthropic price, not codex.
         assertThat(response.provider()).isEqualTo("anthropic");
@@ -729,6 +735,35 @@ class AgentRemoteExecutionServiceTest {
             .execute(any(AgentLoopContext.class), any(StreamingCallback.class));
         assertThat(response.success()).isFalse();
         assertThat(response.stopReason()).isEqualTo(AgentStopReason.STOPPED_BY_USER.name());
+    }
+
+    @Test
+    @DisplayName("a linked run the BRIDGE stopped for budget is retried on the billed pair: the bridge priced the CLI model, the billed pair's guards decide")
+    void linkedRunStoppedForBudgetByTheBridgeFallsBack() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("codex", "gpt-5.3-codex")));
+        wireExecutionLinks(linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
+        // The bridge's own budget guard ended the run before anything was shown.
+        when(bridgeDispatcher.dispatchRaw(any(), any(), anyBoolean()))
+            .thenReturn(new AgentExecutionResponseDto(
+                false, null, null, List.of(), 0, Map.of(),
+                "Insufficient credits", 300, "codex", "gpt-5.3-codex", List.of(),
+                AgentStopReason.BUDGET_EXHAUSTED.name(), Map.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), "tenant"));
+        ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
+        when(agentLoopService.execute(ctx.capture(), any(StreamingCallback.class))).thenReturn(successfulLoopResult());
+
+        service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
+
+        // Not the platform's own refusal (which returns before any dispatch): a false stop by
+        // the bridge's CLI pricing must not refuse a run the billed pair can pay for.
+        verify(agentLoopService).execute(any(AgentLoopContext.class), any(StreamingCallback.class));
+        assertThat(ctx.getValue().provider()).isEqualTo("deepseek");
     }
 
     @Test
@@ -1340,6 +1375,52 @@ class AgentRemoteExecutionServiceTest {
 
         assertThat(ctx.getValue().credentials())
                 .doesNotContainKey(com.apimarketplace.agent.config.AgentModuleResolver.ENABLED_MODULES_CREDENTIAL_KEY);
+    }
+
+    // ==================== LC-004 restricted-data gate ====================
+
+    @Test
+    @DisplayName("LC-004: an execution tagged restricted is refused for a provider outside the allow-list, before any loop runs")
+    void restrictedExecutionRefusedForDisallowedProvider() {
+        AgentExecutionResponseDto response = service.executeAgent(request(Map.of(
+                com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "RESTRICTED"),
+                UUID.randomUUID().toString()), "USER");
+
+        assertThat(response.success()).isFalse();
+        assertThat(response.error()).contains("deepseek").contains("Gmail");
+        verify(agentLoopService, never()).execute(any(), any(StreamingCallback.class));
+        verify(bridgeDispatcher, never()).dispatchRaw(any(), any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("LC-004: a restricted execution billed on an allowed provider ignores an execution link to an aggregator")
+    void restrictedExecutionIgnoresLinkToDisallowedProvider() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("anthropic"),
+                org.mockito.ArgumentMatchers.eq("claude-opus-4-8"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute(
+                    "openrouter", "anthropic/claude-3.5-sonnet")));
+        wireExecutionLinks(linkService);
+        ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
+        when(agentLoopService.execute(ctx.capture(), any(StreamingCallback.class))).thenReturn(successfulLoopResult());
+
+        AgentExecutionRequestDto dto = request(Map.of(
+                com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "RESTRICTED"),
+                UUID.randomUUID().toString(), "CHAT").withExecutionTarget("anthropic", "claude-opus-4-8");
+        service.executeAgent(dto, "USER");
+
+        assertThat(ctx.getValue().provider()).isEqualTo("anthropic");
+    }
+
+    @Test
+    @DisplayName("LC-004: an untagged execution is not affected by the gate")
+    void untaggedExecutionUnaffected() {
+        when(agentLoopService.execute(any(), any(StreamingCallback.class))).thenReturn(successfulLoopResult());
+
+        AgentExecutionResponseDto response = service.executeAgent(request(Map.of(), UUID.randomUUID().toString()), "USER");
+
+        assertThat(response.success()).isTrue();
     }
 
     private AgentExecutionRequestDto request(Map<String, Object> credentials, String executionId) {

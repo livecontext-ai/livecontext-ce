@@ -26,13 +26,30 @@ public class DatasourceEventDispatchRequest {
     private Map<String, Object> row;
     private Map<String, Object> previousRow;
     private Instant triggeredAt;
+    /**
+     * {@code "RESTRICTED"} or {@code "NORMAL"} (see {@code common-lib DataSensitivity}). LC-066
+     * re-audit item 1: the row(s) behind this event's own stored classification, carried from
+     * datasource-service through trigger-service's fan-out so orchestrator's
+     * {@code DatasourceTriggerDispatchService} can mark the run a table trigger fires restricted.
+     * Null on a legacy caller - treated as NORMAL by {@code DataSensitivity.parse}.
+     */
+    private String dataSensitivity;
 
     public DatasourceEventDispatchRequest() {}
 
+    /** Legacy 8-arg constructor - {@code dataSensitivity} defaults to null (parsed as NORMAL). */
     public DatasourceEventDispatchRequest(EventType eventType, Long dataSourceId, Long rowId,
                                           String tenantId, String organizationId,
                                           Map<String, Object> row,
                                           Map<String, Object> previousRow, Instant triggeredAt) {
+        this(eventType, dataSourceId, rowId, tenantId, organizationId, row, previousRow, triggeredAt, null);
+    }
+
+    public DatasourceEventDispatchRequest(EventType eventType, Long dataSourceId, Long rowId,
+                                          String tenantId, String organizationId,
+                                          Map<String, Object> row,
+                                          Map<String, Object> previousRow, Instant triggeredAt,
+                                          String dataSensitivity) {
         this.eventType = eventType;
         this.dataSourceId = dataSourceId;
         this.rowId = rowId;
@@ -41,6 +58,7 @@ public class DatasourceEventDispatchRequest {
         this.row = row;
         this.previousRow = previousRow;
         this.triggeredAt = triggeredAt;
+        this.dataSensitivity = dataSensitivity;
     }
 
     public EventType getEventType() { return eventType; }
@@ -59,4 +77,6 @@ public class DatasourceEventDispatchRequest {
     public void setPreviousRow(Map<String, Object> previousRow) { this.previousRow = previousRow; }
     public Instant getTriggeredAt() { return triggeredAt; }
     public void setTriggeredAt(Instant triggeredAt) { this.triggeredAt = triggeredAt; }
+    public String getDataSensitivity() { return dataSensitivity; }
+    public void setDataSensitivity(String dataSensitivity) { this.dataSensitivity = dataSensitivity; }
 }

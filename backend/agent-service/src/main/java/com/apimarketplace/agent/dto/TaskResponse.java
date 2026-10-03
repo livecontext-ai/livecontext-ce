@@ -61,7 +61,13 @@ public record TaskResponse(
          * Populated by the enrichment layer so the UI never has to fall back to
          * the viewer's own (Keycloak real) name. {@code null}/empty when un-enriched.
          */
-        Map<String, UserRef> users) {
+        Map<String, UserRef> users,
+        /**
+         * CASA LC-066: the task holds content from a restricted execution (Gmail / Google Drive),
+         * so a tool result carrying it must be tagged restricted. Not serialized: it only steers the
+         * tool result metadata.
+         */
+        @com.fasterxml.jackson.annotation.JsonIgnore boolean holdsRestrictedData) {
 
     /** A user's public display identity. Never the raw Keycloak real name - always the chosen displayName. */
     public record UserRef(String displayName, String avatarUrl) {}
@@ -112,7 +118,8 @@ public record TaskResponse(
                 t.getChecklist(),
                 t.getAttachments(),
                 noteViews,
-                Map.of());
+                Map.of(),
+                t.holdsRestrictedData());
     }
 
     public static TaskResponse from(AgentTaskEntity t) {
@@ -133,6 +140,6 @@ public record TaskResponse(
                 maxReviewAttempts, reviewAttemptCount, assigneeExecutionId, reviewerExecutionId,
                 deletedAt, previousStatus, boardRank, labelIds, estimateMinutes, timeSpentMinutes, blockedByIds,
                 checklist, attachments,
-                notes, resolved == null ? Map.of() : resolved);
+                notes, resolved == null ? Map.of() : resolved, holdsRestrictedData);
     }
 }

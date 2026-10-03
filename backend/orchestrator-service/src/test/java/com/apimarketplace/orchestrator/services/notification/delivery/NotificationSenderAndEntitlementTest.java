@@ -206,6 +206,9 @@ class NotificationSenderAndEntitlementTest {
 
             assertThat(entitlement.allows("42", NotificationTopic.FAILURES)).isFalse();
             assertThat(entitlement.allows("42", NotificationTopic.CREDITS)).isTrue();
+            // Hearing about a creator one follows is not an operational alert to upsell.
+            assertThat(entitlement.allows("42", NotificationTopic.FOLLOWING)).isTrue();
+            assertThat(entitlement.allows("42", NotificationTopic.AUDIENCE)).isTrue();
             assertThat(entitlement.requiredPlan("42")).isEqualTo("STARTER");
         }
 

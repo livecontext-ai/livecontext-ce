@@ -74,6 +74,150 @@ public class CredentialService {
     }
 
     /**
+     * Provider-side revocation run before every delete (LC-065) and the lifecycle audit trail
+     * (LC-058). Optional field injection so hand-built instances in tests keep compiling; a
+     * missing collaborator means "not attempted", never a failed delete.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private OAuth2RevocationService revocationService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CredentialAuditRecorder auditRecorder;
+
+    /** Test seam. */
+    void setLifecycleCollaborators(OAuth2RevocationService revocationService,
+                                   CredentialAuditRecorder auditRecorder) {
+        this.revocationService = revocationService;
+        this.auditRecorder = auditRecorder;
+    }
+
+    /**
+     * Account purge (LC-065): snapshot every credential the tenant OWNS now, inside the purge
+     * transaction, and revoke them at their providers only AFTER that transaction commits. A
+     * provider round trip never holds the purge's row locks, and a purge that rolls back revokes
+     * nothing. Outside a transaction (tests, ad-hoc callers) the revocation runs immediately.
+     *
+     * @return number of credentials scheduled for revocation
+     */
+    public int revokeAllForAccountPurge(String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) {
+            return 0;
+        }
+        List<Credential> owned = credentialRepository.findAllByTenantId(tenantId);
+        revokeAfterCommit(owned, tenantId, "account_purge");
+        return owned.size();
+    }
+
+    /** Workspace purge counterpart of {@link #revokeAllForAccountPurge}, paged. */
+    public int revokeAllForWorkspacePurge(String organizationId, String actingUserId) {
+        if (organizationId == null || organizationId.isBlank()) {
+            return 0;
+        }
+        List<Credential> all = new java.util.ArrayList<>();
+        final int pageSize = 500;
+        for (int page = 1; ; page++) {
+            List<Credential> batch = credentialRepository.findByOrganizationIdStrict(organizationId, page, pageSize);
+            all.addAll(batch);
+            if (batch.size() < pageSize) {
+                break;
+            }
+        }
+        revokeAfterCommit(all, actingUserId, "workspace_purge");
+        return all.size();
+    }
+
+    private void revokeAfterCommit(List<Credential> batch, String actingUserId, String reason) {
+        if (batch.isEmpty()) {
+            return;
+        }
+        List<Credential> snapshot = List.copyOf(batch);
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            revokeBatch(snapshot, actingUserId, reason);
+                        }
+                    });
+        } else {
+            revokeBatch(snapshot, actingUserId, reason);
+        }
+    }
+
+    /**
+     * Revoke a set of credentials that all go away together. The sibling-grant check for each one
+     * sees the tenant's OTHER credentials plus the members of the batch not processed yet, so
+     * when several credentials share one grant only the last of them revokes it.
+     */
+    void revokeBatch(List<Credential> batch, String actingUserId, String reason) {
+        Set<Long> goingAway = new HashSet<>();
+        batch.forEach(c -> goingAway.add(c.id()));
+        for (int i = 0; i < batch.size(); i++) {
+            Credential c = batch.get(i);
+            List<Credential> laterInBatch = batch.subList(i + 1, batch.size());
+            revokeAndAuditRemoval(c, actingUserId, reason, goingAway, laterInBatch);
+        }
+    }
+
+    /** Single removal: every other credential of the owner is a potential grant sibling. */
+    private String revokeAndAuditRemoval(Credential credential, String actingUserId, String reason) {
+        return revokeAndAuditRemoval(credential, actingUserId, reason, Set.of(credential.id()), List.of());
+    }
+
+    private static String oauthClientIdOf(Credential credential) {
+        Map<String, Object> data = credential.credentialData();
+        if (data == null) {
+            return null;
+        }
+        String clientId = stringOrNull(data.get("oauth_client_id"));
+        return clientId != null ? clientId : stringOrNull(data.get("client_id"));
+    }
+
+    private static String stringOrNull(Object value) {
+        return value instanceof String s && !s.isBlank() ? s : null;
+    }
+
+    /**
+     * Tell the provider the grant is over (unless a surviving credential still uses it), then
+     * record the removal. Never throws: a provider outage must not leave the user unable to
+     * disconnect.
+     *
+     * @return the bounded revocation outcome recorded on the delete event
+     */
+    private String revokeAndAuditRemoval(Credential credential, String actingUserId, String reason,
+                                         Set<Long> goingAway, List<Credential> laterInBatch) {
+        String outcome = "not_attempted";
+        if (revocationService != null) {
+            try {
+                // Grant siblings in ANY tenant: same OAuth client, same provider account (LC-065).
+                List<Credential> survivors = new java.util.ArrayList<>(laterInBatch);
+                String clientId = oauthClientIdOf(credential);
+                if (clientId != null) {
+                    String subject = credential.credentialData() == null ? null
+                            : stringOrNull(credential.credentialData().get(OAuth2RevocationService.SUBJECT_FIELD));
+                    for (Credential other : credentialRepository.findUsableOAuth2ByClientId(clientId, subject)) {
+                        if (!goingAway.contains(other.id())) {
+                            survivors.add(other);
+                        }
+                    }
+                }
+                outcome = revocationService.revoke(credential, survivors).tag();
+            } catch (RuntimeException lookupFailed) {
+                // Without the sibling list we cannot tell whether revoking would break another
+                // live credential of the same grant: do not revoke, record why.
+                log.warn("Provider revocation skipped for credential {}: sibling lookup failed ({})",
+                        credential.id(), lookupFailed.getClass().getSimpleName());
+                outcome = "sibling_lookup_failed";
+            }
+        }
+        if (auditRecorder != null) {
+            auditRecorder.recordDeleted(actingUserId != null ? actingUserId : credential.tenantId(),
+                    credential.id(), credential.integration(), reason, outcome);
+        }
+        return outcome;
+    }
+
+    /**
      * PR19 - create a new credential with explicit org scope. The controller
      * passes {@code organizationId} from the {@code X-Organization-ID} header.
      * The first credential per integration in a given org scope becomes the
@@ -218,6 +362,7 @@ public class CredentialService {
         Credential credential = opt.get();
         boolean wasDefault = credential.isDefault();
 
+        revokeAndAuditRemoval(credential, tenantId, "user_delete");
         credentialRepository.deleteById(id);
 
         reassignDefaultAfterDelete(credential, wasDefault, organizationId);
@@ -933,6 +1078,7 @@ public class CredentialService {
                 "byok_revoke_reason", "platform_credential_deleted");
 
         int revoked = 0;
+        List<Credential> toRevokeAtProvider = new java.util.ArrayList<>();
         for (Credential dep : dependents) {
             // Defense in depth: the SQL filter already limits to active/expiring, but a
             // lost-update race (status flipped between SELECT and UPDATE) shouldn't churn
@@ -941,12 +1087,16 @@ public class CredentialService {
                     || dep.status() == CredentialStatus.needs_reauth) {
                 continue;
             }
+            // The tokens are about to be scrubbed: keep the in-memory copy (tokens and client
+            // secret included) for the after-commit provider revocation (LC-065).
+            toRevokeAtProvider.add(dep);
             scrubSensitiveFields(dep.id(), tenantId, fieldsToScrub,
                     CredentialStatus.needs_reauth, diag);
             invalidateOAuth2RefreshSentinels(dep.id());
             revoked++;
         }
 
+        revokeAfterCommit(toRevokeAtProvider, tenantId, "byok_client_deleted");
         if (revoked > 0) {
             log.info("Revoked {} user credentials following BYOK delete: tenant={}, integration={}",
                     revoked, tenantId, deletedRow.integrationName());
@@ -1052,10 +1202,6 @@ public class CredentialService {
         return issuer != null ? issuer : stringOrNull(data.get("oauth_client_id"));
     }
 
-    private static String stringOrNull(Object value) {
-        return value instanceof String str && !str.isBlank() ? str : null;
-    }
-
     /**
      * Delete the OAuth2 fast-path Redis sentinels for a credential. Same prefixes the
      * refresh pipeline uses ({@link OAuth2Service#REDIS_REFRESH_DISABLED_PREFIX} and
@@ -1098,6 +1244,7 @@ public class CredentialService {
         boolean wasDefault = credential.isDefault();
         String integration = credential.integration();
 
+        revokeAndAuditRemoval(credential, tenantId, "user_delete");
         credentialRepository.deleteById(id);
 
         // Ensure there's always a default if credentials remain for this integration

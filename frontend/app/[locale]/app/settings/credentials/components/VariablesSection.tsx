@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { ToastData } from "@/components/Toast";
+import { useUrlSearchState } from "@/hooks/useUrlState";
 import { formatDateTime } from "@/lib/utils/dateFormatters";
 import {
   variablesApi,
@@ -84,7 +85,8 @@ export function VariablesSection({ refreshSignal, addToast }: VariablesSectionPr
   const [variables, setVariables] = useState<WorkflowVariable[]>([]);
   const [quota, setQuota] = useState<WorkflowVariableQuota | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
+  // In the address, so a reload keeps the search.
+  const [searchTerm, setSearchTerm] = useUrlSearchState("q");
   const [editor, setEditor] = useState<EditorState>(CLOSED_EDITOR);
   const [isSaving, setIsSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<WorkflowVariable | null>(null);

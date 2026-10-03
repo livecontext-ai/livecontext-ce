@@ -8,11 +8,15 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -25,7 +29,7 @@ import java.util.UUID;
  *
  * <p>The rules, in the order they apply:
  * <ol>
- *   <li>Only four topics are delivered at all ({@link NotificationTopic}).</li>
+ *   <li>Only the categories of a {@link NotificationTopic} are delivered at all.</li>
  *   <li>The person's choice for that topic in that workspace: OFF, EMAIL,
  *       CHANNEL or BOTH.</li>
  *   <li>A failed run joins its workflow's open incident; only the failure that
@@ -33,8 +37,8 @@ import java.util.UUID;
  *       24 hours of an announced recovery. Reminders and "recovered" come from
  *       {@link NotificationDigestScheduler} and {@link #onProductionSuccess}.</li>
  *   <li>Digest topics are never sent alone: the daily summary picks them up.</li>
- *   <li>Email needs the plan ({@link NotificationEmailEntitlement}), credit alerts
- *       excepted.</li>
+ *   <li>Email needs the plan ({@link NotificationEmailEntitlement}), except the
+ *       topics sent on every plan ({@link NotificationTopic#emailOnEveryPlan()}).</li>
  *   <li>At most {@code dailyCap} immediate messages per person and medium in 24
  *       hours; beyond that the message is DEFERRED to the next summary.</li>
  * </ol>
@@ -191,6 +195,80 @@ public class NotificationDeliveryService {
         } catch (RuntimeException ex) {
             meterRegistry.counter("notification.delivery.errors", "type", ex.getClass().getSimpleName()).increment();
             logger.warn("[notification-delivery] recovery for workflow {} swallowed: {}", workflowId, ex.getMessage());
+        }
+    }
+
+    /**
+     * The owner stopped this workflow on purpose: one of its schedules was paused or deleted,
+     * its production run was paused or cancelled, or the workflow was unpinned or deleted. Its
+     * open incidents close with no message, so the daily "still failing" reminder does not keep
+     * reporting something its owner switched off. Other triggers of the workflow may still fire:
+     * a failure after the stop then opens a new incident and is sent as a new alert.
+     *
+     * <p>THE one entry point for every stop site. A stop must succeed whether or not its
+     * incident could be closed, so the close never runs inside the caller's transaction: a
+     * failed UPDATE there would abort the stop even with the exception swallowed here, and a
+     * rolled-back stop would have closed the incident anyway. It waits for the transaction to
+     * COMPLETE as committed, then runs on the delivery pool, on a connection of its own. When
+     * the close cannot be made, the incident closes by itself after a week without failures,
+     * as before.
+     *
+     * <p>{@code afterCompletion}, not {@code afterCommit}: some callers are themselves inside
+     * an afterCommit callback (the run cancel/pause cascade), and a synchronization registered
+     * during that phase never receives afterCommit. It does receive afterCompletion.
+     */
+    public void onWorkflowStopped(UUID workflowId) {
+        if (!enabled || workflowId == null) return;
+        if (TransactionSynchronizationManager.isSynchronizationActive()
+                && TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCompletion(int status) {
+                    if (status == STATUS_COMMITTED) dispatchCloseStopped(workflowId);
+                }
+            });
+            return;
+        }
+        dispatchCloseStopped(workflowId);
+    }
+
+    /**
+     * The delivery pool, so the close gets its own connection instead of the one a just
+     * completed transaction is still handing back. Optional: without it (a hand-built test)
+     * the close runs inline.
+     */
+    private TaskExecutor stopExecutor;
+
+    @Autowired(required = false)
+    public void setStopExecutor(@Qualifier("notificationDeliveryExecutor") TaskExecutor stopExecutor) {
+        this.stopExecutor = stopExecutor;
+    }
+
+    private void dispatchCloseStopped(UUID workflowId) {
+        if (stopExecutor == null) {
+            closeStopped(workflowId);
+            return;
+        }
+        try {
+            stopExecutor.execute(() -> closeStopped(workflowId));
+        } catch (RuntimeException rejected) {
+            // A saturated pool must not fail the stop either.
+            meterRegistry.counter("notification.delivery.errors", "type", rejected.getClass().getSimpleName()).increment();
+            logger.warn("[notification-delivery] closing incidents of stopped workflow {} not queued: {}",
+                    workflowId, rejected.getMessage());
+        }
+    }
+
+    private void closeStopped(UUID workflowId) {
+        try {
+            int closed = incidents.closeStopped(workflowId, Instant.now());
+            if (closed > 0) {
+                logger.info("[notification-delivery] closed {} incident(s) of stopped workflow {}", closed, workflowId);
+            }
+        } catch (RuntimeException ex) {
+            meterRegistry.counter("notification.delivery.errors", "type", ex.getClass().getSimpleName()).increment();
+            logger.warn("[notification-delivery] closing incidents of stopped workflow {} swallowed: {}",
+                    workflowId, ex.getMessage());
         }
     }
 

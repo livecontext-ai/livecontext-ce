@@ -24,7 +24,9 @@ vi.mock('@/lib/changelog/latestEntry', async (importOriginal) => ({
 
 import { useChangelog, CHANGELOG_STATE_QUERY_KEY } from '../useChangelog';
 
-const ENTRY = { key: '2026-09-whats-new', publishedAt: '2026-09-07', media: null, learnMoreUrl: '/changelog' };
+const ENTRY = {
+  key: '2026-09-whats-new', publishedAt: '2026-09-07', media: null, learnMoreUrl: '/changelog', copy: 'latest', action: null,
+};
 const ONBOARDED = { needsOnboarding: false, firstLogin: false, profileIncomplete: false, emailVerified: true };
 const STATE_PATH = '/changelog/state';
 const ONBOARDING_PATH = '/auth-service/api/onboarding/status';

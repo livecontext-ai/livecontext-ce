@@ -21,10 +21,15 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class AuthClientConfig {
 
+    /**
+     * Signed with the shared gateway secret, so auth-service can require the HMAC on its whole
+     * {@code /api/internal/auth/} prefix.
+     */
     @Bean
     public AuthClient authClient(
-            @Value("${services.auth-service.url:http://localhost:8083}") String authServiceUrl) {
-        return new AuthClient(authServiceUrl);
+            @Value("${services.auth-service.url:http://localhost:8083}") String authServiceUrl,
+            @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
+        return new AuthClient(authServiceUrl, gatewaySecretKey);
     }
 
     /**

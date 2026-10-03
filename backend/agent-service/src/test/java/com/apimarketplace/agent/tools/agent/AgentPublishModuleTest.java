@@ -77,6 +77,51 @@ class AgentPublishModuleTest {
     }
 
     @Nested
+    @DisplayName("LC-066 restricted conversation")
+    class Lc066RestrictedTests {
+
+        private final Map<String, Object> restricted = Map.of(
+                com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "RESTRICTED");
+
+        @Test
+        @DisplayName("LC-066 regression: publish from a restricted conversation is refused before publication-service")
+        void lc066RestrictedPublishIsRefused() {
+            ToolExecutionResult result = module.execute("publish",
+                    Map.of("agent_id", AGENT_ID.toString(), "title", "Inbox digest", "interface_id", INTERFACE_ID.toString()),
+                    TENANT, ctx(restricted)).orElseThrow();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).startsWith("RESTRICTED_DATA_PROVIDER_NOT_ALLOWED").contains("published");
+            verify(publicationClient, never()).publishAgent(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: publish from an ordinary conversation still reaches publication-service")
+        void lc066OrdinaryPublishIsNotRefused() {
+            when(publicationClient.publishAgent(any(), eq(TENANT), eq(TEST_ORG_ID)))
+                    .thenReturn(Map.of("id", PUB_ID.toString(), "status", "ACTIVE"));
+
+            ToolExecutionResult result = module.execute("publish",
+                    Map.of("agent_id", AGENT_ID.toString(), "title", "Digest", "interface_id", INTERFACE_ID.toString()),
+                    TENANT, ctx()).orElseThrow();
+
+            assertThat(result.success()).isTrue();
+            verify(publicationClient).publishAgent(any(), eq(TENANT), eq(TEST_ORG_ID));
+        }
+
+        @Test
+        @DisplayName("LC-066: unpublish from a restricted conversation still works")
+        void lc066RestrictedUnpublishStillWorks() {
+            when(publicationClient.isAgentPublished(AGENT_ID, TENANT)).thenReturn(true);
+
+            ToolExecutionResult result = module.execute("unpublish",
+                    Map.of("agent_id", AGENT_ID.toString()), TENANT, ctx(restricted)).orElseThrow();
+
+            assertThat(result.success()).isTrue();
+        }
+    }
+
+    @Nested
     @DisplayName("access modes")
     class AccessModeTests {
 
@@ -148,6 +193,8 @@ class AgentPublishModuleTest {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("error", "AGENT_SNAPSHOT_TOO_LARGE");
             body.put("message", "Publication snapshot is 34.0 MB (max 15.0 MB).");
+            body.put("sizeBytes", 35_651_584L);
+            body.put("maxBytes", 15_728_640L);
             body.put("breakdown", java.util.List.of(
                     Map.of("type", "datasource", "id", "142", "name", "Leads", "items", 82000)));
             when(publicationClient.publishAgent(any(), eq(TENANT), eq(TEST_ORG_ID)))
@@ -164,6 +211,50 @@ class AgentPublishModuleTest {
                     .contains("Leads")
                     .contains("82000 rows")
                     .contains("action=update");
+        }
+
+        @Test
+        @DisplayName("regression (refusal text): a row refusal gives the reason once, no 'Heaviest' list, and the real table id")
+        void rowRefusalNamesTheTableIdWithoutHeaviest() {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", "AGENT_SNAPSHOT_TOO_LARGE");
+            body.put("message", "Table 'Leads' has more than 5000 rows (max 5000 rows per published table). "
+                    + "Remove it from the agent's resource selection or reduce its content.");
+            body.put("reason", "Table 'Leads' has more than 5000 rows (max 5000 rows per published table).");
+            body.put("maxTableRows", 5000);
+            body.put("breakdown", java.util.List.of(Map.of("type", "datasource", "id", "142", "name", "Leads")));
+            when(publicationClient.publishAgent(any(), eq(TENANT), eq(TEST_ORG_ID)))
+                    .thenThrow(new com.apimarketplace.publication.client.PublicationValidationException(
+                            "AGENT_SNAPSHOT_TOO_LARGE", (String) body.get("message"), body, null));
+
+            ToolExecutionResult result = module.execute("publish",
+                    Map.of("agent_id", AGENT_ID.toString(), "title", "X", "interface_id", INTERFACE_ID.toString()),
+                    TENANT, ctx()).orElseThrow();
+
+            assertThat(result.error())
+                    .isEqualTo("Publish refused: Table 'Leads' has more than 5000 rows (max 5000 rows per published "
+                            + "table). Fix: call `agent` with action=update and remove table 142 from the agent's "
+                            + "custom selection, or delete rows with table(action='delete_rows', table_id=142, "
+                            + "where={...}), then retry publish.");
+        }
+
+        @Test
+        @DisplayName("a transient table copy failure is a retryable EXTERNAL_SERVICE_ERROR, not a refusal")
+        void tableCopyFailureIsRetryable() {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", "TABLE_COPY_FAILED");
+            body.put("retryable", true);
+            when(publicationClient.publishAgent(any(), eq(TENANT), eq(TEST_ORG_ID)))
+                    .thenThrow(new com.apimarketplace.publication.client.PublicationValidationException(
+                            "TABLE_COPY_FAILED", "The rows of table 'Leads' (id 142) could not be read just now, so "
+                                    + "nothing was published. This is temporary: publish again in a moment.", body, null));
+
+            ToolExecutionResult result = module.execute("publish",
+                    Map.of("agent_id", AGENT_ID.toString(), "title", "X", "interface_id", INTERFACE_ID.toString()),
+                    TENANT, ctx()).orElseThrow();
+
+            assertThat(result.errorCode()).isEqualTo(com.apimarketplace.agent.tools.ToolErrorCode.EXTERNAL_SERVICE_ERROR);
+            assertThat(result.error()).startsWith("Publish failed: The rows of table 'Leads' (id 142)");
         }
     }
 

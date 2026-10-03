@@ -1156,7 +1156,7 @@ public class OrganizationMemberService {
 
     private void requireInboxEligible(OrganizationInvitation invitation, User user) {
         if (!isInboxEligible(invitation, user)) {
-            throw new SecurityException("Open the invitation link to answer this invitation");
+            throw new InvitationRequiresLinkException();
         }
     }
 

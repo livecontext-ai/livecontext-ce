@@ -116,8 +116,7 @@ class AgentToolsControllerAsyncOrgScopeTest {
         // HEADERS but not the body: a user whose gateway resolved no active org could name a
         // workspace and assert OWNER in it in one request. Every internal caller sends the role
         // as a header from the same source it filled the body with, so nothing legitimate needs
-        // the body read. orgId is deliberately still accepted from the body and asserted here so
-        // the two are not conflated by a later reader.
+        // the body read. Since LC-013 the body orgId is ignored too.
         when(registry.hasTool("workflow")).thenReturn(true);
         when(registrationService.executeToolAsync(eq("workflow"), any(), any()))
                 .thenReturn(CompletableFuture.completedFuture(ToolExecutionResult.success(Map.of())));
@@ -140,13 +139,17 @@ class AgentToolsControllerAsyncOrgScopeTest {
         assertThat(asyncCtx.getValue().orgRole())
                 .as("execute-async must not take the role from the body")
                 .isNull();
-        assertThat(asyncCtx.getValue().orgId()).isEqualTo("victim-org");
+        // LC-013: the workspace is no longer read from the body either (header only).
+        assertThat(asyncCtx.getValue().orgId()).isNull();
 
         controller.executeTool(httpReq, body);
         ArgumentCaptor<ToolExecutionContext> syncCtx = ArgumentCaptor.forClass(ToolExecutionContext.class);
         verify(registrationService).executeTool(eq("workflow"), any(), syncCtx.capture());
         assertThat(syncCtx.getValue().orgRole())
                 .as("execute must not take the role from the body either")
+                .isNull();
+        assertThat(syncCtx.getValue().orgId())
+                .as("execute must not take the workspace from the body either")
                 .isNull();
     }
 }

@@ -74,6 +74,78 @@ class NotificationDigestSchedulerTest {
         verify(sender).channel(TENANT, ORG, null, Kind.REMINDER, message, NotificationTopic.FAILURES, "RUN_FAILED");
     }
 
+    private com.apimarketplace.orchestrator.repository.WorkflowRepository workflowsReturning(
+            java.util.Optional<com.apimarketplace.orchestrator.domain.WorkflowEntity> workflow) {
+        var repository = mock(com.apimarketplace.orchestrator.repository.WorkflowRepository.class);
+        when(repository.findById(incident.workflowId())).thenReturn(workflow);
+        scheduler.setWorkflowRepository(repository);
+        return repository;
+    }
+
+    private static com.apimarketplace.orchestrator.domain.WorkflowEntity workflowPinnedAt(Integer version) {
+        var workflow = new com.apimarketplace.orchestrator.domain.WorkflowEntity();
+        workflow.setPinnedVersion(version);
+        return workflow;
+    }
+
+    private void reminderWouldBeSent() {
+        when(preferences.resolve(TENANT, ORG, NotificationTopic.FAILURES)).thenReturn(DeliveryMode.BOTH);
+        when(deliveryService.openMediums(TENANT, DeliveryMode.BOTH)).thenReturn(List.of(Medium.EMAIL));
+        when(incidents.claimReminder(eq(incident), any())).thenReturn(true);
+    }
+
+    @Test
+    @DisplayName("Regression (reminder after a stop): an UNPINNED workflow is not reminded, its incident is closed instead")
+    void unpinnedWorkflowIsClosedNotReminded() {
+        reminderWouldBeSent();
+        workflowsReturning(java.util.Optional.of(workflowPinnedAt(null)));
+
+        scheduler.remind(incident, Instant.now());
+
+        verify(deliveryService).onWorkflowStopped(incident.workflowId());
+        verify(incidents, never()).claimReminder(any(), any());
+        verifyNoInteractions(sender);
+    }
+
+    @Test
+    @DisplayName("Regression (reminder after a stop): a DELETED workflow is not reminded, its incident is closed instead")
+    void deletedWorkflowIsClosedNotReminded() {
+        reminderWouldBeSent();
+        workflowsReturning(java.util.Optional.empty());
+
+        scheduler.remind(incident, Instant.now());
+
+        verify(deliveryService).onWorkflowStopped(incident.workflowId());
+        verify(incidents, never()).claimReminder(any(), any());
+        verifyNoInteractions(sender);
+    }
+
+    @Test
+    @DisplayName("A workflow still pinned is reminded as before")
+    void pinnedWorkflowIsReminded() {
+        reminderWouldBeSent();
+        workflowsReturning(java.util.Optional.of(workflowPinnedAt(4)));
+
+        scheduler.remind(incident, Instant.now());
+
+        verify(deliveryService, never()).onWorkflowStopped(any());
+        verify(sender).email(TENANT, ORG, null, Kind.REMINDER, message, NotificationTopic.FAILURES, "RUN_FAILED");
+    }
+
+    @Test
+    @DisplayName("Fails open: a workflow that cannot be read is reminded, never closed on a guess")
+    void unreadableWorkflowIsReminded() {
+        reminderWouldBeSent();
+        var repository = mock(com.apimarketplace.orchestrator.repository.WorkflowRepository.class);
+        when(repository.findById(incident.workflowId())).thenThrow(new IllegalStateException("db down"));
+        scheduler.setWorkflowRepository(repository);
+
+        scheduler.remind(incident, Instant.now());
+
+        verify(deliveryService, never()).onWorkflowStopped(any());
+        verify(sender).email(TENANT, ORG, null, Kind.REMINDER, message, NotificationTopic.FAILURES, "RUN_FAILED");
+    }
+
     @Test
     @DisplayName("Regression (duplicate reminder): a claim lost to another pass sends nothing")
     void lostClaimSendsNothing() {
@@ -145,6 +217,39 @@ class NotificationDigestSchedulerTest {
         verify(sender).channel(eq(TENANT), eq(ORG), isNull(), eq(Kind.DIGEST), eq(message), any());
         // Worded for the person the summary goes to (their language and zone), not a workspace.
         verify(composer).digest(eq(TENANT), org.mockito.ArgumentMatchers.argThat(items -> items.size() == 1));
+    }
+
+    @Test
+    @DisplayName("Regression (creator follows by email): a Free-plan person still gets a creator's new app and their new subscribers in the email summary")
+    void creatorTopicsEmailedOnFreePlan() {
+        // A REAL entitlement on a plan below the email bar: before this change the two creator
+        // categories belonged to no topic, so no summary could ever carry them.
+        com.apimarketplace.auth.client.entitlement.PlanFeatureGate gate =
+                mock(com.apimarketplace.auth.client.entitlement.PlanFeatureGate.class);
+        when(gate.isEnabled()).thenReturn(true);
+        when(gate.upgradeRequiredFor(TENANT, List.of(NotificationEmailEntitlement.FEATURE_KEY))).thenReturn("STARTER");
+        NotificationEmailEntitlement freePlan = new NotificationEmailEntitlement();
+        freePlan.setPlanFeatureGate(gate);
+        NotificationDigestScheduler free = spy(new NotificationDigestScheduler(incidents, deliveryLog, preferences, freePlan,
+                composer, sender, deliveryService, mock(JdbcTemplate.class), new ObjectMapper(), true));
+        Map<NotificationTopic, DeliveryMode> modes = new EnumMap<>(NotificationTopic.class);
+        for (NotificationTopic t : NotificationTopic.values()) modes.put(t, t.defaultDelivery());
+        when(preferences.resolveAll(TENANT, ORG)).thenReturn(modes);
+        when(deliveryLog.deferredBetween(anyString(), anyString(), any(), any(), any())).thenReturn(List.of());
+        doReturn(List.of()).when(free).load(any(), any(), any(), any(), any(), any());
+        doReturn(List.of(
+                new NotificationMessageComposer.DigestItem("CREATOR_PUBLISHED", "PUBLICATION", UUID.randomUUID(),
+                        Map.of("subjectName", "Invoice Bot"), Instant.now()),
+                new NotificationMessageComposer.DigestItem("CREATOR_FOLLOWED", "USER", UUID.randomUUID(),
+                        Map.of("subjectName", "Bob B."), Instant.now())))
+                .when(free).load(eq(TENANT), eq(ORG), eq(Set.of("CREATOR_PUBLISHED", "CREATOR_FOLLOWED")), eq(List.of()),
+                        any(), any());
+
+        free.digest(TENANT, ORG, Instant.now());
+
+        // Only the creator topics pass the plan; failures/account/tasks stay off the Free email.
+        verify(sender).email(eq(TENANT), eq(ORG), isNull(), eq(Kind.DIGEST), eq(message), any());
+        verify(composer).digest(eq(TENANT), org.mockito.ArgumentMatchers.argThat(items -> items.size() == 2));
     }
 
     @Test

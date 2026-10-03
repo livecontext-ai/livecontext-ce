@@ -34,5 +34,114 @@
       "timestamp": "1699999999999",
       "expectedSignature": "gw_e0knEpQohuzY90JwQf8NG07DreG9BgDCvMzTSPJk14w"
     }
+  ],
+  "_comment_v2": "v2 (CASA LC-035): sig = 'gw2_' + base64url-nopadding(HMAC_SHA256(secretKey, fields)), fields = each of ['lc-gateway-v2', X-Provider-ID, X-User-ID, X-Organization-ID, X-Organization-Role, X-User-Roles, X-Api-Key-Scopes, X-Share-Context, METHOD (upper-case), percent-decoded path bytes, percent-decoded query bytes, timestamp] encoded as '<byteLength>:<bytes>\n'. Multi-valued headers join with ','; absent = empty. Consumed by GatewaySignatureV2ParityTest (Java) and gatewayAuth.test.mjs (JS).",
+  "v2Cases": [
+    {
+      "name": "gateway-forwarded JWT user, GET with query",
+      "method": "GET",
+      "path": "/api/workflows/123/runs",
+      "query": "page=0&size=20",
+      "headers": {
+        "X-Provider-ID": "kc-sub-1",
+        "X-User-ID": "42",
+        "X-Organization-ID": "org_7",
+        "X-Organization-Role": "OWNER",
+        "X-User-Roles": "USER,ADMIN"
+      },
+      "timestamp": "1700000000000",
+      "expectedSignature": "gw2_ydYjZSjwcZ9QOazhBwLBNfRHPXOjsNBZpuRhnA6ahkU"
+    },
+    {
+      "name": "same request, roles stripped (must differ)",
+      "method": "GET",
+      "path": "/api/workflows/123/runs",
+      "query": "page=0&size=20",
+      "headers": {
+        "X-Provider-ID": "kc-sub-1",
+        "X-User-ID": "42",
+        "X-Organization-ID": "org_7",
+        "X-Organization-Role": "OWNER"
+      },
+      "timestamp": "1700000000000",
+      "expectedSignature": "gw2_NDlEFEL43XygsRDDLgKMSXP17D7kiPjErpGBGw-CTXU"
+    },
+    {
+      "name": "internal client POST, no org, lowercase method",
+      "method": "post",
+      "path": "/api/internal/credentials/pricing-versions/bootstrap",
+      "query": "",
+      "headers": {
+        "X-Provider-ID": "internal-catalog-import"
+      },
+      "timestamp": "1700000000000",
+      "expectedSignature": "gw2_3jBiA43Pe0qrPQz2MAjdVnDe0tXxNOhyMjYbgocZCbU"
+    },
+    {
+      "name": "percent-encoded path signs like the literal path",
+      "method": "GET",
+      "path": "/api/files/by-id/a%20b/raw",
+      "query": "name=%C3%A9t%C3%A9",
+      "headers": {
+        "X-Provider-ID": "p",
+        "X-User-ID": "1"
+      },
+      "timestamp": "1700000000001",
+      "expectedSignature": "gw2_5XtWxn_cXnJXMCG61XULucMm35TbqaI5xKW2v8idawQ"
+    },
+    {
+      "name": "literal path twin of the percent-encoded case",
+      "method": "GET",
+      "path": "/api/files/by-id/a b/raw",
+      "query": "name=été",
+      "headers": {
+        "X-Provider-ID": "p",
+        "X-User-ID": "1"
+      },
+      "timestamp": "1700000000001",
+      "expectedSignature": "gw2_5XtWxn_cXnJXMCG61XULucMm35TbqaI5xKW2v8idawQ"
+    },
+    {
+      "name": "separator in a field: provider \"a|b\", user \"c\"",
+      "method": "GET",
+      "path": "/x",
+      "query": "",
+      "headers": {
+        "X-Provider-ID": "a|b",
+        "X-User-ID": "c"
+      },
+      "timestamp": "1700000000002",
+      "expectedSignature": "gw2_kREYukFNnTn1pIm708g1SnkMt9YRR4B-smn-OhNTAMg"
+    },
+    {
+      "name": "separator in a field: provider \"a\", user \"b|c\"",
+      "method": "GET",
+      "path": "/x",
+      "query": "",
+      "headers": {
+        "X-Provider-ID": "a",
+        "X-User-ID": "b|c"
+      },
+      "timestamp": "1700000000002",
+      "expectedSignature": "gw2_rOdeUCUkl3zkedRb7LhAgQDa8TeG_i7Ew8YPCKCMuOY"
+    },
+    {
+      "name": "multi-valued roles header joins with a comma",
+      "method": "DELETE",
+      "path": "/api/admin/x",
+      "query": "",
+      "headers": {
+        "X-Provider-ID": "p",
+        "X-User-ID": "9",
+        "X-User-Roles": [
+          "USER",
+          "ADMIN"
+        ],
+        "X-Api-Key-Scopes": "workflow,catalog",
+        "X-Share-Context": "true"
+      },
+      "timestamp": "1700000000003",
+      "expectedSignature": "gw2_9kysG4a1QESzw1szRQdXBq39Eou3iFXX5suftN2LEFo"
+    }
   ]
 }

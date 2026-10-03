@@ -1,5 +1,7 @@
 package com.apimarketplace.agent.service.execution;
 
+import com.apimarketplace.common.classification.DataSensitivity;
+import com.apimarketplace.common.classification.RestrictedDataPolicy;
 import com.apimarketplace.agent.client.dto.AgentObservabilityRequest;
 import com.apimarketplace.agent.client.dto.execution.AgentExecutionRequestDto;
 import com.apimarketplace.agent.client.dto.execution.AgentExecutionResponseDto;
@@ -597,6 +599,15 @@ public class SubAgentExecutionHandler {
             var executionRoute = executionLinkRouter != null
                 ? executionLinkRouter.runnableRoute(provider, model, ACTIVITY_SOURCE)
                 : null;
+            // LC-004: a sub-agent of an execution holding Gmail / Drive data receives a prompt
+            // that can quote it, so it may only run on an allow-listed provider (judged on the
+            // provider a link would actually send it to).
+            try {
+                executionRoute = RestrictedDataRouting.apply(
+                    subCredentials.get(DataSensitivity.CREDENTIAL_KEY), provider, executionRoute);
+            } catch (RestrictedDataRouting.RefusedException refused) {
+                return buildFailure(toolCall, startTime, refused.getMessage());
+            }
             String execProvider = executionRoute != null ? executionRoute.executionProvider() : provider;
             String execModel = executionRoute != null ? executionRoute.executionModel() : model;
             if (executionRoute != null) {
@@ -743,7 +754,8 @@ public class SubAgentExecutionHandler {
                         execProvider, true);
                 }
                 AgentExecutionResponseDto bridgeResponse = executeBridgeRaw(context, streamId,
-                    conversationId, parentConversationId, entity, agentEntityIdStr, workflowRunId, agentBudget);
+                    conversationId, parentConversationId, entity, agentEntityIdStr, workflowRunId, agentBudget,
+                    provider, model);
                 bridgeBudgetScope = bridgeResponse != null ? bridgeResponse.budgetScope() : null;
 
                 // A linked sub-agent whose bridge attempt failed before producing anything an end
@@ -756,7 +768,7 @@ public class SubAgentExecutionHandler {
                 // user pays a full direct-API turn for the sub-agent they just stopped.
                 if (executionRoute != null && bridgeResponse != null
                         && !bridgeResponse.success() && bridgeResponse.hasNoVisibleOutput()
-                        && !bridgeResponse.wasCancelledByUser()) {
+                        && !bridgeResponse.wasCancelledByUser() && !bridgeResponse.wasRefusedBeforeDispatch()) {
                     if (prometheusMetrics != null) {
                         prometheusMetrics.recordExecutionLinkFallback(provider, model, execProvider);
                     }
@@ -832,7 +844,8 @@ public class SubAgentExecutionHandler {
                 fullSystemPrompt, fullPrompt, bridgeBudgetScope, executedRoute, subCredentials, replacement);
 
             // 18. Build tool result
-            return buildToolResult(toolCall, agentId, entity.getName(), result, durationMs, tenantId, credentials);
+            return buildToolResult(toolCall, agentId, entity.getName(), result, durationMs, tenantId, credentials,
+                subCredentials);
         } catch (Throwable t) {
             // Finalize the sub-agent stream (publishes the error + finalizes in
             // conversation-service + unregisters from the drain registry). Without
@@ -918,13 +931,30 @@ public class SubAgentExecutionHandler {
     private AgentExecutionResponseDto executeBridgeRaw(AgentLoopContext context, String streamId,
                                               String conversationId, String parentConversationId,
                                               AgentEntity entity, String agentIdStr,
-                                              String workflowRunId, BudgetState agentBudget) {
+                                              String workflowRunId, BudgetState agentBudget,
+                                              String billedProvider, String billedModel) {
 
         long bridgeStart = System.currentTimeMillis();
         AgentExecutionRequestDto dto = buildBridgeRequest(context, streamId, conversationId,
-            parentConversationId, entity, agentIdStr, workflowRunId, agentBudget);
+            parentConversationId, entity, agentIdStr, workflowRunId, agentBudget, billedProvider, billedModel);
 
-        AgentExecutionResponseDto response = bridgeClient.execute(dto);
+        // LC-056: the bridge reads a 0 balance as "no budget" and checks the agent budget only
+        // after a first turn; the child is refused here instead, as a top-level bridge run is.
+        GuardChainFactory.BridgeBudget sent = new GuardChainFactory.BridgeBudget(
+            dto.tenantBalance(), dto.maxCreditBudget(), dto.creditsConsumedSoFar());
+        String exhausted = sent.exhaustedScope();
+        if (exhausted != null) {
+            log.warn("[SUB_AGENT_BRIDGE] Sub-agent '{}' refused before dispatch: scope={} balance={}",
+                entity.getName(), exhausted, dto.tenantBalance());
+            return new AgentExecutionResponseDto(false, null, null, null, 0, null,
+                sent.refusalMessage(billedProvider, billedModel),
+                System.currentTimeMillis() - bridgeStart, billedProvider, billedModel, null,
+                com.apimarketplace.agent.domain.AgentStopReason.BUDGET_EXHAUSTED.name(),
+                Map.of("budgetScope", exhausted, AgentExecutionResponseDto.REFUSED_BEFORE_DISPATCH, true),
+                null, null, null, null, null, exhausted);
+        }
+
+        AgentExecutionResponseDto response = bridgeClient.execute(dto, context.userRoles());
 
         if (response == null) {
             log.error("[SUB_AGENT_BRIDGE] Bridge returned null response for sub-agent '{}' (id={})",
@@ -948,7 +978,8 @@ public class SubAgentExecutionHandler {
     private AgentExecutionRequestDto buildBridgeRequest(AgentLoopContext context, String streamId,
                                                          String conversationId, String parentConversationId,
                                                          AgentEntity entity, String agentIdStr,
-                                                         String workflowRunId, BudgetState agentBudget) {
+                                                         String workflowRunId, BudgetState agentBudget,
+                                                         String billedProvider, String billedModel) {
         // Convert tools to List<Map>
         List<Map<String, Object>> toolMaps = null;
         if (context.tools() != null) {
@@ -977,9 +1008,11 @@ public class SubAgentExecutionHandler {
         if (creditConsumptionClient != null && context.tenantId() != null) {
             try {
                 // Model-aware: on the Free plan the monthly credits count only on a
-                // free-tier model (V512), so the wallet total would overstate the budget.
+                // free-tier model (V512), so the wallet total would overstate the budget. On the
+                // BILLED model: an execution link runs the child on a CLI, whose own spendable
+                // balance says nothing about what the child is charged (LC-056).
                 BigDecimal balance = creditConsumptionClient.fetchLlmSpendableBalance(
-                        context.tenantId(), context.provider(), context.model());
+                        context.tenantId(), billedProvider, billedModel);
                 tenantBalance = balance != null ? balance.doubleValue() : null;
             } catch (Exception e) {
                 log.warn("[SUB_AGENT_BRIDGE] Failed to fetch tenant balance: {}", e.getMessage());
@@ -1019,7 +1052,7 @@ public class SubAgentExecutionHandler {
             agentIdStr,   // agentEntityId for fleet activity
             tenantBalance,
             null,   // pricingRates
-            agentBudget.isEnabled() ? agentBudget.consumedAfterReset().doubleValue() : null,   // creditsConsumedSoFar
+            agentBudget.isEnabled() ? agentBudget.consumedIncludingReserved().doubleValue() : null,
             entity.getLoopIdenticalStop(),
             entity.getLoopConsecutiveStop(),
             UUID.randomUUID().toString(),  // executionId - fresh id for the spawned sub-agent execution
@@ -1316,9 +1349,25 @@ public class SubAgentExecutionHandler {
 
     // ==================== Result Builder ====================
 
+    /** True when the child execution was tagged restricted or received a restricted tool result. */
+    static boolean childRestricted(AgentLoopResult result, Map<String, Object> subCredentials) {
+        if (DataSensitivity.fromCredentials(subCredentials).isRestricted()) {
+            return true;
+        }
+        if (result != null && result.toolResults() != null) {
+            for (ToolResult tr : result.toolResults()) {
+                if (tr != null && RestrictedDataPolicy.fromToolMetadata(tr.metadata()).isRestricted()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private ToolResult buildToolResult(ToolCall toolCall, UUID agentId, String agentName,
                                         AgentLoopResult result, long durationMs,
-                                        String tenantId, Map<String, Object> credentials) {
+                                        String tenantId, Map<String, Object> credentials,
+                                        Map<String, Object> subCredentials) {
         String fullResponse = result.success() ? result.content() : result.error();
         boolean wasTruncated = fullResponse != null && fullResponse.length() > MAX_RESPONSE_LENGTH;
         String response = truncateResponse(fullResponse);
@@ -1327,7 +1376,8 @@ public class SubAgentExecutionHandler {
         String fullContentToolCallId = null;
         if (wasTruncated) {
             fullContentToolCallId = saveFullSubAgentResult(
-                agentId, agentName, fullResponse, tenantId, credentials, durationMs);
+                agentId, agentName, fullResponse, tenantId, credentials, durationMs,
+                childRestricted(result, subCredentials));
         }
 
         Map<String, Object> resultMap = new LinkedHashMap<>();
@@ -1359,12 +1409,21 @@ public class SubAgentExecutionHandler {
             .success(true) // wrapper always succeeds, inner status in content
             .content(content)
             .durationMs(durationMs)
+            // LC-004: the child's answer can quote the Gmail / Drive data it read; the parent's
+            // loop must treat this result as restricted too.
+            .metadata(childRestricted(result, subCredentials)
+                ? Map.of(DataSensitivity.CREDENTIAL_KEY, DataSensitivity.RESTRICTED.name())
+                : null)
             .build();
     }
 
     private String saveFullSubAgentResult(UUID agentId, String agentName, String fullContent,
                                            String tenantId, Map<String, Object> credentials,
-                                           long durationMs) {
+                                           long durationMs, boolean restricted) {
+        // The tag travels as tool-result metadata, which conversation-service classifies.
+        Map<String, Object> sensitivityMetadata = restricted
+            ? Map.of(DataSensitivity.CREDENTIAL_KEY, DataSensitivity.RESTRICTED.name())
+            : null;
         String parentConversationId = getConversationId(credentials);
         if (parentConversationId == null) {
             return null;
@@ -1378,11 +1437,11 @@ public class SubAgentExecutionHandler {
                 ? conversationServiceClient.saveToolResult(
                     parentConversationId, tenantId,
                     "agent_execute:" + agentName, toolCallId,
-                    true, durationMs, fullContent, null, null, organizationId)
+                    true, durationMs, fullContent, null, null, organizationId, sensitivityMetadata)
                 : conversationServiceClient.saveToolResult(
                     parentConversationId, tenantId,
                     "agent_execute:" + agentName, toolCallId,
-                    true, durationMs, fullContent, null);
+                    true, durationMs, fullContent, null, null, null, sensitivityMetadata);
 
             if (resultId != null) {
                 log.info("[SUB_AGENT] Saved full response ({} chars) as toolCallId={}", fullContent.length(), toolCallId);
@@ -1522,6 +1581,9 @@ public class SubAgentExecutionHandler {
                                       java.util.Optional<com.apimarketplace.agent.service.ModelReplacementResolver.Substitution> replacement) {
         try {
             AgentObservabilityRequest request = new AgentObservabilityRequest();
+            if (childRestricted(result, credentials)) {
+                request.setDataSensitivity(DataSensitivity.RESTRICTED.name());
+            }
             request.setTenantId(tenantId);
             // PR20 - workspace identity from the inbound HTTP request that
             // triggered this sub-agent dispatch (PR16 forwarder set the header
@@ -1805,6 +1867,8 @@ public class SubAgentExecutionHandler {
             forwardCredential(creds, parentCreds, "__approvedServices__");
             // Forward task linkage for execution→task tracing
             forwardCredential(creds, parentCreds, "__taskId__");
+            // LC-004: a child of an execution holding Gmail / Drive data is restricted too.
+            forwardCredential(creds, parentCreds, DataSensitivity.CREDENTIAL_KEY);
             // The parent's read/write MODES. ToolAccessControl reads an absent mode as FULL
             // access, so without this a read-only mail agent's child could SEND: spawning a
             // child was the way around the one restriction no approval wildcard can lift.

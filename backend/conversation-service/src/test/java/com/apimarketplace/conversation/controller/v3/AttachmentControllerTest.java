@@ -114,6 +114,34 @@ class AttachmentControllerTest {
         }
 
         @Test
+        @DisplayName("LC-020: an html attachment is downloaded, not rendered on the app origin; nosniff + sandbox CSP")
+        void htmlAttachmentIsForcedToDownload() {
+            UUID storageId = UUID.randomUUID();
+            when(attachmentService.getAttachmentWithMetadata(storageId, "user-1", "org-1"))
+                    .thenReturn(Optional.of(new AttachmentService.AttachmentData(
+                            "<script>alert(1)</script>".getBytes(), "text/html", "x.html")));
+
+            ResponseEntity<?> response = attachmentController.getAttachment(storageId.toString(), "user-1", "org-1");
+
+            assertThat(response.getHeaders().getFirst("Content-Disposition")).startsWith("attachment;");
+            assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+            assertThat(response.getHeaders().getFirst("Content-Security-Policy")).contains("sandbox");
+        }
+
+        @Test
+        @DisplayName("LC-020: an image attachment still renders inline")
+        void imageAttachmentStaysInline() {
+            UUID storageId = UUID.randomUUID();
+            when(attachmentService.getAttachmentWithMetadata(storageId, "user-1", "org-1"))
+                    .thenReturn(Optional.of(new AttachmentService.AttachmentData(new byte[]{1}, "image/jpeg", "a.jpg")));
+
+            ResponseEntity<?> response = attachmentController.getAttachment(storageId.toString(), "user-1", "org-1");
+
+            assertThat(response.getHeaders().getFirst("Content-Disposition")).startsWith("inline;");
+            assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+        }
+
+        @Test
         @DisplayName("should return 404 when not found")
         void shouldReturn404WhenNotFound() {
             UUID storageId = UUID.randomUUID();

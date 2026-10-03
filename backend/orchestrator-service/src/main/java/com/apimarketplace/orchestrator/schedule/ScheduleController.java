@@ -1,9 +1,11 @@
 package com.apimarketplace.orchestrator.schedule;
 
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.web.PlanLimits;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.repository.WorkflowRepository;
+import com.apimarketplace.orchestrator.services.notification.delivery.NotificationDeliveryService;
 import com.apimarketplace.orchestrator.trigger.TriggerExecutionResult;
 import com.apimarketplace.orchestrator.trigger.queue.PlanPriorityMapper;
 import com.apimarketplace.trigger.client.TriggerClient;
@@ -11,6 +13,7 @@ import com.apimarketplace.trigger.client.dto.ScheduleCreateRequest;
 import com.apimarketplace.trigger.client.dto.ScheduledExecutionDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -34,17 +37,39 @@ public class ScheduleController {
     private final TriggerClient triggerClient;
     private final ScheduleExecutorService scheduleExecutorService;
     private final WorkflowRepository workflowRepository;
+    private final OrgAccessGuard orgAccessGuard;
     private final boolean planLimitsEnabled;
 
     public ScheduleController(
             TriggerClient triggerClient,
             ScheduleExecutorService scheduleExecutorService,
             WorkflowRepository workflowRepository,
+            OrgAccessGuard orgAccessGuard,
             @Value("${plan-limits.enabled:true}") boolean planLimitsEnabled) {
         this.triggerClient = triggerClient;
         this.scheduleExecutorService = scheduleExecutorService;
         this.workflowRepository = workflowRepository;
+        this.orgAccessGuard = orgAccessGuard;
         this.planLimitsEnabled = planLimitsEnabled;
+    }
+
+    /**
+     * Optional, so the tests that build this controller by hand keep working: without it a
+     * stopped schedule leaves its incident to close by itself after a week, as before.
+     */
+    private NotificationDeliveryService notificationDelivery;
+
+    @Autowired(required = false)
+    public void setNotificationDelivery(NotificationDeliveryService notificationDelivery) {
+        this.notificationDelivery = notificationDelivery;
+    }
+
+    /**
+     * The owner paused or deleted a schedule of this workflow: its failure incident closes and
+     * the "still failing" reminders stop. If another trigger keeps it failing, that is a new alert.
+     */
+    private void workflowStopped(UUID workflowId) {
+        if (notificationDelivery != null) notificationDelivery.onWorkflowStopped(workflowId);
     }
 
     /**
@@ -98,6 +123,62 @@ public class ScheduleController {
         return null;
     }
 
+    /**
+     * The full write gate: the VIEWER refusal above, then the per-member deny-list on the
+     * workflow itself (LC-012, security audit 2026-08-13).
+     *
+     * <p>The role alone is not the whole decision. An owner/admin can restrict a MEMBER from a
+     * specific workflow, and {@code execute-now} or a new cron row would otherwise let that
+     * member run it anyway. Keyed on the WORKFLOW's organization (not the caller's header), so
+     * omitting the header cannot skip it. Fails closed when the guard is absent: a check that
+     * silently does not run is worse than no check.
+     */
+    private ResponseEntity<?> refuseWrite(UUID workflowId, String orgRole, String orgId, String tenantId,
+                                          String action) {
+        ResponseEntity<?> viewerBlock = refuseViewer(orgRole, orgId, tenantId, action);
+        if (viewerBlock != null) return viewerBlock;
+        WorkflowEntity workflow = workflowRepository.findById(workflowId).orElse(null);
+        String workflowOrgId = workflow != null ? workflow.getOrganizationId() : null;
+        if (!hasText(workflowOrgId)) {
+            return null; // personal workflow (or not found, which the scope gate answers)
+        }
+        boolean allowed = orgAccessGuard != null
+                && orgAccessGuard.canWrite(workflowOrgId, tenantId, "workflow",
+                        String.valueOf(workflowId), orgRole);
+        if (!allowed) {
+            logger.warn("OrgAccess denied: user {} (role={}) attempted to {} on workflow {} in org {}",
+                    tenantId, orgRole, action, workflowId, workflowOrgId);
+            return ResponseEntity.status(403)
+                    .body(Map.of("success", false, "reason", "ORG_ACCESS_DENIED",
+                            "error", "Workflow access is restricted"));
+        }
+        return null;
+    }
+
+    /**
+     * Read-side deny-list check for the status endpoints: a member the owner restricted from
+     * this workflow must not read its schedules either. A VIEWER keeps reading (canAccess, not
+     * canWrite). Same fail-closed rule as {@link #refuseWrite}.
+     */
+    private ResponseEntity<?> refuseRead(UUID workflowId, String orgRole, String tenantId) {
+        WorkflowEntity workflow = workflowRepository.findById(workflowId).orElse(null);
+        String workflowOrgId = workflow != null ? workflow.getOrganizationId() : null;
+        if (!hasText(workflowOrgId)) {
+            return null;
+        }
+        boolean allowed = orgAccessGuard != null
+                && orgAccessGuard.canAccess(workflowOrgId, tenantId, "workflow",
+                        String.valueOf(workflowId), orgRole);
+        if (!allowed) {
+            logger.warn("OrgAccess denied: user {} (role={}) attempted to read schedules of workflow {} in org {}",
+                    tenantId, orgRole, workflowId, workflowOrgId);
+            return ResponseEntity.status(403)
+                    .body(Map.of("success", false, "reason", "ORG_ACCESS_DENIED",
+                            "error", "Workflow access is restricted"));
+        }
+        return null;
+    }
+
     private ResponseEntity<?> guardWorkflowScope(UUID workflowId, String tenantId, String orgId) {
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.status(401).body(Map.of("error", "Missing X-User-ID"));
@@ -119,12 +200,15 @@ public class ScheduleController {
     public ResponseEntity<?> getScheduleStatus(
             @PathVariable String workflowId,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         logger.info("[ScheduleController] Getting status for workflowId: {}", workflowId);
         try {
             UUID id = UUID.fromString(workflowId);
             ResponseEntity<?> scopeBlock = guardWorkflowScope(id, tenantId, orgId);
             if (scopeBlock != null) return scopeBlock;
+            ResponseEntity<?> readBlock = refuseRead(id, orgRole, tenantId);
+            if (readBlock != null) return readBlock;
             WorkflowEntity workflow = workflowRepository.findById(id).orElse(null);
             List<ScheduledExecutionDto> schedules = triggerClient.getSchedulesByWorkflow(
                     id, scheduleOrganizationId(workflow, orgId));
@@ -163,11 +247,14 @@ public class ScheduleController {
             @PathVariable String workflowId,
             @PathVariable String triggerId,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         try {
             UUID id = UUID.fromString(workflowId);
             ResponseEntity<?> scopeBlock = guardWorkflowScope(id, tenantId, orgId);
             if (scopeBlock != null) return scopeBlock;
+            ResponseEntity<?> readBlock = refuseRead(id, orgRole, tenantId);
+            if (readBlock != null) return readBlock;
             WorkflowEntity workflow = workflowRepository.findById(id).orElse(null);
             ScheduledExecutionDto schedule = triggerClient.getScheduleByWorkflowAndTrigger(
                     id, triggerId, scheduleOrganizationId(workflow, orgId));
@@ -196,7 +283,7 @@ public class ScheduleController {
             UUID id = UUID.fromString(workflowId);
             ResponseEntity<?> scopeBlock = guardWorkflowScope(id, tenantId, orgId);
             if (scopeBlock != null) return scopeBlock;
-            ResponseEntity<?> roleBlock = refuseViewer(orgRole, orgId, tenantId, "pause or resume a schedule");
+            ResponseEntity<?> roleBlock = refuseWrite(id, orgRole, orgId, tenantId, "pause or resume a schedule");
             if (roleBlock != null) return roleBlock;
             WorkflowEntity workflow = workflowRepository.findById(id).orElse(null);
             ScheduledExecutionDto schedule = triggerClient.getScheduleByWorkflowAndTrigger(
@@ -206,6 +293,7 @@ public class ScheduleController {
             }
 
             ScheduledExecutionDto updated = triggerClient.toggleSchedule(schedule.getId(), request.enabled(), orgId, tenantId);
+            if (updated != null && !updated.isEnabled()) workflowStopped(id);
             return ResponseEntity.ok(Map.of(
                     "success", true,
                     "triggerId", triggerId,
@@ -232,7 +320,7 @@ public class ScheduleController {
             UUID id = UUID.fromString(workflowId);
             ResponseEntity<?> scopeBlock = guardWorkflowScope(id, tenantId, orgId);
             if (scopeBlock != null) return scopeBlock;
-            ResponseEntity<?> roleBlock = refuseViewer(orgRole, orgId, tenantId, "run a schedule now");
+            ResponseEntity<?> roleBlock = refuseWrite(id, orgRole, orgId, tenantId, "run a schedule now");
             if (roleBlock != null) return roleBlock;
             WorkflowEntity workflow = workflowRepository.findById(id).orElse(null);
             ScheduledExecutionDto schedule = triggerClient.getScheduleByWorkflowAndTrigger(
@@ -281,8 +369,8 @@ public class ScheduleController {
             @RequestHeader(value = "X-User-Plan", required = false) String userPlan) {
         try {
             UUID id = UUID.fromString(workflowId);
-            ResponseEntity<?> roleBlock = refuseViewer(orgRole, orgId, tenantId, "create or edit a schedule");
-            if (roleBlock != null) return roleBlock;
+            ResponseEntity<?> viewerBlock = refuseViewer(orgRole, orgId, tenantId, "create or edit a schedule");
+            if (viewerBlock != null) return viewerBlock;
 
             // Pin gate - schedules follow the live toggle. See class-level contract.
             WorkflowEntity workflow = workflowRepository.findById(id).orElse(null);
@@ -295,6 +383,9 @@ public class ScheduleController {
                         workflowId, tenantId, orgId);
                 return ResponseEntity.notFound().build();
             }
+            // Deny-list half of the write gate, after scope so an out-of-scope id still 404s.
+            ResponseEntity<?> roleBlock = refuseWrite(id, orgRole, orgId, tenantId, "create or edit a schedule");
+            if (roleBlock != null) return roleBlock;
             if (workflow.getPinnedVersion() == null) {
                 return ResponseEntity.badRequest().body(Map.of(
                         "error", "Workflow is not pinned - toggle live on the application first",
@@ -348,9 +439,10 @@ public class ScheduleController {
             UUID id = UUID.fromString(workflowId);
             ResponseEntity<?> scopeBlock = guardWorkflowScope(id, tenantId, orgId);
             if (scopeBlock != null) return scopeBlock;
-            ResponseEntity<?> roleBlock = refuseViewer(orgRole, orgId, tenantId, "delete schedules");
+            ResponseEntity<?> roleBlock = refuseWrite(id, orgRole, orgId, tenantId, "delete schedules");
             if (roleBlock != null) return roleBlock;
             int archived = triggerClient.archiveSchedulesByWorkflow(id, "USER_DELETED");
+            if (archived > 0) workflowStopped(id);
             return ResponseEntity.ok(Map.of("success", true, "archived", archived));
         } catch (Exception e) {
             logger.error("Error archiving schedules: {}", e.getMessage(), e);
@@ -372,13 +464,15 @@ public class ScheduleController {
             UUID id = UUID.fromString(workflowId);
             ResponseEntity<?> scopeBlock = guardWorkflowScope(id, tenantId, orgId);
             if (scopeBlock != null) return scopeBlock;
-            ResponseEntity<?> roleBlock = refuseViewer(orgRole, orgId, tenantId, "delete a schedule");
+            ResponseEntity<?> roleBlock = refuseWrite(id, orgRole, orgId, tenantId, "delete a schedule");
             if (roleBlock != null) return roleBlock;
             WorkflowEntity workflow = workflowRepository.findById(id).orElse(null);
             ScheduledExecutionDto schedule = triggerClient.getScheduleByWorkflowAndTrigger(
                     id, triggerId, scheduleOrganizationId(workflow, orgId));
             if (schedule != null) {
-                triggerClient.archiveScheduleById(schedule.getId(), "USER_DELETED", orgId, tenantId);
+                if (triggerClient.archiveScheduleById(schedule.getId(), "USER_DELETED", orgId, tenantId)) {
+                    workflowStopped(id);
+                }
             }
             return ResponseEntity.ok(Map.of("success", true));
         } catch (Exception e) {

@@ -898,11 +898,12 @@ class HttpExecutionServiceTest {
                 parameters.add(objectMapper.createObjectNode().put("customerId", "8796682449"));
                 parameters.add(objectMapper.createObjectNode().put("developer-token", "DEVTOKEN"));
 
-                // 1st call (URI overload) → 401; retry (String overload) → 200, capture its HttpEntity.
-                when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
-                    .thenThrow(HttpClientErrorException.create(HttpStatus.UNAUTHORIZED, "Unauthorized", new HttpHeaders(), new byte[0], null));
+                // 1st call → 401; retry → 200. Both calls now pass the validated URI (item 9: no
+                // String overload anywhere), so they are told apart by ORDER; the captor's last
+                // value is the retry.
                 ArgumentCaptor<HttpEntity> retryCaptor = ArgumentCaptor.forClass(HttpEntity.class);
-                when(restTemplate.exchange(anyString(), any(HttpMethod.class), retryCaptor.capture(), eq(Object.class)))
+                when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), retryCaptor.capture(), eq(Object.class)))
+                    .thenThrow(HttpClientErrorException.create(HttpStatus.UNAUTHORIZED, "Unauthorized", new HttpHeaders(), new byte[0], null))
                     .thenReturn(new ResponseEntity<>(Map.of("ok", true), HttpStatus.OK));
 
                 Map<String, Object> result = service.executeHttpCallWithCredentials(
@@ -3260,7 +3261,7 @@ class HttpExecutionServiceTest {
                     HttpStatus.OK
                 );
 
-                when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(), eq(Object.class)))
+                when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
                     .thenReturn(response);
 
                 Map<String, Object> result = service.executeHttpCall(api, tool, parameters, Set.of());
@@ -3282,7 +3283,7 @@ class HttpExecutionServiceTest {
                 tool.setMethod("GET");
                 ArrayNode parameters = objectMapper.createArrayNode();
 
-                when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(), eq(Object.class)))
+                when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
                     .thenThrow(new RuntimeException("Connection refused"));
 
                 Map<String, Object> result = service.executeHttpCall(api, tool, parameters, Set.of());

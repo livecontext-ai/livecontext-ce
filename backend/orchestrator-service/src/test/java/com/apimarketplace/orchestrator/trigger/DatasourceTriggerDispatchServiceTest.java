@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -55,7 +56,8 @@ class DatasourceTriggerDispatchServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DatasourceTriggerDispatchService(productionRunResolver, triggerService, triggerUserResolver);
+        service = new DatasourceTriggerDispatchService(
+                productionRunResolver, triggerService, triggerUserResolver);
     }
 
     private WorkflowRunEntity runEntity(RunStatus status) {
@@ -381,6 +383,82 @@ class DatasourceTriggerDispatchServiceTest {
             assertThat(result.success()).isFalse();
             assertThat(result.status()).isEqualTo("error");
             assertThat(result.message()).contains("boom");
+        }
+    }
+
+    // ==================== LC-066: restricted-row run taint ====================
+
+    /**
+     * A row derived from Gmail / Drive makes the fired run restricted. The fire carries the mark
+     * ({@link ReusableTriggerService#RESTRICTED_DATA_MARKER}) instead of this service marking the run
+     * in its own memory: the production execution queue may run the fire on the other replica,
+     * where a local mark does not exist and the Gmail-derived payloads were stored NORMAL.
+     */
+    @Nested
+    @DisplayName("a RESTRICTED row makes the fire carry the restricted-data marker to whichever replica runs it")
+    class RestrictedRowTaint {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> firedPayload(String rowDataSensitivity, Map<String, Object> row) {
+            WorkflowRunEntity run = runEntity(RunStatus.WAITING_TRIGGER);
+            when(productionRunResolver.resolve(eq(WORKFLOW_ID), any())).thenReturn(foundResolution(run));
+            when(triggerService.executeTrigger(any(), anyString(), any(), any()))
+                    .thenReturn(TriggerExecutionResult.success(run.getRunIdPublic(), TRIGGER_ID,
+                            TriggerType.DATASOURCE, Set.of(), 1));
+
+            DatasourceTriggerDispatchService.DispatchResult result = service.dispatch(
+                    WORKFLOW_ID, TRIGGER_ID, "row_created", DS_ID, ROW_ID, row, null, TRIGGERED_AT,
+                    null, rowDataSensitivity);
+
+            assertThat(result.success()).isTrue();
+            ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
+            verify(triggerService).executeTrigger(eq(run), eq(TRIGGER_ID), eq(TriggerType.DATASOURCE), payload.capture());
+            return payload.getValue();
+        }
+
+        @Test
+        @DisplayName("regression: dataSensitivity=RESTRICTED puts the marker on the fired payload, next to the row")
+        void restrictedRowCarriesTheMarker() {
+            Map<String, Object> payload = firedPayload("RESTRICTED", sampleRow());
+
+            assertThat(payload).containsEntry(ReusableTriggerService.RESTRICTED_DATA_MARKER, Boolean.TRUE);
+            assertThat(payload).containsEntry("row_id", ROW_ID).containsEntry("status", "paid");
+        }
+
+        @Test
+        @DisplayName("dataSensitivity=NORMAL fires without the marker")
+        void normalRowCarriesNoMarker() {
+            assertThat(firedPayload("NORMAL", sampleRow()))
+                    .doesNotContainKey(ReusableTriggerService.RESTRICTED_DATA_MARKER);
+        }
+
+        @Test
+        @DisplayName("a legacy caller with no dataSensitivity fires without the marker")
+        void legacyCallerCarriesNoMarker() {
+            WorkflowRunEntity run = runEntity(RunStatus.WAITING_TRIGGER);
+            when(productionRunResolver.resolve(eq(WORKFLOW_ID), any())).thenReturn(foundResolution(run));
+            when(triggerService.executeTrigger(any(), anyString(), any(), any()))
+                    .thenReturn(TriggerExecutionResult.success(run.getRunIdPublic(), TRIGGER_ID,
+                            TriggerType.DATASOURCE, Set.of(), 1));
+
+            // 8-arg legacy overload - no sensitivity argument at all.
+            service.dispatch(WORKFLOW_ID, TRIGGER_ID, "row_created", DS_ID, ROW_ID, sampleRow(), null,
+                    TRIGGERED_AT);
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
+            verify(triggerService).executeTrigger(eq(run), eq(TRIGGER_ID), eq(TriggerType.DATASOURCE), payload.capture());
+            assertThat(payload.getValue()).doesNotContainKey(ReusableTriggerService.RESTRICTED_DATA_MARKER);
+        }
+
+        @Test
+        @DisplayName("a row whose own column is named like the marker cannot set it: the column is stripped")
+        void rowColumnCannotForgeTheMarker() {
+            Map<String, Object> forged = new java.util.HashMap<>(sampleRow());
+            forged.put(ReusableTriggerService.RESTRICTED_DATA_MARKER, Boolean.TRUE);
+
+            assertThat(firedPayload("NORMAL", forged))
+                    .doesNotContainKey(ReusableTriggerService.RESTRICTED_DATA_MARKER);
         }
     }
 }

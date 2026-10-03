@@ -8,6 +8,7 @@ import { useUserProfile } from '@/hooks/useUserProfile';
 import { allTimezoneOptions } from '@/lib/schedule/timezoneOptions';
 import { applyDisplayTimeZone, getBrowserTimeZone } from '@/lib/utils/timezone';
 import { clearStoredAgendaTimezone } from '@/hooks/useAgendaPreferences';
+import { SettingRow } from './SettingRow';
 
 /**
  * The account-wide display time zone, in the General Preferences list next to Language and
@@ -128,21 +129,24 @@ export function TimeZonePreferenceRow() {
   };
 
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
-      <div>
-        <h4 className="font-medium text-theme-primary">{t('timezone')}</h4>
-        <p className="text-sm text-theme-secondary">
-          {t('timezoneDescription')}
-          {nowThere ? ` ${t('timezoneNow', { time: nowThere })}` : ''}
-        </p>
-        {error && (
-          <p className="text-sm text-red-500" role="alert">
-            {t('timezoneSaveError')}
+    <SettingRow
+      title={t('timezone')}
+      description={(
+        <>
+          <p className="text-sm text-theme-secondary">
+            {t('timezoneDescription')}
+            {nowThere ? ` ${t('timezoneNow', { time: nowThere })}` : ''}
           </p>
-        )}
-      </div>
+          {error && (
+            <p className="text-sm text-red-500" role="alert">
+              {t('timezoneSaveError')}
+            </p>
+          )}
+        </>
+      )}
+    >
       <Select value={value} onValueChange={onChange} disabled={saving}>
-        <SelectTrigger className="w-full sm:w-[260px]" data-testid="timezone-select">
+        <SelectTrigger className="w-full" data-testid="timezone-select">
           <SelectValue placeholder={t('selectTimezone')} />
         </SelectTrigger>
         <SelectContent>
@@ -154,7 +158,7 @@ export function TimeZonePreferenceRow() {
           ))}
         </SelectContent>
       </Select>
-    </div>
+    </SettingRow>
   );
 }
 

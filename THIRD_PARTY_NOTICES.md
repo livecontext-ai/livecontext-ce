@@ -1,7 +1,7 @@
 # Third-Party Notices
 
 LiveContext Community Edition is licensed under the LiveContext Sustainable Use
-License 1.0 (see LICENSE). It bundles and depends on third-party components that
+License 1.1 (see LICENSE). It bundles and depends on third-party components that
 remain under their own licenses, listed below. This file is informational and
 does not modify the LICENSE terms.
 

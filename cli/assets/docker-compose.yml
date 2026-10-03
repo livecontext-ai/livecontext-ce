@@ -35,7 +35,7 @@ name: livecontext-ce
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     container_name: livecontext-db
     restart: unless-stopped
     environment:
@@ -59,7 +59,7 @@ services:
           memory: 512M
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     container_name: livecontext-redis
     restart: unless-stopped
     volumes:
@@ -79,7 +79,7 @@ services:
     # MinIO no longer publishes pullable images (Docker Hub and Quay both refuse anonymous pulls
     # since 2026-09), so this is Pigsty's maintained build of the same MinIO server: same data
     # format, entrypoint and root user, and it reads a volume written by the upstream image.
-    image: pgsty/minio:latest
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     container_name: livecontext-minio
     restart: unless-stopped
     environment:
@@ -100,7 +100,7 @@ services:
           memory: 256M
 
   minio-init:
-    image: pgsty/mc:latest
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z@sha256:cfc83108c3abb371f8fb84d99c1fdc88f8c237e022409b0081fb7c0a3be634dd
     container_name: livecontext-minio-init
     depends_on:
       minio:
@@ -131,6 +131,13 @@ services:
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      # LC-001: the bridge authenticates every /api/bridge call with a per-install secret the app
+      # container generates on first boot into the shared livecontext_bridge_secret volume. While
+      # the file is absent (first seconds of a fresh install, or an app image older than this
+      # compose) the bridge accepts unsigned calls and runs them restricted, with a WARN.
+      BRIDGE_SHARED_SECRET_FILE: /run/lc-bridge-secret/bridge-shared-secret
+    volumes:
+      - livecontext_bridge_secret:/run/lc-bridge-secret:ro
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8093/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
@@ -276,6 +283,8 @@ services:
       AUDIT_LOG_PATH: /app/logs/audit
     volumes:
       - livecontext_keys:/app/data/keys
+      # Per-install secret this container shares with the bridge (LC-001, see bridge above).
+      - livecontext_bridge_secret:/app/data/bridge-secret
       # Behind a TLS-intercepting proxy (corporate MITM / some antivirus)?
       # Drop the intercepting root-CA chain (PEM) into a host folder and mount
       # it - the entrypoint imports it into the JVM truststore at startup:
@@ -339,6 +348,10 @@ services:
       # SearXNG metasearch sidecar below, on the same `browser-agent` profile. Without
       # it, web_search returns nothing (the default 127.0.0.1:8086 is unreachable here).
       WEBSEARCH_SEARXNG_URL: http://searxng:8080
+      # Callbacks (browser-agent step trace) may only target the app: the origin
+      # of WEBSEARCH_CALLBACK_BASE_URL on the livecontext service. Empty = every
+      # callback is dropped (and the websearch startup logs a warning).
+      WEBSEARCH_CALLBACK_ALLOWED_ORIGINS: "http://livecontext:8080"
       BROWSER_HEADLESS: "true"
     # Chromium needs a large /dev/shm + relaxed seccomp for its sandbox.
     security_opt:
@@ -363,7 +376,7 @@ services:
   # JSON output format) are mounted from ./searxng/settings.yml; edit its server.secret_key.
   searxng:
     profiles: ["browser-agent"]
-    image: searxng/searxng:latest
+    image: searxng/searxng:2026.9.22-2ed96e6fc@sha256:f6f67c89efdac7b1bd4805703764ecaa9d0777b86a101b86cae4f1563de4d627
     container_name: livecontext-searxng
     restart: unless-stopped
     environment:
@@ -446,6 +459,8 @@ volumes:
   livecontext_minio:
     driver: local
   livecontext_keys:
+    driver: local
+  livecontext_bridge_secret:
     driver: local
   livecontext_logs:
     driver: local

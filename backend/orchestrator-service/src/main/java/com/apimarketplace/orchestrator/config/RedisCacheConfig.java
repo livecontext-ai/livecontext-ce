@@ -1,12 +1,12 @@
 package com.apimarketplace.orchestrator.config;
 
+import com.apimarketplace.common.event.RedisCacheTypeValidator;
 import com.apimarketplace.common.event.EventBus;
 import com.apimarketplace.common.event.KeyValueStore;
 import com.apimarketplace.common.event.RedisEventBus;
 import com.apimarketplace.common.event.RedisKeyValueStore;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -52,7 +52,8 @@ public class RedisCacheConfig {
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
         objectMapper.activateDefaultTyping(
-            LaissezFaireSubTypeValidator.instance,
+            // LC-081: allow-list, never LaissezFaire (any class name in @class was instantiated).
+            RedisCacheTypeValidator.create(),
             ObjectMapper.DefaultTyping.NON_FINAL,
             JsonTypeInfo.As.PROPERTY
         );

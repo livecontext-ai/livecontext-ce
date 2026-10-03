@@ -53,7 +53,8 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     },
     // Self-hosted deployments must never index marketing pages (same rule as
     // the landing page and /changelog).
-    robots: IS_CE ? { index: false, follow: false } : undefined,
+    // Only on CE: on the cloud an explicit 'robots: undefined' wiped the root layout's directives.
+    ...(IS_CE ? { robots: { index: false, follow: false } } : {}),
   };
 }
 

@@ -166,6 +166,49 @@ class WorkspaceDataPurgerTest {
         assertThat(sql.get(sql.size() - 1)).contains("INSERT INTO auth.purge_log");
     }
 
+    @Test
+    @DisplayName("LC-065: the workspace credentials are revoked at their providers BEFORE the credential delete")
+    void revokesAtProviderBeforeCredentialDelete() throws Exception {
+        var credentialService = org.mockito.Mockito.mock(com.apimarketplace.auth.credential.service.CredentialService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(purger, "credentialService", credentialService);
+
+        purger.purgeOperationalData(ORG_ID, WorkspaceDataPurger.SOURCE_WORKSPACE);
+
+        InOrder order = inOrder(credentialService, conn);
+        order.verify(credentialService).revokeAllForWorkspacePurge(ORG_ID, null);
+        order.verify(conn).prepareStatement(org.mockito.ArgumentMatchers.startsWith("DELETE FROM auth.credentials"));
+    }
+
+    @Test
+    @DisplayName("LC-065: a revocation failure never aborts the purge; the credential rows are still deleted")
+    void revocationFailureDoesNotAbortPurge() throws Exception {
+        var credentialService = org.mockito.Mockito.mock(com.apimarketplace.auth.credential.service.CredentialService.class);
+        org.mockito.Mockito.when(credentialService.revokeAllForWorkspacePurge(ORG_ID, null))
+                .thenThrow(new IllegalStateException("db hiccup"));
+        org.springframework.test.util.ReflectionTestUtils.setField(purger, "credentialService", credentialService);
+
+        List<String> sql = captureSql(() -> purger.purgeOperationalData(ORG_ID, WorkspaceDataPurger.SOURCE_WORKSPACE));
+
+        assertThat(sql).anyMatch(s -> s.startsWith("DELETE FROM auth.credentials"));
+    }
+
+    @Test
+    @DisplayName("Regression LC-065: a failed revocation lookup is rolled back to its savepoint BEFORE the credential delete")
+    void failedRevocationLookupRolledBackBeforeCredentialDelete() throws Exception {
+        // The lookup is SQL on the purge's connection: without this rollback Postgres refuses every
+        // later statement of the purge ("current transaction is aborted").
+        var credentialService = org.mockito.Mockito.mock(com.apimarketplace.auth.credential.service.CredentialService.class);
+        org.mockito.Mockito.when(credentialService.revokeAllForWorkspacePurge(ORG_ID, null))
+                .thenThrow(new org.springframework.jdbc.BadSqlGrammarException("lookup", "SELECT", new SQLException("boom")));
+        org.springframework.test.util.ReflectionTestUtils.setField(purger, "credentialService", credentialService);
+
+        purger.purgeOperationalData(ORG_ID, WorkspaceDataPurger.SOURCE_WORKSPACE);
+
+        InOrder order = inOrder(conn);
+        order.verify(conn).rollback(savepoint);
+        order.verify(conn).prepareStatement(org.mockito.ArgumentMatchers.startsWith("DELETE FROM auth.credentials"));
+    }
+
     // -- SAML connection + Keycloak IdP --
 
     @Test

@@ -135,10 +135,12 @@ vi.mock('@/lib/stores/current-org-store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/stores/current-org-store')>()),
   useCanMutateInCurrentOrg: () => true,
 }));
+/** The page's query string, and the node the inspector was last opened on. */
+const page = vi.hoisted(() => ({ query: '', inspected: null as string | null }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
   usePathname: () => '/app/agent',
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(page.query),
 }));
 vi.mock('@/hooks/useThemeSafely', () => ({ useThemeSafely: () => ({ theme: 'light' }) }));
 vi.mock('@/hooks/useSvgSafeId', () => ({ useSvgSafeId: () => 'pattern-1' }));
@@ -151,7 +153,7 @@ vi.mock('@/app/workflows/builder/hooks/useInspectorDrag', () => ({
 vi.mock('@/app/workflows/builder/constants/graphTypes', () => ({ nodeTypes: {} }));
 vi.mock('../FleetInspectorPanel', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../FleetInspectorPanel')>()),
-  FleetInspectorPanel: () => null,
+  FleetInspectorPanel: ({ node }: { node: { id: string } }) => { page.inspected = node.id; return null; },
 }));
 // The canvas wraps itself in the workflow builder's providers, which reach for
 // auth, feature flags and queries this test has no interest in. Pass-throughs.
@@ -214,6 +216,8 @@ class NoopResizeObserver {
 beforeEach(() => {
   injectedNodes = [];
   modal = null;
+  page.query = '';
+  page.inspected = null;
   deleteAgent.mockReset().mockResolvedValue(undefined);
   refetch.mockReset().mockResolvedValue(undefined);
   disconnectFleetResource.mockReset().mockResolvedValue(undefined);
@@ -328,5 +332,26 @@ describe('the single-agent canvas (the side panel Configuration tab)', () => {
     await act(async () => { notifyResourceDeleted('agent', SUB_AGENT); });
 
     expect(refetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the node selected in the address (?node=)', () => {
+  it('reopens the inspector on that node on the full fleet page', () => {
+    page.query = `view=fleet&node=agent-${SUB_AGENT}`;
+    mount();
+    expect(page.inspected).toBe(`agent-${SUB_AGENT}`);
+  });
+
+  it('selects nothing when the node no longer exists', () => {
+    // A link kept after the agent was deleted: no inspector, and no crash.
+    page.query = 'view=fleet&node=agent-gone';
+    mount();
+    expect(page.inspected).toBeNull();
+  });
+
+  it('is ignored by the single-agent canvas, which sits on a page it does not own', () => {
+    page.query = `node=agent-${SUB_AGENT}`;
+    mount({ singleAgentId: SUBJECT });
+    expect(page.inspected).toBeNull();
   });
 });

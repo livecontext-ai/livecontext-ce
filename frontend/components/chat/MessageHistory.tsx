@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { getClientLocale } from '@/lib/utils/locale';
 import { useTranslations } from 'next-intl';
+import { isRestrictedDataRefusal } from '@/lib/api/error-utils';
 import { useIsomorphicLayoutEffect } from '@/lib/hooks/useIsomorphicLayoutEffect';
 import { Message, CompactionMarker } from '@/lib/api/conversationApi';
 import LoadingSpinner from '@/components/LoadingSpinner';
@@ -577,6 +578,16 @@ export function MessageHistory({
                       </div>
                     )}
                     {/* Clean thinking markers from stored messages */}
+                    {/* A persisted "[Error] RESTRICTED_DATA_PROVIDER_NOT_ALLOWED: ..." turn: explain the
+                        fix in the reader's language above the raw backend text. */}
+                    {hasContent && isAssistant && isRestrictedDataRefusal(displayContent) && (
+                      <p
+                        className="text-sm mb-2 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300"
+                        data-testid="restricted-data-refusal"
+                      >
+                        {t('errors.restrictedDataProvider')}
+                      </p>
+                    )}
                     {hasContent && (() => {
                       const parsed = parseThinkingMarker(displayContent);
                       const contentToRender = parsed ? parsed.cleanContent : displayContent;

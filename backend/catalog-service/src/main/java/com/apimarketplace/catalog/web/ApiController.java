@@ -37,6 +37,10 @@ public class ApiController {
 
     private final ApiService apiService;
     private final AuthorizationService authorizationService;
+
+    /** Same secret the importer presents for the other global catalog writes. */
+    @org.springframework.beans.factory.annotation.Value("${catalog.admin-token:}")
+    private String catalogAdminToken;
     
     /**
      * Process complete API configuration from frontend (DTO version)
@@ -45,7 +49,8 @@ public class ApiController {
     public ResponseEntity<Map<String, Object>> processApiConfiguration(
             @Valid @RequestBody ApiConfigurationRequest request,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestHeader(value = "X-Internal-Admin-Token", required = false) String adminToken) {
         try {
             // Extract user ID from either X-User-Id header or Authorization header
             String finalUserId = userId;
@@ -55,7 +60,10 @@ public class ApiController {
                 finalUserId = "authenticated-user";
             }
 
-            ApiResponse response = apiService.processApiConfiguration(request, finalUserId);
+            // LC-002: a user submission is sanitised (source forced to custom, no caller-chosen
+            // credential key or primary key, a derived key owned by anyone else refused).
+            ApiResponse response = apiService.processSubmittedApiConfiguration(request, finalUserId,
+                    com.apimarketplace.common.web.AdminRoleGuard.isInternalAdminToken(catalogAdminToken, adminToken));
             
             // Wrapper la reponse pour inclure success et data
             Map<String, Object> wrappedResponse = new HashMap<>();

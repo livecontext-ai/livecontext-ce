@@ -1,7 +1,7 @@
 import { apiClient } from '../api-client';
 
-/** The four groups a person chooses a delivery for. */
-export type NotificationTopic = 'FAILURES' | 'CREDITS' | 'ACCOUNT' | 'TASKS';
+/** The groups a person chooses a delivery for. */
+export type NotificationTopic = 'FAILURES' | 'CREDITS' | 'ACCOUNT' | 'TASKS' | 'FOLLOWING' | 'AUDIENCE';
 
 /** Where a topic reaches the person besides the bell, which always gets it. */
 export type NotificationDelivery = 'OFF' | 'EMAIL' | 'CHANNEL' | 'BOTH';

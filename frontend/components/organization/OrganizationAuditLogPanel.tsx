@@ -12,7 +12,7 @@
  * nothing (gated by the caller via currentUserRole).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   organizationApi,
   type AuditLogEntry,
@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollText, RefreshCw } from "lucide-react";
 import { formatUtcDateTime } from "@/lib/utils/dateFormatters";
+import { urlEnum, urlPageIndex, useUrlState } from "@/hooks/useUrlState";
 
 interface Props {
   orgId: string;
@@ -29,6 +30,22 @@ interface Props {
 }
 
 const PAGE_SIZE = 25;
+
+// The event types the filter offers. "" is "all categories".
+const CATEGORIES = [
+  "",
+  "ORG_MEMBER_INVITED",
+  "ORG_INVITE_ACCEPTED",
+  "ORG_INVITE_CANCELLED",
+  "ORG_MEMBER_REMOVED",
+  "ORG_MEMBER_LEFT",
+  "ORG_ROLE_CHANGED",
+  "ORG_OWNERSHIP_TRANSFERRED",
+  "ORG_DELETED",
+  "ORG_QUOTA_CAP_SET",
+  "ORG_QUOTA_CAP_REMOVED",
+  "ORG_QUOTA_CAP_EXCEEDED",
+] as const;
 
 export default function OrganizationAuditLogPanel({ orgId, currentUserRole }: Props) {
   const canRead = currentUserRole === "OWNER" || currentUserRole === "ADMIN";
@@ -38,8 +55,9 @@ export default function OrganizationAuditLogPanel({ orgId, currentUserRole }: Pr
   const [items, setItems] = useState<AuditLogEntry[]>([]);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [totalCount, setTotalCount] = useState(0);
-  const [page, setPage] = useState(0);
-  const [category, setCategory] = useState<string>("");
+  // The filter and the page live in the address, so a reload reopens the log where it was.
+  const [page, setPage] = useUrlState("page", 0, { codec: urlPageIndex });
+  const [category, setCategory] = useUrlState<string>("category", "", { codec: urlEnum(CATEGORIES) });
   // Gate for rendering - set once the first unfiltered fetch confirms the
   // workspace has events. Keeps the section visible after the user applies
   // a filter that returns zero matches.
@@ -49,6 +67,7 @@ export default function OrganizationAuditLogPanel({ orgId, currentUserRole }: Pr
   // only to unmount it when the probe resolves with totalCount=0.
   const [initialized, setInitialized] = useState(false);
 
+  const fetchPageRef = useRef<(p: number, cat: string) => Promise<void>>(async () => {});
   const fetchPage = useCallback(
     async (p: number, cat: string) => {
       setLoading(true);
@@ -59,6 +78,12 @@ export default function OrganizationAuditLogPanel({ orgId, currentUserRole }: Pr
           page: p,
           size: PAGE_SIZE,
         });
+        // A page restored from the address can be past the end: load the last one instead.
+        const lastPage = Math.max(0, Math.ceil(result.totalCount / PAGE_SIZE) - 1);
+        if (result.items.length === 0 && p > lastPage) {
+          await fetchPageRef.current(lastPage, cat);
+          return;
+        }
         setItems(result.items);
         setUserNames(result.userNames ?? {});
         setTotalCount(result.totalCount);
@@ -73,8 +98,11 @@ export default function OrganizationAuditLogPanel({ orgId, currentUserRole }: Pr
         setInitialized(true);
       }
     },
-    [orgId],
+    [orgId, setPage],
   );
+  useEffect(() => {
+    fetchPageRef.current = fetchPage;
+  }, [fetchPage]);
 
   // Eager initial probe - runs once per orgId for OWNER/ADMIN.
   useEffect(() => {
@@ -83,7 +111,10 @@ export default function OrganizationAuditLogPanel({ orgId, currentUserRole }: Pr
       setLoading(false);
       return;
     }
-    fetchPage(0, "");
+    // A filter restored from the address was set on a log that had events: the unfiltered
+    // probe is skipped, and a filtered answer of zero must not hide the section.
+    if (category) setHasAnyEvents(true);
+    fetchPage(page, category);
     // We intentionally do not depend on `fetchPage` to avoid double-fetches
     // when downstream state changes. orgId change re-runs the probe.
     // eslint-disable-next-line react-hooks/exhaustive-deps

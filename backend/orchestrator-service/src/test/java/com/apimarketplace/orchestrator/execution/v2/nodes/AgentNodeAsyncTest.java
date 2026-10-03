@@ -333,6 +333,56 @@ class AgentNodeAsyncTest {
     // ═══════════════════════════════════════════════════════════════════════════
 
     @Nested
+    @DisplayName("LC-056: the queue payload is budgeted by the platform, not by the node's params")
+    class ServerOwnedPayloadFields {
+
+        /** An agent whose params try to set the budget, and whose loop length is above the ceiling. */
+        private AgentNode nodeWithHostileParams() {
+            Map<String, Object> params = new HashMap<>();
+            params.put("tenantBalance", 1_000_000.0);
+            params.put("pricingRates", List.of(Map.of("provider", "openai", "model", "gpt-4o", "inputRate", 0)));
+            params.put("maxCreditBudget", 1_000_000.0);
+            params.put("creditsConsumedSoFar", 0.0);
+            params.put("maxTokens", 200_000);
+            Agent agent = new Agent("agent-config-1", "agent", "Test Agent", null, null, "openai", "gpt-4o",
+                "You are a test agent", "Analyze this", 0.7, null, 5000, 5, List.of(), null, params,
+                List.of(), null, List.of(), null, null);
+            AgentNode node = new AgentNode("agent:test_node", agent);
+            node.acceptServices(buildServiceRegistry());
+            node.setAsyncQueueEnabled(true);
+            return node;
+        }
+
+        private Map<String, Object> payload(AgentNode node) {
+            NodeExecutionResult result = node.execute(context);
+            return ((AgentExecutionRequestMessage) result.output().get("queueMessage")).requestPayload();
+        }
+
+        @Test
+        @DisplayName("regression: budget fields and pricingRates written in the params never reach the queue payload")
+        void budgetFieldsFromParamsAreDropped() {
+            assertThat(payload(nodeWithHostileParams()))
+                .doesNotContainKeys("tenantBalance", "pricingRates", "maxCreditBudget", "creditsConsumedSoFar");
+        }
+
+        @Test
+        @DisplayName("maxTokens comes from the agent config only, as on the inline path (the pre-flight priced that cap)")
+        void maxTokensComesFromTheAgentConfigOnly() {
+            // The params ask for 200000; the agent config (4096, the default for an unset value) runs.
+            assertThat(payload(nodeWithHostileParams())).containsEntry("maxTokens", 4096);
+        }
+
+        @Test
+        @DisplayName("regression: the queued loop length is the CLAMPED value, never the configured 5000")
+        void queuedMaxIterationsIsClamped() {
+            assertThat(payload(nodeWithHostileParams()))
+                .containsEntry("maxIterations", AgentNode.MAX_ITERATIONS_CEILING);
+            assertThat(AgentNode.MAX_ITERATIONS_CEILING)
+                .isEqualTo(com.apimarketplace.agent.client.dto.execution.AgentExecutionRequestDto.MAX_ITERATIONS_LIMIT);
+        }
+    }
+
+    @Nested
     @DisplayName("Queue message output")
     class QueueMessageOutput {
 

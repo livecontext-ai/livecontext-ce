@@ -305,6 +305,12 @@ public class SubWorkflowNode extends BaseNode {
             }
 
             String subRunId = run.getRunIdPublic();
+            // LC-066: the child receives this run's data as its trigger input, so a parent holding
+            // Gmail / Drive data makes the child restricted from its first payload on.
+            if (stepPayloadService != null && context.runId() != null
+                    && stepPayloadService.isRunRestricted(context.runId())) {
+                stepPayloadService.markRunRestricted(subRunId);
+            }
             logger.info("SubWorkflow firing trigger: nodeId={}, subRunId={}, triggerId={}, type={}",
                 nodeId, subRunId, triggerId, triggerType);
 
@@ -501,6 +507,15 @@ public class SubWorkflowNode extends BaseNode {
             output.put("itemIndex", context.itemIndex());
             output.put("item_id", context.itemId());
             output.put("resolved_params", resolvedParams);
+            // LC-066, the other direction: the child's outputs of THIS call become this node's
+            // output. When one of them is Gmail / Drive data the output is tagged, which stores it
+            // RESTRICTED and restricts this run. Read from this epoch's outputs, not from the
+            // child's run: that run is shared by every caller and restricted for good once any
+            // restricted caller used it, which would restrict unrelated workflows calling it.
+            if (resultOutputs.values().stream().anyMatch(SubWorkflowNode::holdsRestrictedData)) {
+                output.put(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY,
+                    com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+            }
 
             logger.info("SubWorkflow completed: nodeId={}, subRunId={}, epoch={}, outputKeys={}",
                 nodeId, subRunId, triggerResult.epoch(), resultOutputs.keySet());
@@ -1170,6 +1185,25 @@ public class SubWorkflowNode extends BaseNode {
     }
 
     /**
+     * Whether one stored step output of the child is restricted data by its own content: a catalog
+     * result naming Gmail / Drive (its metadata), or an output already tagged (a table load, a
+     * nested sub-workflow). A stored payload holds the step output flattened or under "output".
+     */
+    @SuppressWarnings("unchecked")
+    static boolean holdsRestrictedData(Object stepOutput) {
+        if (!(stepOutput instanceof Map<?, ?> stored)) {
+            return false;
+        }
+        if (com.apimarketplace.common.classification.RestrictedDataPolicy
+                .fromToolMetadata((Map<String, ?>) stored).isRestricted()) {
+            return true;
+        }
+        return stored.get("output") instanceof Map<?, ?> inner
+            && com.apimarketplace.common.classification.RestrictedDataPolicy
+                .fromToolMetadata((Map<String, ?>) inner).isRestricted();
+    }
+
+    /**
      * Gets the current sub-workflow recursion depth from context global data.
      */
     private int getCurrentDepth(ExecutionContext context) {
@@ -1347,7 +1381,11 @@ public class SubWorkflowNode extends BaseNode {
         this.stepOutputService = registry.getStepOutputService();
         this.workflowStepDataRepository = registry.getWorkflowStepDataRepository();
         this.workflowRedisPublisher = registry.getWorkflowRedisPublisher();
+        this.stepPayloadService = registry.getStepPayloadService();
     }
+
+    /** LC-066: carries the parent run's restricted-data taint to the child run. */
+    private com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
 
     // ========================================================================
     // SERVICE INJECTION (via setters, like WaitNode pattern)
@@ -1381,6 +1419,12 @@ public class SubWorkflowNode extends BaseNode {
     public void setWorkflowRedisPublisher(
             com.apimarketplace.orchestrator.services.streaming.redis.WorkflowRedisPublisher workflowRedisPublisher) {
         this.workflowRedisPublisher = workflowRedisPublisher;
+    }
+
+    /** LC-066: carries the parent run's restricted-data taint to the child run. Test seam. */
+    public void setStepPayloadService(
+            com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService) {
+        this.stepPayloadService = stepPayloadService;
     }
 
     // Package-private getters for testing

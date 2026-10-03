@@ -141,7 +141,7 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- Gateway Auth ---
 
-import { gatewaySignedHeaders } from './bridge/lib/gatewayAuth.mjs';
+import { gatewaySignedHeaders, withGatewaySignatureV2 } from './bridge/lib/gatewayAuth.mjs';
 
 const GATEWAY_SECRET_KEY = process.env.GATEWAY_SECRET_KEY || '';
 
@@ -176,6 +176,8 @@ async function apiPost(path, body, timeoutMs = 0) {
   // legacy single-tenant deploys behave identically.
   if (ORGANIZATION_ID) headers['X-Organization-ID'] = ORGANIZATION_ID;
   if (ORGANIZATION_ROLE) headers['X-Organization-Role'] = ORGANIZATION_ROLE;
+  // CASA LC-035: v2 signature over the FINAL headers + method + URL (no-op without a secret).
+  Object.assign(headers, withGatewaySignatureV2(headers, { secretKey: GATEWAY_SECRET_KEY, method: 'POST', url }));
   // Optional bound (timeoutMs > 0): a hanging fetch (e.g. right after a host reboot,
   // before k3s networking is ready, the ClusterIP routes but never answers) would
   // otherwise block startSession indefinitely - and because the MCP handshake used

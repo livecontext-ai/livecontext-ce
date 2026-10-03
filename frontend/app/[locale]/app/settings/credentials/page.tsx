@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
+import { urlEnum, useUrlState } from "@/hooks/useUrlState";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { useSearchParams } from "next/navigation";
 import { KeyRound, User } from "lucide-react";
@@ -29,6 +30,9 @@ import { CredentialsListSkeleton } from "@/components/skeletons";
 import { showSamePageUrl } from '@/lib/navigation/showSamePageUrl';
 import { slugOrNull, track } from '@/lib/analytics/analytics';
 
+// What the lists under the tabs keep in the address (search, page, default filter, auth type).
+const LIST_URL_KEYS = ["q", "page", "filter", "type"] as const;
+
 export default function CredentialsPage() {
   const { isAuthenticated, isAuthChecking } = useAuthGuard();
   const { loginWithRedirect } = useAuth();
@@ -48,8 +52,19 @@ export default function CredentialsPage() {
   // State
   // Primary toggle: Credentials | Variables. The classic my/available toggle
   // becomes the secondary level, shown only under Credentials.
-  const [primaryTab, setPrimaryTab] = useState<CredentialsPrimaryTab>("credentials");
-  const [activeTab, setActiveTab] = useState<CredentialTab>("my");
+  // Both levels live in the address (`?tab=` and `?view=`), so a reload reopens the same list.
+  // The search, page and filters of the list being left go with it: the three lists are never
+  // mounted together and share those names.
+  const [primaryTab, setPrimaryTab] = useUrlState<CredentialsPrimaryTab>("tab", "credentials", {
+    codec: urlEnum(["credentials", "variables"]),
+    history: "push",
+    clears: LIST_URL_KEYS,
+  });
+  const [activeTab, setActiveTab] = useUrlState<CredentialTab>("view", "my", {
+    codec: urlEnum(["my", "available"]),
+    history: "push",
+    clears: LIST_URL_KEYS,
+  });
   const [selectedTemplate, setSelectedTemplate] = useState<CredentialTemplate | null>(null);
   const [requirements, setRequirements] = useState<CredentialWizardRequirement[]>([]);
   const [isWizardOpen, setIsWizardOpen] = useState(false);
@@ -121,12 +136,13 @@ export default function CredentialsPage() {
         duration: 5000,
       });
 
-      // Clean up URL query params
-      cleanCallbackUrl();
-
-      // Optionally switch to "My Credentials" tab to show the new credential
+      // Optionally switch to "My Credentials" tab to show the new credential, then strip the
+      // callback params from the address.
       setPrimaryTab('credentials');
       setActiveTab('my');
+
+      // Clean up URL query params
+      cleanCallbackUrl();
     } else if (error) {
       // Show error notification
       addToast({
@@ -139,7 +155,7 @@ export default function CredentialsPage() {
       // Clean up URL query params
       cleanCallbackUrl();
     }
-  }, [searchParams, addToast, t]);
+  }, [searchParams, addToast, t, setPrimaryTab, setActiveTab]);
 
   // Cancel a pending "open next configure in advanced mode" intent if the
   // user navigates away from Available before picking an integration. Without

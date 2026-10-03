@@ -65,13 +65,32 @@ export function capturePendingRewardCode(win: Window, now: number = Date.now()):
   }
   const code = codeFromUrl(url);
   if (!code) return null;
+  return keep(win, code, now, /\/redeem\/?$/.test(url.pathname));
+}
+
+/**
+ * Remember a partner code met outside a URL parameter (a partner's offer page, whose short link
+ * carries a token rather than the code): handled like a passing `?lc_ref=` link, so a fresh code
+ * already waiting is kept (first code wins). Returns the code that will apply.
+ */
+export function rememberPendingRewardCode(win: Window, rawCode: string, now: number = Date.now()): string | null {
+  const candidate = (rawCode ?? '').trim();
+  if (!CODE_RE.test(candidate)) return null;
+  return keep(win, candidate.toUpperCase(), now, false);
+}
+
+/**
+ * Store a code, unless (when it does not replace) a fresh one is already waiting. Returns the code
+ * that will apply. A blocked store keeps nothing: the code can still be typed (pre-filled on
+ * /redeem), and an offer page applies the one it remembered.
+ */
+function keep(win: Window, code: string, now: number, replace: boolean): string {
   try {
-    const explicit = /\/redeem\/?$/.test(url.pathname);
     const existing = read(win.localStorage);
-    if (!explicit && existing && now - existing.savedAt < MAX_AGE_MS) return existing.code;
+    if (!replace && existing && now - existing.savedAt < MAX_AGE_MS) return existing.code;
     win.localStorage.setItem(PENDING_REWARD_CODE_KEY, JSON.stringify({ code, savedAt: now }));
   } catch {
-    // Blocked store: the /redeem card still shows the code pre-filled.
+    // Blocked store: see above.
   }
   return code;
 }

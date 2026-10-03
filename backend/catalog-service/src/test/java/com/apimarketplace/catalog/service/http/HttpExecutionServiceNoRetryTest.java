@@ -99,6 +99,7 @@ class HttpExecutionServiceNoRetryTest {
         // platform no longer re-sends: the caller (a node's retryCount, or the agent) decides.
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
 
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
                     .thenThrow(tooManyRequests("0"))
@@ -120,6 +121,7 @@ class HttpExecutionServiceNoRetryTest {
     void a429IsSentOnceOnTheTypedPath() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
 
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
                     .thenThrow(tooManyRequests("0"))
@@ -139,6 +141,7 @@ class HttpExecutionServiceNoRetryTest {
     void a429IsSentOnceOnTheBinaryPath() throws Exception {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             var handler = org.mockito.Mockito.mock(
                     com.apimarketplace.catalog.service.execution.BinaryResponseHandler.class);
             lenient().when(handler.handle(any(), any(), any(), any(), any())).thenReturn(Map.of("path", "f.png"));
@@ -173,8 +176,9 @@ class HttpExecutionServiceNoRetryTest {
     void a429IsSentOnceOnTheLegacyPath() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
 
-            lenient().when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(), eq(Object.class)))
+            lenient().when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
                     .thenThrow(tooManyRequests("0"))
                     .thenReturn(new ResponseEntity<>(Map.of("ok", true), HttpStatus.OK));
 
@@ -183,7 +187,7 @@ class HttpExecutionServiceNoRetryTest {
 
             assertThat(result.get("success")).isNotEqualTo(true);
             verify(restTemplate, times(1))
-                    .exchange(anyString(), any(HttpMethod.class), any(), eq(Object.class));
+                    .exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class));
         }
     }
 
@@ -193,6 +197,7 @@ class HttpExecutionServiceNoRetryTest {
         // The removed built-in rule also re-sent a safe method on a 503 carrying a Retry-After.
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             HttpHeaders headers = new HttpHeaders();
             headers.set(HttpHeaders.RETRY_AFTER, "0");
 
@@ -216,6 +221,7 @@ class HttpExecutionServiceNoRetryTest {
     void retryAfterDeltaSecondsIsReturned() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
                     .thenThrow(tooManyRequests("42"));
 
@@ -231,6 +237,7 @@ class HttpExecutionServiceNoRetryTest {
     void forbiddenKeepsRetryAfter() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             HttpHeaders headers = new HttpHeaders();
             headers.set(HttpHeaders.RETRY_AFTER, "60");
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
@@ -250,7 +257,8 @@ class HttpExecutionServiceNoRetryTest {
     void retryAfterOnTheLegacyPath() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
-            lenient().when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(), eq(Object.class)))
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
+            lenient().when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
                     .thenThrow(tooManyRequests("9"));
 
             Map<String, Object> result = service.executeHttpCall(
@@ -265,14 +273,16 @@ class HttpExecutionServiceNoRetryTest {
     void retryAfterAfterTokenRefresh() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             ApiEntity api = api();
             api.setPlatformCredentialName("tiktok");
             when(userCredentialService.forceRefreshAndGetToken(any(), any()))
                     .thenReturn(java.util.Optional.of("fresh-token"));
+            // Both sends pass the validated URI: the first answers 401, the re-send after the token
+            // refresh answers 429.
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
                     .thenThrow(HttpClientErrorException.create(
-                            HttpStatus.UNAUTHORIZED, "Unauthorized", new HttpHeaders(), "{}".getBytes(), null));
-            when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(), eq(Object.class)))
+                            HttpStatus.UNAUTHORIZED, "Unauthorized", new HttpHeaders(), "{}".getBytes(), null))
                     .thenThrow(tooManyRequests("12"));
 
             Map<String, Object> result = service.executeHttpCallWithCredentials(
@@ -288,6 +298,7 @@ class HttpExecutionServiceNoRetryTest {
     void retryAfterOnTheTypedPath() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
                     .thenThrow(tooManyRequests("5"));
 
@@ -335,6 +346,7 @@ class HttpExecutionServiceNoRetryTest {
         // a self-hosted install can receive one in a bundle from an older cloud.
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             ApiEntity api = api();
             api.setErrorPolicy("[{\"match\":{\"bodyContains\":\"rate_limit_exceeded\"},"
                     + "\"action\":\"retry\",\"waitMs\":250,"
@@ -361,6 +373,7 @@ class HttpExecutionServiceNoRetryTest {
     void doesNotRetryOrdinaryFailures() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             ArrayNode parameters = objectMapper.createArrayNode();
 
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
@@ -382,6 +395,7 @@ class HttpExecutionServiceNoRetryTest {
     void doesNotRetryNetworkErrors() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             ArrayNode parameters = objectMapper.createArrayNode();
 
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
@@ -422,6 +436,7 @@ class HttpExecutionServiceNoRetryTest {
     void typedPathUsesTheDeclaredMessage() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             ArrayNode parameters = objectMapper.createArrayNode();
             ApiEntity api = api();
             api.setErrorPolicy("[{\"match\":{\"bodyContains\":\"unaudited_client\"},"
@@ -454,6 +469,7 @@ class HttpExecutionServiceNoRetryTest {
     void credentialedPathUsesTheDeclaredMessage() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             ArrayNode parameters = objectMapper.createArrayNode();
             ApiEntity api = api();
             api.setErrorPolicy("[{\"match\":{\"bodyContains\":\"spam_risk_too_many_posts\"},"
@@ -480,6 +496,7 @@ class HttpExecutionServiceNoRetryTest {
     void declaredMessageAppliesToForbidden() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             ApiEntity api = api();
             api.setErrorPolicy("[{\"match\":{\"status\":403,\"bodyContains\":\"unaudited_client\"},"
                     + "\"action\":\"user_error\","
@@ -505,6 +522,7 @@ class HttpExecutionServiceNoRetryTest {
     void failureAfterTokenRefreshIsPoliced() {
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             ApiEntity api = api();
             api.setErrorPolicy("[{\"match\":{\"bodyContains\":\"spam_risk_too_many_posts\"},"
                     + "\"action\":\"user_error\","
@@ -518,14 +536,12 @@ class HttpExecutionServiceNoRetryTest {
             api.setPlatformCredentialName("tiktok");
             when(userCredentialService.forceRefreshAndGetToken(any(), any()))
                     .thenReturn(java.util.Optional.of("fresh-token"));
-            // Two different overloads on purpose: the first dispatch passes a URI, the
-            // post-refresh one still passes the String form, so a single stub would leave the
-            // second call unmocked and returning null.
+            // Both dispatches pass the validated URI now (no String overload anywhere), so the
+            // first call answers 401 and the post-refresh one 400, by order.
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class), any(), eq(Object.class)))
                     .thenThrow(HttpClientErrorException.create(
                             HttpStatus.UNAUTHORIZED, "Unauthorized", new HttpHeaders(),
-                            "{}".getBytes(), null));
-            when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(), eq(Object.class)))
+                            "{}".getBytes(), null))
                     .thenThrow(HttpClientErrorException.create(
                             HttpStatus.BAD_REQUEST, "Bad Request", new HttpHeaders(),
                             "{\"code\":\"spam_risk_too_many_posts\"}".getBytes(), null));
@@ -549,6 +565,7 @@ class HttpExecutionServiceNoRetryTest {
         // the provider's body says something specific and the seed knows how to phrase it.
         try (MockedStatic<UrlSafetyValidator> urlValidator = mockStatic(UrlSafetyValidator.class)) {
             urlValidator.when(() -> UrlSafetyValidator.validateUrl(anyString())).thenAnswer(i -> null);
+            urlValidator.when(() -> UrlSafetyValidator.validateEgressUrl(anyString())).thenAnswer(i -> null);
             ApiEntity api = api();
             api.setErrorPolicy("[{\"match\":{\"status\":401,\"bodyContains\":\"app_suspended\"},"
                     + "\"action\":\"user_error\","

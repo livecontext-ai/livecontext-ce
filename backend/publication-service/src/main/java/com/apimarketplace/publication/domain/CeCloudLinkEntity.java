@@ -32,13 +32,22 @@ public class CeCloudLinkEntity implements OrgScopedEntity {
     @Column(name = "cloud_username", nullable = false)
     private String cloudUsername;
 
-    @Column(name = "encrypted_refresh_token", nullable = false, length = 4096)
+    /*
+     * The three token columns are written on INSERT only (a new link), never by save() of an
+     * existing row. The cloud realm rotates refresh tokens: each one is spent on use. Any entity
+     * instance loaded before a refresh still holds the spent token, and a save() of it (register,
+     * heartbeat, source toggles) used to put that spent token back, ending the link's session at
+     * the next refresh. After the insert, only CeCloudLinkRepository.updateTokens (the refresh)
+     * and clearCachedAccessToken (a revoked link) change them, and the refresh reads them with
+     * findTokensByTenantId, never from an entity instance that may be stale.
+     */
+    @Column(name = "encrypted_refresh_token", nullable = false, length = 4096, updatable = false)
     private String encryptedRefreshToken;
 
-    @Column(name = "cached_access_token", length = 4096)
+    @Column(name = "cached_access_token", length = 4096, updatable = false)
     private String cachedAccessToken;
 
-    @Column(name = "token_expires_at")
+    @Column(name = "token_expires_at", updatable = false)
     private Instant tokenExpiresAt;
 
     @Column(name = "linked_at", nullable = false)

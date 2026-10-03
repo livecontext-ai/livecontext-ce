@@ -1,5 +1,6 @@
 package com.apimarketplace.interfaces.controller;
 
+import com.apimarketplace.common.web.ShareContextResourceBinding;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.interfaces.domain.InterfaceEntity;
 import com.apimarketplace.interfaces.domain.InterfaceRunSnapshotEntity;
@@ -36,7 +37,6 @@ class InterfaceControllerTest {
 
     @Mock private InterfaceService interfaceService;
     @Mock private InterfaceSnapshotService snapshotService;
-
     private MockMvc mockMvc;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final InterfaceDtoMapper mapper = new InterfaceDtoMapper();

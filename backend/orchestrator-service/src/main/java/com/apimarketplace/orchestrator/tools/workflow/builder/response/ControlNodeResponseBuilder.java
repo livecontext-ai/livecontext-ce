@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder.response;
 
+import com.apimarketplace.orchestrator.execution.v2.split.SplitNodeExecutor;
 import com.apimarketplace.orchestrator.tools.workflow.builder.ResponseContextBuilder;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderSession;
 import lombok.RequiredArgsConstructor;
@@ -180,8 +181,12 @@ public class ControlNodeResponseBuilder {
         result.put("list", list);
         result.put("maxItems", maxItems);
 
-        // Execution mode
-        result.put("execution", "PARALLEL - all items processed simultaneously (max " + maxItems + ")");
+        // Execution mode. The ceiling rides along because this response is what the agent reads
+        // right after creating the split, which is the cheapest moment to learn the cap exists:
+        // items beyond maxItems are skipped, and maxItems cannot exceed the ceiling (LC-064).
+        result.put("execution", "PARALLEL - all items processed simultaneously (maxItems " + maxItems
+                + ", highest accepted value " + SplitNodeExecutor.SPLIT_HARD_CEILING
+                + "; items beyond maxItems are not processed)");
 
         // Variables (contextual)
         String normalizedLabel = WorkflowBuilderSession.normalizeLabel(label);

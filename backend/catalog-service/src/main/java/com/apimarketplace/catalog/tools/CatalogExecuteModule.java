@@ -281,8 +281,16 @@ public class CatalogExecuteModule implements ToolModule {
     public Optional<ToolExecutionResult> executeGeneration(Map<String, Object> parameters,
                                                             ToolExecutionContext context,
                                                             GenerationBilling billing) {
+        // Keyed on "generation", NOT "catalog". This method is reached only from GenerationModule,
+        // the MCP tool registered as GenerationToolsProvider.TOOL_NAME, so the access mode a
+        // scoped API key resolves for it is generationAccessMode (LC-055). Asking for
+        // catalogAccessMode here refused a key granted generation but only READ on catalog, and
+        // allowed one granted catalog write but not generation. The constant is referenced so
+        // the two cannot drift apart.
         var accessDenied = ToolAccessControl.checkWriteAccess(
-                context != null ? context.credentials() : null, "catalog", "execute");
+                context != null ? context.credentials() : null,
+                com.apimarketplace.catalog.tools.generation.GenerationToolsProvider.TOOL_NAME,
+                "execute");
         if (accessDenied.isPresent()) {
             return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get()));
         }
@@ -605,7 +613,7 @@ public class CatalogExecuteModule implements ToolModule {
         }
 
         Map<String, Object> metadata = new LinkedHashMap<>(upstreamMetadata);
-        metadata.put("credentialNeeded", true);
+        metadata.put(com.apimarketplace.common.classification.RestrictedDataPolicy.CREDENTIAL_NEEDED_KEY, true);
         metadata.put("serviceType", service);
         metadata.put("serviceName", display);
         if (!metadata.containsKey("iconSlug")) {
@@ -1406,6 +1414,8 @@ public class CatalogExecuteModule implements ToolModule {
 
             Map<String, Object> authMetadata = new LinkedHashMap<>();
             authMetadata.put("authExpired", true);
+            // The provider refused the call: the Reconnect card names Gmail and read nothing of it.
+            authMetadata.put(com.apimarketplace.common.classification.RestrictedDataPolicy.CREDENTIAL_NEEDED_KEY, true);
             authMetadata.put("errorType", "authentication");
             authMetadata.put("serviceType", iconSlug);
             authMetadata.put("serviceName", serviceName);
@@ -1664,7 +1674,7 @@ public class CatalogExecuteModule implements ToolModule {
                 serviceName, serviceName, serviceName));
 
             Map<String, Object> metadata = new LinkedHashMap<>();
-            metadata.put("credentialNeeded", true);
+            metadata.put(com.apimarketplace.common.classification.RestrictedDataPolicy.CREDENTIAL_NEEDED_KEY, true);
             metadata.put("serviceApprovalRequested", true);
             metadata.put("serviceType", serviceType);
             metadata.put("serviceName", serviceName);

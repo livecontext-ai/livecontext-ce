@@ -108,6 +108,10 @@ export interface DataTableProps {
    *  sentinel that appends the next page when scrolled to the bottom of the grid.
    *  Used by the workflow step table where users want to scroll through every epoch. */
   infiniteScroll?: boolean;
+  /** Keep the view (search, sort, column filters, page, page size) in the address, so a reload
+   *  reopens the table as it was. Only for a table's OWN page: an embedded table (side panel,
+   *  modal, builder inspector) sits on someone else's address and must not write to it. */
+  urlState?: boolean;
 }
 
 /** Server-side filter inputs for the workflow stepAlias detailed endpoint. */

@@ -1,137 +1,41 @@
-'use client';
-
-import { SidebarProvider } from '@/contexts/SidebarContext';
-import { UnifiedAppProvider } from '@/contexts/UnifiedAppContext';
-import { NavigationGuardProvider } from '@/contexts/NavigationGuardContext';
-import { StreamingProvider } from '@/contexts/StreamingContext';
-import { WorkflowRunProvider } from '@/contexts/WorkflowRunContext';
-import { SidePanelProvider } from '@/contexts/SidePanelContext';
-import { SidePanelLayoutProvider } from '@/contexts/SidePanelLayoutContext';
-import { WorkflowLayoutDirectionProvider } from '@/contexts/WorkflowLayoutDirectionContext';
-import { InspectorDockProvider } from '@/contexts/InspectorDockContext';
-import { InspectorOpenModeProvider } from '@/contexts/InspectorOpenModeContext';
-import { AppShell } from './AppShell';
-import InsufficientCreditsModal from '@/components/billing/InsufficientCreditsModal';
-import InsufficientStorageModal from '@/components/billing/InsufficientStorageModal';
-import AppPlanComparisonDialog from '@/components/pricing/AppPlanComparisonDialog';
-import MissingApiKeyModal from '@/components/billing/MissingApiKeyModal';
-import CeCloudCreditModal from '@/components/billing/CeCloudCreditModal';
-import ModelNotManagedModal from '@/components/billing/ModelNotManagedModal';
-import CloudLinkPlanRequiredModal from '@/components/billing/CloudLinkPlanRequiredModal';
-import AgentErrorModal from '@/components/billing/AgentErrorModal';
-import SuggestedAppsModal from '@/components/billing/SuggestedAppsModal';
-import WelcomeGiftModal from '@/components/billing/WelcomeGiftModal';
-import AccountRestoreModal from '@/components/auth/AccountRestoreModal';
-import ChangelogModal from '@/components/changelog/ChangelogModal';
-import AppViewTracker from '@/components/analytics/AppViewTracker';
-import ProfileContextReporter from '@/components/lifecycle/ProfileContextReporter';
-import PendingRewardCodeRedeemer from '@/components/reward/PendingRewardCodeRedeemer';
-import DisplayPreferencesGate from '@/components/lifecycle/DisplayPreferencesGate';
-import IncidentStrip from '@/components/app/IncidentStrip';
-import RealtimeConnectionNotice from '@/components/app/RealtimeConnectionNotice';
-import TwoFactorNudge from '@/components/app/TwoFactorNudge';
-import { IS_CE } from '@/lib/edition';
+import type { ReactNode } from 'react';
+import { headers } from 'next/headers';
+import AppLayoutClient from './AppLayoutClient';
+import HtmlLangSync from '@/components/security/HtmlLangSync';
 
 /**
- * Layout for all /app routes
+ * Thin Server Component wrapper for every `/app` route (LC-027 CASA E3, round 2).
  *
- * Structure:
- *   AppSidebar | (AppHeader + main content) | SidePanel
+ * `/app` moved from the static ('self' 'unsafe-inline' https:) script-src class into the
+ * per-request NONCE class (lib/security/securityHeaders.mjs's NONCE_CSP_PREFIXES, proxy.ts) - a
+ * nonce is only meaningful on a per-request render, which needs a Server Component somewhere in
+ * the tree to opt the route into dynamic rendering (`export const dynamic = 'force-dynamic'`).
+ * The PREVIOUS `layout.tsx` was itself a Client Component (providers, AppShell, modals) and
+ * cannot export route-segment config, so it moved verbatim into `./AppLayoutClient.tsx` and this
+ * file wraps it. Nesting (a Server layout rendering a Client layout as `children`) rather than a
+ * sibling `template.tsx` is deliberate: a template remounts everything below it on every
+ * navigation, which would drop state this tree currently persists across in-app navigation (an
+ * open settings tab, a running canvas). A layout does not remount its children on navigation, so
+ * this split changes nothing about that persistence.
  *
- * AppHeader and SidePanel live here so they persist across navigations
- * and are never duplicated. Each page just renders its content.
- *
- * SidePanel is lazy-rendered: nothing is mounted until a tab is opened.
- * Pages register tabs via useSidePanel().openTab() / addTab().
+ * `HtmlLangSync` re-stamps the `<html lang>` script with THIS request's nonce - see that
+ * component's own comment for why `app/[locale]/layout.tsx` cannot do this itself.
  */
-export default function AppLayout({
+export const dynamic = 'force-dynamic';
+
+export default async function AppLayout({
   children,
+  params,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
+  params: Promise<{ locale: string }>;
 }) {
+  const { locale } = await params;
+  const nonce = (await headers()).get('x-nonce');
   return (
-    <SidebarProvider>
-      <UnifiedAppProvider>
-        <StreamingProvider>
-          <WorkflowRunProvider>
-              <SidePanelProvider>
-                <SidePanelLayoutProvider>
-                <WorkflowLayoutDirectionProvider>
-                <InspectorDockProvider>
-                <InspectorOpenModeProvider>
-                <NavigationGuardProvider>
-                  <div className="h-[100dvh] bg-theme-primary transition-colors duration-300 fixed inset-0 z-50">
-                    {/* Sidebar + content + side panel, arranged per the dock-position
-                        preference (right / bottom / bottom-full). */}
-                    {/* CE (self-hosted) ships no product analytics/tracking. */}
-                    {!IS_CE && <AppViewTracker />}
-                    {/* Locale, time zone and first-touch acquisition for the cloud
-                        lifecycle e-mails, once per session. Here, not in the root
-                        providers, so share, embed and public pages never send it. */}
-                    {!IS_CE && <ProfileContextReporter />}
-                    {/* Applies the partner / creator code the person arrived with. */}
-                    {!IS_CE && <PendingRewardCodeRedeemer />}
-                    {/* Applies the stored display time zone (and captures this device's when the
-                        account has none), so every date below reads in the person's zone. It
-                        WRAPS the shell rather than sitting beside it: nothing that formats a date
-                        subscribes to the zone, so a preference that lands after the first paint
-                        has to re-render what it affects. BOTH editions, unlike the reporter
-                        above: a self-hosted install writes its notification e-mails from the same
-                        stored preference. */}
-                    <DisplayPreferencesGate>
-                      <AppShell>{children}</AppShell>
-                    </DisplayPreferencesGate>
-                    {/* Ongoing-incident strip. Mounted here rather than inside
-                        AppShell: AppShell renders two different arrangements and
-                        moving a child between those branches remounts the subtree
-                        (a running canvas, an SSE stream). Cloud-only, like the
-                        rest of the status feature. */}
-                    {!IS_CE && <IncidentStrip />}
-                    {/* Live updates down for a while: says so, offers a reload. Both
-                        editions. Here, not in AppShell, for the reason given above. */}
-                    <RealtimeConnectionNotice />
-                    {/* Team owner without two-factor: a one-time, dismissible suggestion.
-                        Here for the same reason as the strip above. Cloud-only. */}
-                    {!IS_CE && <TwoFactorNudge />}
-                    {/* The two modals onboarding arms, in the order it arms
-                        them: what the new account already has, then what it can
-                        start from. The ORDER on screen is the hand-off's doing,
-                        but the mount order below is not free: the gift is
-                        mounted first, and a child's mount effects run before its
-                        parent's, so the suggestions modal subscribes to the
-                        release event AFTER the gift's own mount effect has run.
-                        The gift therefore never settles inside that effect, only
-                        on a later render pass. Moving either line, or making the
-                        gift decide at mount, drops the release into a window
-                        where nobody is listening. */}
-                    <WelcomeGiftModal />
-                    <SuggestedAppsModal />
-                    <InsufficientCreditsModal />
-                    <InsufficientStorageModal />
-                    {/* The comparison's only in-app opener is the pricing page's
-                        "Compare plans" button, which lives in this tree. It stays
-                        mounted here rather than inside that page because the
-                        dialog listens on a window event. */}
-                    <AppPlanComparisonDialog />
-                    <MissingApiKeyModal />
-                    <CeCloudCreditModal />
-                    <ModelNotManagedModal />
-                    <CloudLinkPlanRequiredModal />
-                    <AgentErrorModal />
-                    <AccountRestoreModal />
-                    {/* One entry, the newest, once per user. Both editions: the announcement is
-                        about the build the user is actually running. */}
-                    <ChangelogModal />
-                  </div>
-                </NavigationGuardProvider>
-                </InspectorOpenModeProvider>
-                </InspectorDockProvider>
-                </WorkflowLayoutDirectionProvider>
-                </SidePanelLayoutProvider>
-              </SidePanelProvider>
-          </WorkflowRunProvider>
-        </StreamingProvider>
-      </UnifiedAppProvider>
-    </SidebarProvider>
+    <>
+      <HtmlLangSync locale={locale} nonce={nonce} />
+      <AppLayoutClient>{children}</AppLayoutClient>
+    </>
   );
 }

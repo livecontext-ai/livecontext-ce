@@ -338,6 +338,42 @@ class StorageExplorerControllerTest {
     }
 
     @Test
+    @DisplayName("LC-063: download-zip reduces uploader-supplied names to safe leaf entries (no zip slip)")
+    void downloadZipStripsTraversalFromEntryNames() throws IOException {
+        UUID id1 = UUID.randomUUID();
+        UUID id2 = UUID.randomUUID();
+        UUID id3 = UUID.randomUUID();
+        UUID id4 = UUID.randomUUID();
+        when(storageService.getEntityByIdForScope(eq(id1), any(), any()))
+                .thenReturn(Optional.of(textEntity(id1, "../../../../etc/cron.d/evil", "one")));
+        when(storageService.getEntityByIdForScope(eq(id2), any(), any()))
+                .thenReturn(Optional.of(textEntity(id2, "..\\..\\Startup\\run.bat", "two")));
+        when(storageService.getEntityByIdForScope(eq(id3), any(), any()))
+                .thenReturn(Optional.of(textEntity(id3, "..", "three")));
+        when(storageService.getEntityByIdForScope(eq(id4), any(), any()))
+                .thenReturn(Optional.of(textEntity(id4, "C:EVIL", "four")));
+
+        ResponseEntity<StreamingResponseBody> resp = controller.downloadZip("1", "org-1", "MEMBER",
+                Map.of("ids", List.of(id1.toString(), id2.toString(), id3.toString(), id4.toString())));
+
+        Map<String, String> entries = readZip(realize(resp));
+        assertThat(entries).containsOnlyKeys("evil", "run.bat", "file", "C_EVIL");
+        assertThat(entries.keySet()).allSatisfy(name ->
+                assertThat(name).doesNotContain("/").doesNotContain("\\").doesNotContain(".."));
+    }
+
+    @Test
+    @DisplayName("LC-063: safe entry names dedupe case-insensitively (a Windows extractor would overwrite)")
+    void zipEntryNamesDedupeCaseInsensitively() {
+        java.util.Set<String> used = new java.util.HashSet<>();
+        assertThat(StorageExplorerController.uniqueEntryName(used, "Report.PDF")).isEqualTo("Report.PDF");
+        assertThat(StorageExplorerController.uniqueEntryName(used, "report.pdf")).isEqualTo("report (1).pdf");
+        assertThat(StorageExplorerController.uniqueEntryName(used, "x/report.pdf")).isEqualTo("report (2).pdf");
+        assertThat(StorageExplorerController.safeZipEntryName("a\u0000b\nc.txt")).isEqualTo("a_b_c.txt");
+        assertThat(StorageExplorerController.safeZipEntryName(" ")).isEqualTo("file");
+    }
+
+    @Test
     @DisplayName("download-zip de-duplicates identical filenames so no ZIP entry is lost")
     void downloadZipDedupsDuplicateNames() throws IOException {
         UUID id1 = UUID.randomUUID();

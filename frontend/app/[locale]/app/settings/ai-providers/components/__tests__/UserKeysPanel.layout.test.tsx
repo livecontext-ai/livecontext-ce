@@ -3,8 +3,9 @@
  * Layout regression for the own-keys panel (2026-09-22): every card was crushed.
  *
  * <p>The arithmetic behind it. This panel renders inside the settings column, and at the
- * {@code md} breakpoint that column is about 500px wide because {@code SettingsNav} takes 192 of
- * them. With {@code md:grid-cols-2} each card therefore got roughly 240px to hold a provider
+ * {@code md} breakpoint that column was about 500px wide because {@code SettingsNav} took 192 of
+ * them (the menu now moves beside the page from the settings layout's {@code @3xl} container
+ * width, but the page column is still that narrow right after it does). With {@code md:grid-cols-2} each card therefore got roughly 240px to hold a provider
  * logo, a provider name, a route chip, a toggle, a key field and two buttons. Inside the card the
  * header was a single flex row, so the route chip - which spells out a whole sentence
  * ("Runs on the LiveContext key (yours is saved)") - fought the provider name for the same line;

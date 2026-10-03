@@ -264,6 +264,39 @@ class ConversationToolExecutionServiceTest {
         }
 
         @Test
+        @DisplayName("regression (LC-066 re-audit): a copy of a RESTRICTED result keeps its class, so the copy is purged like the original")
+        void copyOfARestrictedResultKeepsItsClass() {
+            var savedResult = mock(com.apimarketplace.conversation.entity.ToolResult.class);
+            when(savedResult.getToolName()).thenReturn("catalog");
+            when(savedResult.isSuccess()).thenReturn(true);
+            when(savedResult.getContentFull()).thenReturn("{\"messages\": [\"wire approved\"]}");
+            when(savedResult.getDataSensitivity()).thenReturn("RESTRICTED");
+            when(toolResultService.getByToolCallId("call_gmail", "tenant-1", null)).thenReturn(Optional.of(savedResult));
+
+            ToolResult result = service.executeTool(createToolCall("call_1", "get_tool_result",
+                Map.of("tool_call_id", "call_gmail")), createToolDefinition("get_tool_result"), "tenant-1", Map.of());
+
+            assertThat(com.apimarketplace.common.classification.RestrictedDataPolicy
+                .fromToolMetadata(result.metadata()).isRestricted()).isTrue();
+        }
+
+        @Test
+        @DisplayName("a copy of an ordinary result carries no tag")
+        void copyOfAnOrdinaryResultCarriesNoTag() {
+            var savedResult = mock(com.apimarketplace.conversation.entity.ToolResult.class);
+            when(savedResult.getToolName()).thenReturn("catalog");
+            when(savedResult.isSuccess()).thenReturn(true);
+            when(savedResult.getContentFull()).thenReturn("{}");
+            when(savedResult.getDataSensitivity()).thenReturn("NORMAL");
+            when(toolResultService.getByToolCallId("call_x", "tenant-1", null)).thenReturn(Optional.of(savedResult));
+
+            ToolResult result = service.executeTool(createToolCall("call_1", "get_tool_result",
+                Map.of("tool_call_id", "call_x")), createToolDefinition("get_tool_result"), "tenant-1", Map.of());
+
+            assertThat(result.metadata()).isNullOrEmpty();
+        }
+
+        @Test
         @DisplayName("should fail when tool_call_id is missing")
         void shouldFailWhenToolCallIdMissing() {
             ToolCall toolCall = createToolCall("call_1", "get_tool_result", new HashMap<>());
@@ -379,6 +412,27 @@ class ConversationToolExecutionServiceTest {
         }
 
         @Test
+        @DisplayName("regression (LC-066 re-audit): a Gmail Connect card reads no mailbox, so it never marks the conversation restricted")
+        void gmailConnectCardIsNotRestrictedData() {
+            Map<String, Object> gmailService = new HashMap<>();
+            gmailService.put("serviceType", "gmail");
+            gmailService.put("serviceName", "Gmail");
+            gmailService.put("iconSlug", "gmail");
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("services", List.of(gmailService));
+            args.put("reason", "Need Gmail access");
+
+            ToolResult result = service.executeTool(createToolCall("call_1", "request_credential", args),
+                createToolDefinition("request_credential"), "tenant-1", Map.of());
+
+            // The card names Gmail (icon, tool name) only to be drawn; nothing was read.
+            assertThat(result.metadata()).containsEntry("iconSlug", "gmail");
+            assertThat(com.apimarketplace.common.classification.RestrictedDataPolicy
+                .fromToolMetadata(result.metadata()).isRestricted()).as("metadata=%s", result.metadata()).isFalse();
+        }
+
+        @Test
         @DisplayName("should fail when services list is empty after parsing")
         void shouldFailWhenServicesEmpty() {
             Map<String, Object> args = new HashMap<>();
@@ -442,6 +496,9 @@ class ConversationToolExecutionServiceTest {
             assertThat(result.content()).isNull();
             assertThat(result.metadata()).containsEntry("silentError", true);
             assertThat(result.metadata()).containsEntry("exists", true);
+            // LC-066 re-audit: this result names Gmail to label itself and read nothing.
+            assertThat(result.metadata()).containsEntry(
+                com.apimarketplace.common.classification.RestrictedDataPolicy.CREDENTIAL_NEEDED_KEY, true);
             assertThat(result.metadata()).doesNotContainKey("serviceApprovalRequested");
             assertThat(result.metadata()).doesNotContainKey("needsAttention");
         }

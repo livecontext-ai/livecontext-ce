@@ -56,7 +56,11 @@ export function usePreparedGraph(
         // Do NOT use node.selected - it may be stale and updating it triggers render loops.
         const isSelected = selectedNodeIds.includes(node.id);
 
-        const currentZIndex = isSelected ? 20 : nodeRegistry.isNoteNode(node) ? 0 : nodeRegistry.isWhileGroupNode(node) ? 0 : 10;
+        // A note whose node is selected is raised and highlighted with it: selecting a
+        // node (or focusing it from a run) is when its explanation must be readable.
+        const isNoteOfSelected = nodeRegistry.isNoteNode(node)
+          && !!node.data?.noteAttachedTo && selectedNodeIds.includes(node.data.noteAttachedTo);
+        const currentZIndex = isSelected || isNoteOfSelected ? 20 : nodeRegistry.isNoteNode(node) ? 0 : nodeRegistry.isWhileGroupNode(node) ? 0 : 10;
         const currentZIndexInStyle = node.style?.zIndex;
         const needsStyleUpdate = currentZIndex !== currentZIndexInStyle;
         const updatedStyle = needsStyleUpdate
@@ -112,6 +116,7 @@ export function usePreparedGraph(
             style: updatedStyle,
             data: {
               ...node.data,
+              noteFocused: isNoteOfSelected,
               onNoteUpdate: (updates: any) => {
                 callbacks.handleNodeUpdate({ ...node.data, ...updates });
               },

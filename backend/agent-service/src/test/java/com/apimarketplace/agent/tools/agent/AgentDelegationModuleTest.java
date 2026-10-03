@@ -47,6 +47,10 @@ class AgentDelegationModuleTest {
 
     private static final String TENANT = "tenant-a";
     private static final String ORG = "org-a";
+    private static final com.apimarketplace.common.classification.DataSensitivity NORMAL =
+            com.apimarketplace.common.classification.DataSensitivity.NORMAL;
+    private static final com.apimarketplace.common.classification.DataSensitivity RESTRICTED =
+            com.apimarketplace.common.classification.DataSensitivity.RESTRICTED;
 
     @Mock private AgentTaskService taskService;
     @Mock private AgentTaskRecurrenceService recurrenceService;
@@ -144,7 +148,7 @@ class AgentDelegationModuleTest {
         @DisplayName("assign creates WITH labels/estimate/time/blockers/checklist in a single call")
         void assignAppliesExtras() {
             AgentTaskEntity backlog = sampleTask(taskId, null); // backlog (assignee null) -> early return, no sync-exec
-            when(taskService.assignTask(eq(TENANT), eq(agentId), isNull(), any(CreateTaskRequest.class), anyBoolean()))
+            when(taskService.assignTask(eq(TENANT), eq(agentId), isNull(), any(CreateTaskRequest.class), anyBoolean(), any()))
                     .thenReturn(backlog);
             when(taskService.setTaskLabels(eq(TENANT), eq(taskId), eq(agentId), isNull(), any(), any())).thenReturn(backlog);
             when(taskService.setTaskEstimate(eq(TENANT), eq(taskId), eq(agentId), isNull(), any(), anyBoolean(), any(), anyBoolean())).thenReturn(backlog);
@@ -172,7 +176,7 @@ class AgentDelegationModuleTest {
         @DisplayName("assign forwards free-text label NAMES (get-or-create) when label_ids is absent")
         void assignForwardsLabelNames() {
             AgentTaskEntity backlog = sampleTask(taskId, null);
-            when(taskService.assignTask(eq(TENANT), eq(agentId), isNull(), any(CreateTaskRequest.class), anyBoolean()))
+            when(taskService.assignTask(eq(TENANT), eq(agentId), isNull(), any(CreateTaskRequest.class), anyBoolean(), any()))
                     .thenReturn(backlog);
             when(taskService.setTaskLabels(eq(TENANT), eq(taskId), eq(agentId), isNull(), any(), any())).thenReturn(backlog);
 
@@ -191,7 +195,7 @@ class AgentDelegationModuleTest {
         @DisplayName("assign forwards label_ids AND label names together (union)")
         void assignForwardsIdsAndNames() {
             AgentTaskEntity backlog = sampleTask(taskId, null);
-            when(taskService.assignTask(eq(TENANT), eq(agentId), isNull(), any(CreateTaskRequest.class), anyBoolean()))
+            when(taskService.assignTask(eq(TENANT), eq(agentId), isNull(), any(CreateTaskRequest.class), anyBoolean(), any()))
                     .thenReturn(backlog);
             when(taskService.setTaskLabels(eq(TENANT), eq(taskId), eq(agentId), isNull(), any(), any())).thenReturn(backlog);
 
@@ -211,7 +215,7 @@ class AgentDelegationModuleTest {
         void updateAppliesExtras() {
             taskVisible(taskId);
             AgentTaskEntity t = sampleTask(taskId, agentId);
-            when(taskService.updateTask(eq(TENANT), eq(taskId), eq(agentId), isNull(), any())).thenReturn(t);
+            when(taskService.updateTask(eq(TENANT), eq(taskId), eq(agentId), isNull(), any(), any())).thenReturn(t);
             when(taskService.setTaskLabels(eq(TENANT), eq(taskId), eq(agentId), isNull(), any(), any())).thenReturn(t);
 
             Map<String, Object> params = new HashMap<>();
@@ -228,7 +232,7 @@ class AgentDelegationModuleTest {
         void updateAppliesAllExtras() {
             taskVisible(taskId);
             AgentTaskEntity t = sampleTask(taskId, agentId);
-            when(taskService.updateTask(eq(TENANT), eq(taskId), eq(agentId), isNull(), any())).thenReturn(t);
+            when(taskService.updateTask(eq(TENANT), eq(taskId), eq(agentId), isNull(), any(), any())).thenReturn(t);
             when(taskService.setTaskLabels(eq(TENANT), eq(taskId), eq(agentId), isNull(), any(), any())).thenReturn(t);
             when(taskService.setTaskEstimate(eq(TENANT), eq(taskId), eq(agentId), isNull(), any(), anyBoolean(), any(), anyBoolean())).thenReturn(t);
             when(taskService.setTaskBlockers(eq(TENANT), eq(taskId), eq(agentId), isNull(), any())).thenReturn(t);
@@ -254,7 +258,7 @@ class AgentDelegationModuleTest {
         @DisplayName("empty extra lists are forwarded as clear (empty-list) operations")
         void emptyListsClear() {
             AgentTaskEntity backlog = sampleTask(taskId, null);
-            when(taskService.assignTask(eq(TENANT), eq(agentId), isNull(), any(CreateTaskRequest.class), anyBoolean()))
+            when(taskService.assignTask(eq(TENANT), eq(agentId), isNull(), any(CreateTaskRequest.class), anyBoolean(), any()))
                     .thenReturn(backlog);
             when(taskService.setTaskLabels(eq(TENANT), eq(taskId), eq(agentId), isNull(), any(), any())).thenReturn(backlog);
             when(taskService.setTaskBlockers(eq(TENANT), eq(taskId), eq(agentId), isNull(), any())).thenReturn(backlog);
@@ -277,7 +281,7 @@ class AgentDelegationModuleTest {
         @Test
         @DisplayName("assign without extras touches none of the extra setters")
         void assignNoExtras() {
-            when(taskService.assignTask(eq(TENANT), eq(agentId), isNull(), any(CreateTaskRequest.class), anyBoolean()))
+            when(taskService.assignTask(eq(TENANT), eq(agentId), isNull(), any(CreateTaskRequest.class), anyBoolean(), any()))
                     .thenReturn(sampleTask(taskId, null));
 
             Map<String, Object> params = new HashMap<>();
@@ -340,7 +344,7 @@ class AgentDelegationModuleTest {
             UUID assignee = UUID.randomUUID();
             AgentTaskEntity created = sampleTask(UUID.randomUUID(), assignee);
             ArgumentCaptor<CreateTaskRequest> captor = ArgumentCaptor.forClass(CreateTaskRequest.class);
-            when(taskService.assignTask(eq(TENANT), isNull(), eq(TENANT), captor.capture(), eq(true)))
+            when(taskService.assignTask(eq(TENANT), isNull(), eq(TENANT), captor.capture(), eq(true), any()))
                     .thenReturn(created);
             when(taskService.executeTaskSync(any())).thenReturn(created);
 
@@ -350,7 +354,7 @@ class AgentDelegationModuleTest {
 
             assertThat(r).isPresent();
             assertThat(r.get().success()).isTrue();
-            verify(taskService).assignTask(eq(TENANT), isNull(), eq(TENANT), any(), eq(true));
+            verify(taskService).assignTask(eq(TENANT), isNull(), eq(TENANT), any(), eq(true), any());
         }
 
         @Test
@@ -409,7 +413,7 @@ class AgentDelegationModuleTest {
             UUID assignee = UUID.randomUUID();
             AgentTaskEntity created = sampleTask(UUID.randomUUID(), assignee);
             ArgumentCaptor<CreateTaskRequest> captor = ArgumentCaptor.forClass(CreateTaskRequest.class);
-            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), captor.capture(), eq(true)))
+            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), captor.capture(), eq(true), any()))
                     .thenReturn(created);
             when(taskService.executeTaskSync(any())).thenReturn(created);
 
@@ -434,7 +438,7 @@ class AgentDelegationModuleTest {
         void rateLimit() {
             UUID caller = UUID.randomUUID();
             AgentTaskEntity created = sampleTask(UUID.randomUUID(), null);
-            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean())).thenReturn(created);
+            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean(), any())).thenReturn(created);
 
             Map<String, Object> params = Map.of("title", "t", "instructions", "i");
             ToolExecutionContext turnCtx = ctx(caller, "turn-rl");
@@ -458,7 +462,7 @@ class AgentDelegationModuleTest {
         void rateLimitPerTurn() {
             UUID caller = UUID.randomUUID();
             AgentTaskEntity created = sampleTask(UUID.randomUUID(), null);
-            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean())).thenReturn(created);
+            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean(), any())).thenReturn(created);
 
             Map<String, Object> params = Map.of("title", "t", "instructions", "i");
             // 5 in turn A
@@ -474,7 +478,7 @@ class AgentDelegationModuleTest {
         @DisplayName("Service-thrown IllegalArgumentException becomes failure")
         void serviceErrorBecomesFailure() {
             UUID caller = UUID.randomUUID();
-            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean()))
+            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean(), any()))
                     .thenThrow(new IllegalArgumentException("title is required"));
 
             Optional<ToolExecutionResult> r = module.execute("assign",
@@ -499,7 +503,7 @@ class AgentDelegationModuleTest {
             UUID caller = UUID.randomUUID();
             UUID anyAssignee = UUID.randomUUID();
             AgentTaskEntity created = sampleTask(UUID.randomUUID(), anyAssignee);
-            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(true)))
+            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(true), any()))
                     .thenReturn(created);
             when(taskService.executeTaskSync(any())).thenReturn(created);
 
@@ -551,7 +555,7 @@ class AgentDelegationModuleTest {
             UUID caller = UUID.randomUUID();
             UUID assignee = UUID.randomUUID();
             AgentTaskEntity pending = sampleTask(UUID.randomUUID(), assignee);
-            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(false)))
+            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(false), any()))
                     .thenReturn(pending);
 
             Optional<ToolExecutionResult> r = module.execute("assign",
@@ -575,7 +579,7 @@ class AgentDelegationModuleTest {
             UUID caller = UUID.randomUUID();
             UUID assignee = UUID.randomUUID();
             AgentTaskEntity pending = sampleTask(UUID.randomUUID(), assignee);
-            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(true)))
+            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(true), any()))
                     .thenReturn(pending);
 
             Optional<ToolExecutionResult> r = module.execute("assign",
@@ -600,7 +604,7 @@ class AgentDelegationModuleTest {
             AgentTaskEntity terminal = sampleTask(created.getId(), assignee);
             terminal.setStatus(AgentTaskEntity.STATUS_COMPLETED);
             terminal.setResult("done");
-            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(true)))
+            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(true), any()))
                     .thenReturn(created);
             when(taskService.executeTaskSync(created)).thenReturn(terminal);
 
@@ -627,7 +631,7 @@ class AgentDelegationModuleTest {
             UUID caller = UUID.randomUUID();
             UUID assignee = UUID.randomUUID();
             AgentTaskEntity created = sampleTask(UUID.randomUUID(), assignee);
-            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(true)))
+            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(true), any()))
                     .thenReturn(created);
             when(taskService.executeTaskSync(created)).thenReturn(created);
 
@@ -665,7 +669,7 @@ class AgentDelegationModuleTest {
             UUID caller = UUID.randomUUID();
             AgentTaskEntity backlog = sampleTask(UUID.randomUUID(), null);
             // Backlog flow: autoTrigger irrelevant since assignee is null.
-            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), anyBoolean()))
+            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), anyBoolean(), any()))
                     .thenReturn(backlog);
 
             // Even when caller asks for start_mode='execute', backlog cannot be executed
@@ -804,14 +808,14 @@ class AgentDelegationModuleTest {
             taskVisible(taskId);
             AgentTaskEntity done = sampleTask(taskId, caller);
             done.setStatus(AgentTaskEntity.STATUS_COMPLETED);
-            when(taskService.completeTask(TENANT, taskId, caller, "final result", false, null)).thenReturn(done);
+            when(taskService.completeTask(TENANT, taskId, caller, "final result", false, null, NORMAL)).thenReturn(done);
 
             Optional<ToolExecutionResult> r = module.execute("task_complete",
                     Map.of("task_id", taskId.toString(), "result", "final result"),
                     TENANT, orgCtx(caller, "t1"));
 
             assertThat(r.get().success()).isTrue();
-            verify(taskService).completeTask(TENANT, taskId, caller, "final result", false, null);
+            verify(taskService).completeTask(TENANT, taskId, caller, "final result", false, null, NORMAL);
         }
 
         @Test
@@ -822,14 +826,14 @@ class AgentDelegationModuleTest {
             taskVisible(taskId);
             AgentTaskEntity done = sampleTask(taskId, caller);
             done.setStatus(AgentTaskEntity.STATUS_COMPLETED);
-            when(taskService.completeTask(TENANT, taskId, caller, "forced", true, null)).thenReturn(done);
+            when(taskService.completeTask(TENANT, taskId, caller, "forced", true, null, NORMAL)).thenReturn(done);
 
             Optional<ToolExecutionResult> r = module.execute("task_complete",
                     Map.of("task_id", taskId.toString(), "result", "forced", "force", true),
                     TENANT, orgCtx(caller, "t1"));
 
             assertThat(r.get().success()).isTrue();
-            verify(taskService).completeTask(TENANT, taskId, caller, "forced", true, null);
+            verify(taskService).completeTask(TENANT, taskId, caller, "forced", true, null, NORMAL);
         }
 
         @Test
@@ -840,14 +844,14 @@ class AgentDelegationModuleTest {
             taskVisible(taskId);
             AgentTaskEntity done = sampleTask(taskId, caller);
             done.setStatus(AgentTaskEntity.STATUS_COMPLETED);
-            when(taskService.completeTask(TENANT, taskId, caller, "forced", true, null)).thenReturn(done);
+            when(taskService.completeTask(TENANT, taskId, caller, "forced", true, null, NORMAL)).thenReturn(done);
 
             Optional<ToolExecutionResult> r = module.execute("task_complete",
                     Map.of("task_id", taskId.toString(), "result", "forced", "force", "true"),
                     TENANT, orgCtx(caller, "t1"));
 
             assertThat(r.get().success()).isTrue();
-            verify(taskService).completeTask(TENANT, taskId, caller, "forced", true, null);
+            verify(taskService).completeTask(TENANT, taskId, caller, "forced", true, null, NORMAL);
         }
 
         @Test
@@ -858,13 +862,13 @@ class AgentDelegationModuleTest {
             taskVisible(taskId);
             AgentTaskEntity failed = sampleTask(taskId, caller);
             failed.setStatus(AgentTaskEntity.STATUS_FAILED);
-            when(taskService.rejectTask(TENANT, taskId, caller, "nope", null)).thenReturn(failed);
+            when(taskService.rejectTask(TENANT, taskId, caller, "nope", null, NORMAL)).thenReturn(failed);
 
             module.execute("task_reject",
                     Map.of("task_id", taskId.toString(), "reason", "nope"),
                     TENANT, orgCtx(caller, "t1"));
 
-            verify(taskService).rejectTask(TENANT, taskId, caller, "nope", null);
+            verify(taskService).rejectTask(TENANT, taskId, caller, "nope", null, NORMAL);
         }
 
         @Test
@@ -977,14 +981,14 @@ class AgentDelegationModuleTest {
             taskVisible(taskId);
             AgentTaskEntity rejected = sampleTask(taskId, UUID.randomUUID());
             rejected.setStatus(AgentTaskEntity.STATUS_IN_PROGRESS);
-            when(taskService.rejectReview(TENANT, taskId, caller, null, "needs work")).thenReturn(rejected);
+            when(taskService.rejectReview(TENANT, taskId, caller, null, "needs work", NORMAL)).thenReturn(rejected);
 
             Optional<ToolExecutionResult> r = module.execute("task_reject_review",
                     Map.of("task_id", taskId.toString(), "reason", "needs work"),
                     TENANT, orgCtx(caller, "t1"));
 
             assertThat(r.get().success()).isTrue();
-            verify(taskService).rejectReview(TENANT, taskId, caller, null, "needs work");
+            verify(taskService).rejectReview(TENANT, taskId, caller, null, "needs work", NORMAL);
         }
 
         @Test
@@ -997,7 +1001,7 @@ class AgentDelegationModuleTest {
             rejected.setStatus(AgentTaskEntity.STATUS_IN_PROGRESS);
             when(taskRepository.findByIdAndOrganizationIdStrict(taskId, ORG))
                     .thenReturn(Optional.of(sampleTask(taskId, null)));
-            when(taskService.rejectReview(TENANT, taskId, caller, reviewerExecutionId, "needs work"))
+            when(taskService.rejectReview(TENANT, taskId, caller, reviewerExecutionId, "needs work", NORMAL))
                     .thenReturn(rejected);
 
             Optional<ToolExecutionResult> r = module.execute("task_reject_review",
@@ -1005,7 +1009,7 @@ class AgentDelegationModuleTest {
                     TENANT, reviewCtx(caller, "t1", reviewerExecutionId));
 
             assertThat(r.get().success()).isTrue();
-            verify(taskService).rejectReview(TENANT, taskId, caller, reviewerExecutionId, "needs work");
+            verify(taskService).rejectReview(TENANT, taskId, caller, reviewerExecutionId, "needs work", NORMAL);
         }
 
         @Test
@@ -1214,7 +1218,7 @@ class AgentDelegationModuleTest {
         @DisplayName("Agent with allowedAgentIds can assign to a listed child")
         void assignToAllowedChild() {
             AgentTaskEntity created = sampleTask(UUID.randomUUID(), childAgent);
-            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean())).thenReturn(created);
+            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean(), any())).thenReturn(created);
             when(taskService.executeTaskSync(any())).thenReturn(created);
 
             Optional<ToolExecutionResult> r = module.execute("assign", assignParams(childAgent),
@@ -1238,7 +1242,7 @@ class AgentDelegationModuleTest {
             // Post-fix: convention align - null allowedAgentIds == god == no restriction. Symmetric
             // with TaskVisibilityResolver and SubAgentExecutionHandler.
             AgentTaskEntity created = sampleTask(UUID.randomUUID(), foreignAgent);
-            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean())).thenReturn(created);
+            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean(), any())).thenReturn(created);
             when(taskService.executeTaskSync(any())).thenReturn(created);
 
             Optional<ToolExecutionResult> r = module.execute("assign", assignParams(foreignAgent),
@@ -1261,7 +1265,7 @@ class AgentDelegationModuleTest {
         @DisplayName("Backlog assign (null agent_id) succeeds even when caller has null allowedAgentIds")
         void backlogAllowedWithoutChildren() {
             AgentTaskEntity created = sampleTask(UUID.randomUUID(), null);
-            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean())).thenReturn(created);
+            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean(), any())).thenReturn(created);
 
             Optional<ToolExecutionResult> r = module.execute("assign", assignParams(null),
                     TENANT, ctx(caller, "t1"));
@@ -1272,7 +1276,7 @@ class AgentDelegationModuleTest {
         @DisplayName("Human caller (no __agentId__) can assign to any agent without restriction")
         void humanCallerUnrestricted() {
             AgentTaskEntity created = sampleTask(UUID.randomUUID(), foreignAgent);
-            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean())).thenReturn(created);
+            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean(), any())).thenReturn(created);
             when(taskService.executeTaskSync(any())).thenReturn(created);
 
             Optional<ToolExecutionResult> r = module.execute("assign", assignParams(foreignAgent),
@@ -1296,7 +1300,7 @@ class AgentDelegationModuleTest {
         @DisplayName("Reviewer set to caller itself is allowed (self-review)")
         void reviewerSelfAllowed() {
             AgentTaskEntity created = sampleTask(UUID.randomUUID(), childAgent);
-            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean())).thenReturn(created);
+            when(taskService.assignTask(anyString(), any(), any(), any(), anyBoolean(), any())).thenReturn(created);
             when(taskService.executeTaskSync(any())).thenReturn(created);
 
             Map<String, Object> params = assignParams(childAgent);
@@ -1328,7 +1332,7 @@ class AgentDelegationModuleTest {
             UUID taskId = UUID.randomUUID();
             taskVisible(taskId);
             AgentTaskEntity updated = sampleTask(taskId, childAgent);
-            when(taskService.updateTask(anyString(), any(), any(), any(), any())).thenReturn(updated);
+            when(taskService.updateTask(anyString(), any(), any(), any(), any(), any())).thenReturn(updated);
 
             Map<String, Object> params = new HashMap<>();
             params.put("task_id", taskId.toString());
@@ -1337,6 +1341,507 @@ class AgentDelegationModuleTest {
             Optional<ToolExecutionResult> r = module.execute("task_update", params,
                     TENANT, orgCtx(caller, "t1", List.of(childAgent.toString())));
             assertThat(r.get().success()).isTrue();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // LC-066: delegation from an execution holding Gmail / Drive content
+    // ------------------------------------------------------------------
+    @Nested
+    @DisplayName("LC-066 delegation from a restricted context")
+    class Lc066RestrictedDelegation {
+
+        private ToolExecutionContext restricted(UUID callerId) {
+            ToolExecutionContext base = orgCtx(callerId, "t-r");
+            Map<String, Object> creds = new HashMap<>(base.credentials());
+            creds.put(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "RESTRICTED");
+            return new ToolExecutionContext(TENANT, creds, Map.of(), Set.of(), null, null, ORG, "owner");
+        }
+
+        private com.apimarketplace.common.classification.DataSensitivity assignedWith(ToolExecutionContext ctx,
+                                                                                    UUID caller) {
+            UUID assignee = UUID.randomUUID();
+            AgentTaskEntity created = sampleTask(UUID.randomUUID(), assignee);
+            ArgumentCaptor<com.apimarketplace.common.classification.DataSensitivity> sensitivity =
+                    ArgumentCaptor.forClass(com.apimarketplace.common.classification.DataSensitivity.class);
+            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(false), sensitivity.capture()))
+                    .thenReturn(created);
+
+            module.execute("assign", Map.of("agent_id", assignee.toString(), "title", "t",
+                    "instructions", "summarize this mail", "start_mode", "pending"), TENANT, ctx);
+            return sensitivity.getValue();
+        }
+
+        @Test
+        @DisplayName("LC-066: assign from a restricted context stores the task RESTRICTED")
+        void lc066RestrictedAssignTagsTheTask() {
+            UUID caller = UUID.randomUUID();
+            assertThat(assignedWith(restricted(caller), caller))
+                    .isEqualTo(com.apimarketplace.common.classification.DataSensitivity.RESTRICTED);
+        }
+
+        @Test
+        @DisplayName("LC-066: assign from an ordinary context stores the task NORMAL (no over-tagging)")
+        void lc066NormalAssignDoesNotTagTheTask() {
+            UUID caller = UUID.randomUUID();
+            assertThat(assignedWith(orgCtx(caller, "t-n"), caller))
+                    .isEqualTo(com.apimarketplace.common.classification.DataSensitivity.NORMAL);
+        }
+
+        @Test
+        @DisplayName("LC-066: the synchronous result of a RESTRICTED task carries the restricted tag")
+        void lc066SyncResultOfRestrictedTaskIsTagged() {
+            UUID caller = UUID.randomUUID();
+            UUID assignee = UUID.randomUUID();
+            AgentTaskEntity created = sampleTask(UUID.randomUUID(), assignee);
+            AgentTaskEntity done = sampleTask(created.getId(), assignee);
+            done.setStatus(AgentTaskEntity.STATUS_COMPLETED);
+            done.setResult("mail summary");
+            done.setDataSensitivity("RESTRICTED");
+            when(taskService.assignTask(eq(TENANT), eq(caller), isNull(), any(), eq(true), any())).thenReturn(created);
+            when(taskService.executeTaskSync(created)).thenReturn(done);
+
+            ToolExecutionResult r = module.execute("assign", Map.of("agent_id", assignee.toString(),
+                    "title", "t", "instructions", "i"), TENANT, orgCtx(caller, "t-s")).orElseThrow();
+
+            assertThat(r.success()).isTrue();
+            assertThat(r.metadata()).containsEntry(
+                    com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "RESTRICTED");
+        }
+
+        @Test
+        @DisplayName("LC-066: task_complete from a restricted assignee hands RESTRICTED to the service, which tags the task with the result")
+        void lc066RestrictedCompleteRatchetsTheTask() {
+            UUID caller = UUID.randomUUID();
+            UUID taskId = UUID.randomUUID();
+            taskVisible(taskId);
+            AgentTaskEntity done = sampleTask(taskId, caller);
+            when(taskService.completeTask(TENANT, taskId, caller, "mail summary", false, null, RESTRICTED)).thenReturn(done);
+
+            ToolExecutionResult r = module.execute("task_complete", Map.of("task_id", taskId.toString(), "result", "mail summary"),
+                    TENANT, restricted(caller)).orElseThrow();
+
+            assertThat(r.success()).isTrue();
+            verify(taskService).completeTask(TENANT, taskId, caller, "mail summary", false, null, RESTRICTED);
+            // No out-of-band ratchet ahead of the call: the service tags inside the write.
+            verify(taskService, never()).markTaskRestricted(any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: a task_complete with a blank result from a restricted context is refused and tags nothing")
+        void lc066BlankCompleteDoesNotTag() {
+            UUID caller = UUID.randomUUID();
+            UUID taskId = UUID.randomUUID();
+            taskVisible(taskId);
+
+            ToolExecutionResult r = module.execute("task_complete", Map.of("task_id", taskId.toString(), "result", "  "),
+                    TENANT, restricted(caller)).orElseThrow();
+
+            assertThat(r.success()).isFalse();
+            verify(taskService, never()).markTaskRestricted(any(), any());
+            verify(taskService, never()).completeTask(any(), any(), any(), any(), anyBoolean(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: a task_complete on a task outside the caller's workspace tags nothing")
+        void lc066OutOfScopeCompleteDoesNotTag() {
+            UUID caller = UUID.randomUUID();
+            UUID taskId = UUID.randomUUID();
+            when(taskRepository.findByIdAndOrganizationIdStrict(taskId, ORG)).thenReturn(Optional.empty());
+
+            ToolExecutionResult r = module.execute("task_complete", Map.of("task_id", taskId.toString(),
+                    "result", "mail summary"), TENANT, restricted(caller)).orElseThrow();
+
+            assertThat(r.success()).isFalse();
+            verify(taskService, never()).markTaskRestricted(any(), any());
+            verify(taskService, never()).completeTask(any(), any(), any(), any(), anyBoolean(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: task_update hands the caller's classification to the service (which ratchets in the update's transaction)")
+        void lc066UpdatePassesCallerSensitivityToTheService() {
+            UUID caller = UUID.randomUUID();
+            UUID taskId = UUID.randomUUID();
+            taskVisible(taskId);
+            AgentTaskEntity t = sampleTask(taskId, caller);
+            when(taskService.updateTask(eq(TENANT), eq(taskId), eq(caller), isNull(), any(), any())).thenReturn(t);
+            Map<String, Object> params = Map.of("task_id", taskId.toString(), "instructions", "new text");
+
+            module.execute("task_update", params, TENANT, orgCtx(caller, "t-n"));
+            verify(taskService).updateTask(eq(TENANT), eq(taskId), eq(caller), isNull(), any(),
+                    eq(com.apimarketplace.common.classification.DataSensitivity.NORMAL));
+
+            module.execute("task_update", params, TENANT, restricted(caller));
+            verify(taskService).updateTask(eq(TENANT), eq(taskId), eq(caller), isNull(), any(),
+                    eq(com.apimarketplace.common.classification.DataSensitivity.RESTRICTED));
+            // No out-of-band ratchet before the update: the service tags only a successful text write.
+            verify(taskService, never()).markTaskRestricted(any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: a task_update refused by allowedAgentIds does not tag the task")
+        void lc066RefusedUpdateDoesNotTag() {
+            UUID caller = UUID.randomUUID();
+            UUID taskId = UUID.randomUUID();
+            taskVisible(taskId);
+            ToolExecutionContext base = restricted(caller);
+            Map<String, Object> creds = new HashMap<>(base.credentials());
+            creds.put("__allowedAgentIds__", List.of());
+            ToolExecutionContext ctx = new ToolExecutionContext(TENANT, creds, Map.of(), Set.of(), null, null, ORG, "owner");
+
+            ToolExecutionResult r = module.execute("task_update", Map.of("task_id", taskId.toString(),
+                    "agent_id", UUID.randomUUID().toString(), "instructions", "mail text"), TENANT, ctx).orElseThrow();
+
+            assertThat(r.success()).isFalse();
+            verify(taskService, never()).markTaskRestricted(any(), any());
+            verify(taskService, never()).updateTask(any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: task_reject from a restricted assignee hands RESTRICTED to the service, which tags the task with the reason")
+        void lc066RestrictedRejectRatchetsTheTask() {
+            UUID caller = UUID.randomUUID();
+            UUID taskId = UUID.randomUUID();
+            taskVisible(taskId);
+            AgentTaskEntity failed = sampleTask(taskId, caller);
+            failed.setStatus(AgentTaskEntity.STATUS_FAILED);
+            when(taskService.rejectTask(TENANT, taskId, caller, "mail says no", null, RESTRICTED)).thenReturn(failed);
+
+            module.execute("task_reject", Map.of("task_id", taskId.toString(), "reason", "mail says no"),
+                    TENANT, restricted(caller));
+
+            verify(taskService).rejectTask(TENANT, taskId, caller, "mail says no", null, RESTRICTED);
+            verify(taskService, never()).markTaskRestricted(any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: a task_reject on a task outside the caller's workspace tags nothing")
+        void lc066OutOfScopeRejectDoesNotTag() {
+            UUID caller = UUID.randomUUID();
+            UUID taskId = UUID.randomUUID();
+            when(taskRepository.findByIdAndOrganizationIdStrict(taskId, ORG)).thenReturn(Optional.empty());
+
+            ToolExecutionResult r = module.execute("task_reject", Map.of("task_id", taskId.toString(),
+                    "reason", "mail says no"), TENANT, restricted(caller)).orElseThrow();
+
+            assertThat(r.success()).isFalse();
+            verify(taskService, never()).markTaskRestricted(any(), any());
+            verify(taskService, never()).rejectTask(any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: task_reject from an ordinary context does not tag the task")
+        void lc066NormalRejectDoesNotTag() {
+            UUID caller = UUID.randomUUID();
+            UUID taskId = UUID.randomUUID();
+            taskVisible(taskId);
+            AgentTaskEntity failed = sampleTask(taskId, caller);
+            failed.setStatus(AgentTaskEntity.STATUS_FAILED);
+            when(taskService.rejectTask(TENANT, taskId, caller, "nope", null, NORMAL)).thenReturn(failed);
+
+            module.execute("task_reject", Map.of("task_id", taskId.toString(), "reason", "nope"),
+                    TENANT, orgCtx(caller, "t-n"));
+
+            verify(taskService, never()).markTaskRestricted(any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: task_reject_review from a restricted reviewer hands RESTRICTED to the service, which tags the task with the feedback")
+        void lc066RestrictedRejectReviewRatchetsTheTask() {
+            UUID reviewer = UUID.randomUUID();
+            UUID taskId = UUID.randomUUID();
+            taskVisible(taskId);
+            AgentTaskEntity rejected = sampleTask(taskId, UUID.randomUUID());
+            rejected.setStatus(AgentTaskEntity.STATUS_IN_PROGRESS);
+            when(taskService.rejectReview(TENANT, taskId, reviewer, null, "mail says redo", RESTRICTED)).thenReturn(rejected);
+
+            module.execute("task_reject_review", Map.of("task_id", taskId.toString(), "reason", "mail says redo"),
+                    TENANT, restricted(reviewer));
+
+            verify(taskService).rejectReview(TENANT, taskId, reviewer, null, "mail says redo", RESTRICTED);
+            verify(taskService, never()).markTaskRestricted(any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: a task_reject_review on a task outside the caller's workspace tags nothing")
+        void lc066OutOfScopeRejectReviewDoesNotTag() {
+            UUID reviewer = UUID.randomUUID();
+            UUID taskId = UUID.randomUUID();
+            when(taskRepository.findByIdAndOrganizationIdStrict(taskId, ORG)).thenReturn(Optional.empty());
+
+            ToolExecutionResult r = module.execute("task_reject_review", Map.of("task_id", taskId.toString(),
+                    "reason", "mail says redo"), TENANT, restricted(reviewer)).orElseThrow();
+
+            assertThat(r.success()).isFalse();
+            verify(taskService, never()).markTaskRestricted(any(), any());
+            verify(taskService, never()).rejectReview(any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: task_reject_review from an ordinary context does not tag the task")
+        void lc066NormalRejectReviewDoesNotTag() {
+            UUID reviewer = UUID.randomUUID();
+            UUID taskId = UUID.randomUUID();
+            taskVisible(taskId);
+            AgentTaskEntity rejected = sampleTask(taskId, UUID.randomUUID());
+            rejected.setStatus(AgentTaskEntity.STATUS_IN_PROGRESS);
+            when(taskService.rejectReview(TENANT, taskId, reviewer, null, "redo", NORMAL)).thenReturn(rejected);
+
+            module.execute("task_reject_review", Map.of("task_id", taskId.toString(), "reason", "redo"),
+                    TENANT, orgCtx(reviewer, "t-n"));
+
+            verify(taskService, never()).markTaskRestricted(any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: recurrence_create from a restricted context is refused (kept and replayed indefinitely)")
+        void lc066RestrictedRecurrenceCreateIsRefused() {
+            UUID caller = UUID.randomUUID();
+            ToolExecutionResult r = module.execute("recurrence_create", Map.of(
+                    "title", "nightly", "instructions", "mail text", "cron", "0 0 * * *", "timezone", "UTC"),
+                    TENANT, restricted(caller)).orElseThrow();
+
+            assertThat(r.success()).isFalse();
+            assertThat(r.error()).startsWith("RESTRICTED_DATA_PROVIDER_NOT_ALLOWED");
+            verify(recurrenceService, never()).create(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: recurrence_update changing text is refused in a restricted context; a reschedule is not")
+        void lc066RestrictedRecurrenceTextUpdateIsRefused() {
+            UUID caller = UUID.randomUUID();
+            UUID recurrenceId = UUID.randomUUID();
+
+            ToolExecutionResult refused = module.execute("recurrence_update", Map.of(
+                    "recurrence_id", recurrenceId.toString(), "instructions", "mail text"),
+                    TENANT, restricted(caller)).orElseThrow();
+            assertThat(refused.success()).isFalse();
+            assertThat(refused.error()).startsWith("RESTRICTED_DATA_PROVIDER_NOT_ALLOWED");
+            verify(recurrenceService, never()).update(any(), any(), any(), any(), any());
+
+            AgentTaskRecurrenceEntity rec = new AgentTaskRecurrenceEntity();
+            rec.setId(recurrenceId);
+            rec.setTenantId(TENANT);
+            rec.setTitle("nightly");
+            rec.setInstructions("do X");
+            rec.setCronExpression("0 0 * * *");
+            rec.setTimezone("UTC");
+            rec.setPriority(AgentTaskEntity.PRIORITY_NORMAL);
+            rec.setEnabled(true);
+            when(recurrenceService.update(eq(TENANT), eq(recurrenceId), eq(caller), isNull(), any())).thenReturn(rec);
+            ToolExecutionResult rescheduled = module.execute("recurrence_update", Map.of(
+                    "recurrence_id", recurrenceId.toString(), "cron", "0 1 * * *"),
+                    TENANT, restricted(caller)).orElseThrow();
+            assertThat(rescheduled.success()).isTrue();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // LC-066: reads that return a task's text carry the task's restricted tag
+    // ------------------------------------------------------------------
+    @Nested
+    @DisplayName("LC-066 task reads return the restricted tag of a RESTRICTED task")
+    class Lc066RestrictedTaskReads {
+
+        private final UUID caller = UUID.randomUUID();
+
+        private AgentTaskEntity restrictedTask() {
+            AgentTaskEntity t = sampleTask(UUID.randomUUID(), caller);
+            t.setResult("summary of the user's mail");
+            t.setDataSensitivity("RESTRICTED");
+            return t;
+        }
+
+        private AgentTaskEntity normalTask() {
+            return sampleTask(UUID.randomUUID(), caller);
+        }
+
+        private ToolExecutionResult run(String action, Map<String, Object> params) {
+            ToolExecutionResult r = module.execute(action, params, TENANT, orgCtx(caller, "t-read")).orElseThrow();
+            assertThat(r.success()).isTrue();
+            return r;
+        }
+
+        private void assertTagged(ToolExecutionResult r) {
+            assertThat(r.metadata()).containsEntry(
+                    com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "RESTRICTED");
+        }
+
+        private void assertNotTagged(ToolExecutionResult r) {
+            assertThat(r.metadata() == null ? Map.of() : r.metadata())
+                    .doesNotContainKey(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY);
+        }
+
+        @SuppressWarnings("unchecked")
+        private List<Object> listed(ToolExecutionResult r) {
+            return (List<Object>) ((Map<String, Object>) r.data()).get("tasks");
+        }
+
+        /**
+         * The listing entry of a RESTRICTED task: triage fields kept, every text field withheld,
+         * flagged, with a note naming the read that opens it.
+         */
+        private void assertWithheldEntry(Object entry, AgentTaskEntity task, String openingAction) {
+            assertThat(entry).isInstanceOf(Map.class);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> map = (Map<String, Object>) entry;
+            assertThat(map).containsEntry("id", task.getId())
+                    .containsEntry("status", task.getStatus())
+                    .containsEntry("priority", task.getPriority())
+                    .containsEntry("restricted", true)
+                    .doesNotContainKeys("title", "instructions", "result", "errorMessage", "taskContext",
+                            "notes", "checklist", "attachments");
+            assertThat(map.get("note").toString())
+                    .contains("action='" + openingAction + "'")
+                    .contains(task.getId().toString());
+            assertThat(map.values()).doesNotContain("summary of the user's mail");
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: an inbox list holding a RESTRICTED task is NOT tagged and lists that task without its text")
+        void lc066InboxListUntaggedAndRestrictedTaskWithheld() {
+            AgentTaskEntity normal = normalTask();
+            AgentTaskEntity restricted = restrictedTask();
+            when(taskService.getInboxList(TENANT, ORG, caller, 20)).thenReturn(List.of(normal, restricted));
+
+            ToolExecutionResult r = run("inbox", Map.of());
+
+            assertNotTagged(r);
+            List<Object> tasks = listed(r);
+            assertThat(tasks).hasSize(2);
+            // The ordinary task is intact.
+            assertThat(tasks.get(0)).isInstanceOf(com.apimarketplace.agent.dto.TaskResponse.class);
+            assertThat(((com.apimarketplace.agent.dto.TaskResponse) tasks.get(0)).title()).isEqualTo("t");
+            assertWithheldEntry(tasks.get(1), restricted, "inbox");
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: inbox single fetch of a RESTRICTED task is tagged; of a NORMAL task is not")
+        void lc066InboxSingleTagged() {
+            AgentTaskEntity restricted = restrictedTask();
+            AgentTaskEntity normal = normalTask();
+            when(taskService.getInboxTask(TENANT, ORG, caller, restricted.getId()))
+                    .thenReturn(com.apimarketplace.agent.dto.TaskResponse.from(restricted));
+            when(taskService.getInboxTask(TENANT, ORG, caller, normal.getId()))
+                    .thenReturn(com.apimarketplace.agent.dto.TaskResponse.from(normal));
+
+            assertTagged(run("inbox", Map.of("task_id", restricted.getId().toString())));
+            assertNotTagged(run("inbox", Map.of("task_id", normal.getId().toString())));
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: an outbox list holding a RESTRICTED task is NOT tagged and lists it without its text")
+        void lc066OutboxListUntaggedAndRestrictedTaskWithheld() {
+            AgentTaskEntity restricted = restrictedTask();
+            when(taskService.getOutbox(TENANT, ORG, caller, null, 20)).thenReturn(List.of(restricted));
+
+            ToolExecutionResult r = run("outbox", Map.of());
+
+            assertNotTagged(r);
+            assertWithheldEntry(listed(r).get(0), restricted, "outbox");
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: outbox single fetch of a RESTRICTED task is tagged; of a NORMAL task is not")
+        void lc066OutboxSingleTagged() {
+            AgentTaskEntity restricted = restrictedTask();
+            AgentTaskEntity normal = normalTask();
+            when(taskService.getOutboxTask(TENANT, ORG, caller, null, restricted.getId()))
+                    .thenReturn(com.apimarketplace.agent.dto.TaskResponse.from(restricted));
+            when(taskService.getOutboxTask(TENANT, ORG, caller, null, normal.getId()))
+                    .thenReturn(com.apimarketplace.agent.dto.TaskResponse.from(normal));
+
+            assertTagged(run("outbox", Map.of("task_id", restricted.getId().toString())));
+            assertNotTagged(run("outbox", Map.of("task_id", normal.getId().toString())));
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: a review_inbox holding a RESTRICTED task is NOT tagged and points to task_get_context")
+        void lc066ReviewInboxUntaggedAndRestrictedTaskWithheld() {
+            AgentTaskEntity restricted = restrictedTask();
+            AgentTaskEntity normal = normalTask();
+            when(taskService.getReviewInbox(TENANT, ORG, caller, 20)).thenReturn(List.of(restricted, normal));
+
+            ToolExecutionResult r = run("review_inbox", Map.of());
+
+            assertNotTagged(r);
+            assertWithheldEntry(listed(r).get(0), restricted, "task_get_context");
+            assertThat(listed(r).get(1)).isInstanceOf(com.apimarketplace.agent.dto.TaskResponse.class);
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: a shared backlog holding a RESTRICTED task does not make the polling agent restricted; claim opens it")
+        void lc066BacklogUntaggedAndRestrictedTaskWithheld() {
+            AgentTaskEntity restricted = restrictedTask();
+            AgentTaskEntity normal = normalTask();
+            when(taskService.isBacklogEnabled(caller)).thenReturn(true);
+            when(taskService.getBacklog(TENANT, ORG, 20)).thenReturn(List.of(normal, restricted));
+
+            ToolExecutionResult r = run("backlog", Map.of());
+
+            assertNotTagged(r);
+            assertWithheldEntry(listed(r).get(1), restricted, "claim");
+            assertThat(((com.apimarketplace.agent.dto.TaskResponse) listed(r).get(0)).instructions()).isEqualTo("i");
+        }
+
+        @Test
+        @DisplayName("LC-066: a human browsing the backlog (no agent identity, cannot claim) is pointed to task_get_context")
+        void lc066BacklogForHumanPointsToTaskGetContext() {
+            AgentTaskEntity restricted = restrictedTask();
+            when(taskService.getBacklog(TENANT, ORG, 20)).thenReturn(List.of(restricted));
+            ToolExecutionContext human = orgCtx(null, "t-human");
+
+            ToolExecutionResult r = module.execute("backlog", Map.of(), TENANT, human).orElseThrow();
+
+            assertThat(r.success()).isTrue();
+            assertNotTagged(r);
+            assertWithheldEntry(listed(r).get(0), restricted, "task_get_context");
+        }
+
+        @Test
+        @DisplayName("LC-066: the single-task read of a task withheld from a listing returns its text and is tagged")
+        void lc066SingleReadOfAListedRestrictedTaskIsTaggedWithContent() {
+            AgentTaskEntity restricted = restrictedTask();
+            when(taskService.getInboxList(TENANT, ORG, caller, 20)).thenReturn(List.of(restricted));
+            when(taskService.getInboxTask(TENANT, ORG, caller, restricted.getId()))
+                    .thenReturn(com.apimarketplace.agent.dto.TaskResponse.from(restricted));
+
+            assertNotTagged(run("inbox", Map.of()));
+            ToolExecutionResult single = run("inbox", Map.of("task_id", restricted.getId().toString()));
+
+            assertTagged(single);
+            com.apimarketplace.agent.dto.TaskResponse task = (com.apimarketplace.agent.dto.TaskResponse) single.data();
+            assertThat(task.result()).isEqualTo("summary of the user's mail");
+            assertThat(task.title()).isEqualTo("t");
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: claiming a RESTRICTED task is tagged; claiming a NORMAL task is not")
+        void lc066ClaimTagged() {
+            AgentTaskEntity restricted = restrictedTask();
+            AgentTaskEntity normal = normalTask();
+            when(taskService.isBacklogEnabled(caller)).thenReturn(true);
+            when(taskService.claimTask(TENANT, ORG, caller, restricted.getId(), null)).thenReturn(Optional.of(restricted));
+            when(taskService.claimTask(TENANT, ORG, caller, normal.getId(), null)).thenReturn(Optional.of(normal));
+
+            assertTagged(run("claim", Map.of("task_id", restricted.getId().toString())));
+            assertNotTagged(run("claim", Map.of("task_id", normal.getId().toString())));
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: task_update returning a RESTRICTED task is tagged; a NORMAL task is not")
+        void lc066UpdateResultTagged() {
+            AgentTaskEntity restricted = restrictedTask();
+            AgentTaskEntity normal = normalTask();
+            taskVisible(restricted.getId());
+            taskVisible(normal.getId());
+            when(taskService.updateTask(eq(TENANT), eq(restricted.getId()), eq(caller), isNull(), any(), eq(NORMAL)))
+                    .thenReturn(restricted);
+            when(taskService.updateTask(eq(TENANT), eq(normal.getId()), eq(caller), isNull(), any(), eq(NORMAL)))
+                    .thenReturn(normal);
+
+            assertTagged(run("task_update", Map.of("task_id", restricted.getId().toString(), "priority", "high")));
+            assertNotTagged(run("task_update", Map.of("task_id", normal.getId().toString(), "priority", "high")));
         }
     }
 }

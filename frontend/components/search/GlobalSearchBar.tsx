@@ -11,6 +11,7 @@ import type { Conversation } from '@/lib/api/conversationApi';
 import { workflowService } from '@/lib/api/orchestrator/workflow.service';
 import { agentService } from '@/lib/api/orchestrator/agent.service';
 import { settingsNavItems, isSettingsNavItemVisible } from '@/components/settings/settingsNavItems';
+import { useHasPartnerSpace } from '@/hooks/usePartnerSpace';
 import { stripLocale } from '@/contexts/SidePanelContext';
 import { useSafeNavigate } from '@/contexts/NavigationGuardContext';
 import { useAuth } from '@/lib/providers/smart-providers';
@@ -50,6 +51,8 @@ function useGlobalSearch() {
   const requestIdRef = useRef(0);
 
   const trimmed = query.trim();
+  // Asked only once something is typed: the bar is on every page, the partner state is not.
+  const isPartner = useHasPartnerSpace({ enabled: trimmed.length > 0 });
 
   // Settings sections are matched client-side against the same visibility rules
   // as SettingsNav (platform-admin + CE gating). Labels come from settingsNavItems,
@@ -59,7 +62,7 @@ function useGlobalSearch() {
     if (!trimmed) return [];
     const q = trimmed.toLowerCase();
     return settingsNavItems
-      .filter(item => isSettingsNavItemVisible(item, { isAdmin }))
+      .filter(item => isSettingsNavItemVisible(item, { isAdmin, isPartner }))
       .filter(item => item.label.toLowerCase().includes(q))
       .slice(0, MAX_PER_GROUP)
       .map(item => ({
@@ -69,7 +72,7 @@ function useGlobalSearch() {
         icon: item.icon,
         href: item.href,
       }));
-  }, [trimmed, isAdmin]);
+  }, [trimmed, isAdmin, isPartner]);
 
   useEffect(() => {
     if (!trimmed || !isAuthenticated) {

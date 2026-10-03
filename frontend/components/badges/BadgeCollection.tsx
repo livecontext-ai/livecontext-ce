@@ -11,6 +11,7 @@ import { BadgeCard } from './BadgeCard';
 import { BadgeDetailDialog } from './BadgeDetailDialog';
 import { BadgeMedal } from './BadgeMedal';
 import { trackTrophyViewed, type TrophyEntryPoint } from './badgeAnalytics';
+import { PageHeader } from '@/components/settings/PageHeader';
 
 /**
  * The trophy wall. Tighter columns than a card grid would allow, because a bare
@@ -18,7 +19,7 @@ import { trackTrophyViewed, type TrophyEntryPoint } from './badgeAnalytics';
  * as belonging to the medal below them.
  */
 const GRID =
-  'grid grid-cols-3 gap-x-3 gap-y-7 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6';
+  'grid grid-cols-3 gap-x-3 gap-y-7 @md:grid-cols-4 @2xl:grid-cols-5 @3xl:grid-cols-6';
 
 /** How many "closest to unlocking" medals the header highlights. */
 const NEXT_UP_COUNT = 4;
@@ -106,15 +107,7 @@ export function BadgeCollection() {
   return (
     <div className="space-y-8">
       <header className="space-y-4">
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-theme-secondary">
-            <Trophy className="h-4 w-4 text-[var(--text-primary)]" aria-hidden="true" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">{t('title')}</h2>
-            <p className="mt-0.5 text-sm text-theme-secondary">{t('subtitle')}</p>
-          </div>
-        </div>
+        <PageHeader icon={Trophy} title={t('title')} subtitle={t('subtitle')} headingLevel="h2" />
 
         <div>
           <div className="mb-1.5 flex items-baseline justify-between gap-3">

@@ -19,10 +19,12 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.time.Duration;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -498,6 +500,33 @@ public class AgentClient {
             log.error("Failed to get metrics for workflow={}: {}", workflowId, e.getMessage());
             return new AgentMetricsSummaryDto(Collections.emptyList(), 0);
         }
+    }
+
+    /**
+     * CASA LC-066: which of these delegated-task ids are RESTRICTED (Gmail / Google Drive content).
+     * Ids in, ids out. Unlike most reads here a failure is NOT swallowed: the caller (the scrub of
+     * task notifications) must tell "none restricted" from "could not ask" and retry the latter.
+     *
+     * @throws org.springframework.web.client.RestClientException when agent-service cannot answer
+     */
+    public Set<UUID> findRestrictedTaskIds(Collection<UUID> taskIds) {
+        if (taskIds == null || taskIds.isEmpty()) {
+            return Set.of();
+        }
+        String url = baseUrl + "/api/internal/agents/tasks/restricted-ids";
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(
+                Map.of("ids", List.copyOf(taskIds)), buildHeaders(null));
+        ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+                url, HttpMethod.POST, entity, new ParameterizedTypeReference<>() {});
+        Object ids = response.getBody() != null ? response.getBody().get("restrictedIds") : null;
+        if (!(ids instanceof Collection<?> list)) {
+            throw new IllegalStateException("agent-service answered without restrictedIds");
+        }
+        Set<UUID> restricted = new java.util.LinkedHashSet<>();
+        for (Object id : list) {
+            restricted.add(UUID.fromString(String.valueOf(id)));
+        }
+        return restricted;
     }
 
     /**

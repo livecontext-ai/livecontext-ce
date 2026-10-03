@@ -197,15 +197,19 @@ export function AddRowForm({
                   onStartEditing: noop,
                   onExitEditing: noop,
                   cellKey,
-                  onProgressTempChange: noop,
-                  onProgressSave: (val: number) => onRowDataChange(fieldKey, String(val)),
+                  // Written on every move, not only on release: a pointer let go outside the slider
+                  // raises no pointer-up on it, and the row would be added without the value shown.
+                  onProgressTempChange: (_key: string, val: number) => onRowDataChange(fieldKey, String(val)),
+                  // Nothing left to do on save: every move was already written above. A write here
+                  // would also fire as the form closes, into row data that has just been reset.
+                  onProgressSave: noop,
                 });
 
                 if (result) {
                   return (
                     <td
                       key={`add-row-${col.field}`}
-                      className="px-3 py-2 bg-theme-primary align-middle text-center"
+                      className="group/cell px-3 py-2 bg-theme-primary align-middle text-center"
                       style={fixedColumnStyle}
                     >
                       <div className="flex w-full items-center justify-center">

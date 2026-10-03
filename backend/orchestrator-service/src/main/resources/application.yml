@@ -50,6 +50,13 @@ gateway:
   filter:
     secret-key: ${GATEWAY_SECRET_KEY:}
     verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    # CASA LC-013: /api/agent-tools is a public path (no gateway HMAC), so POST .../execute trusted
+    # a forgeable X-User-ID from anything with network reach. Every in-cluster caller now signs
+    # (RemoteToolExecutionService, RemoteToolGateway, the conversation relay). Arm the gate on the
+    # NEXT deploy, once no caller pod runs the previous image, by setting
+    # AGENT_TOOLS_EXECUTE_HMAC_REQUIRED_PATH=/api/agent-tools/execute. Blank = not armed.
+    hmac-required-paths:
+      - ${AGENT_TOOLS_EXECUTE_HMAC_REQUIRED_PATH:}
     public-paths:
       - /health
       - /actuator
@@ -63,9 +70,12 @@ gateway:
       - /api/workflow-builder/sessions/
       - /api/credentials/by-integration/
 
+# INFO, not DEBUG (LC-090): this is the profile-less baseline, so any environment started
+# without SPRING_PROFILES_ACTIVE=prod runs on these values, and DEBUG logged request payloads
+# and node inputs. Raise it locally with LOGGING_LEVEL_COM_APIMARKETPLACE_ORCHESTRATOR=DEBUG.
 logging:
   level:
-    com.apimarketplace.orchestrator: DEBUG
+    com.apimarketplace.orchestrator: INFO
     com.zaxxer.hikari: INFO  # HikariCP connection pool monitoring
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{36}] - %msg%n"
@@ -317,7 +327,7 @@ http:
       delay-ms: 1000
     logging:
       enabled: true
-      level: DEBUG
+      level: INFO  # LC-090: no code reads this key today; the baseline must not advertise DEBUG
 
 # Horizontal scaling backend: "memory" (single instance) or "redis" (multi-instance)
 # When set to "redis", activates distributed scaling primitives. The orchestrator

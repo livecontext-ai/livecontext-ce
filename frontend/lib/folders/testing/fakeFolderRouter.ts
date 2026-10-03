@@ -29,6 +29,7 @@ class FakeFolderRouter {
   // Once bridged, it stays bridged for the rest of the file. Each vitest file gets its own
   // environment, and every test in a file that mocks the router wants the same fake.
   private historyBridged = false;
+  private realReplaceState: History['replaceState'] | null = null;
 
   /** Every path the code asked to navigate to, in order. */
   readonly visited: string[] = [];
@@ -44,6 +45,7 @@ class FakeFolderRouter {
   /** Start a test at a given page with an empty query. */
   reset(pathname = '/en/app/list'): void {
     this.bridgeHistory();
+    this.realReplaceState?.(null, '', pathname);
     this.pathname = pathname;
     this.currentSearch = '';
     this.snapshot = new URLSearchParams();
@@ -61,12 +63,24 @@ class FakeFolderRouter {
   navigate = (url: string, method: 'push' | 'replace' = 'push'): void => {
     this.visited.push(url);
     this.navigations.push({ url, method });
+    // The browser's own address follows too, as it does for real: code that reads
+    // `window.location` right after a navigation must not see the page it just left.
+    this.realReplaceState?.(null, '', url);
     const next = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
     if (next === this.currentSearch) return;
     this.currentSearch = next;
     this.snapshot = new URLSearchParams(next);
     this.listeners.forEach((listener) => listener());
   };
+
+  /**
+   * Move the browser's address WITHOUT telling React, the state a real page is in between a
+   * `pushState` and the transition in which `useSearchParams` catches up with it.
+   */
+  moveAddressOnly(url: string): void {
+    this.bridgeHistory();
+    this.realReplaceState?.(null, '', url);
+  }
 
   /**
    * Play the part Next plays in a browser: `history.pushState`/`replaceState` for the page
@@ -78,6 +92,7 @@ class FakeFolderRouter {
   private bridgeHistory(): void {
     if (this.historyBridged || typeof window === 'undefined') return;
     this.historyBridged = true;
+    this.realReplaceState = window.history.replaceState.bind(window.history);
     // A call with no url changes only the state object and never the address; forwarding it
     // would navigate to the literal string "undefined".
     window.history.pushState = (_data: unknown, _unused: string, url?: string | URL | null) => {

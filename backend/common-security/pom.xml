@@ -47,6 +47,13 @@
             <artifactId>jakarta.persistence-api</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- Micrometer: publishes the credential.plaintext.read counter. Optional: every service
+             embedding this module ships actuator, and the setter binding tolerates no registry. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
+        </dependency>
         <!-- SLF4J API (for logging) -->
         <dependency>
             <groupId>org.slf4j</groupId>

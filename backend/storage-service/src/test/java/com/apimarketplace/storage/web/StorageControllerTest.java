@@ -137,6 +137,33 @@ class StorageControllerTest {
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
+
+        @Test
+        @DisplayName("LC-020: an uploaded text/html file is downloaded, never rendered inline; an image still renders")
+        void viewForcesActiveTypesToAttachment(@org.junit.jupiter.api.io.TempDir Path dir) throws IOException {
+            Path html = java.nio.file.Files.writeString(dir.resolve("a.html"), "<script>alert(1)</script>");
+            Path png = java.nio.file.Files.write(dir.resolve("b.png"), new byte[]{1, 2});
+            StoredFile htmlFile = new StoredFile();
+            htmlFile.setContentType("text/html");
+            htmlFile.setOriginalName("a.html");
+            StoredFile pngFile = new StoredFile();
+            pngFile.setContentType("image/png");
+            pngFile.setOriginalName("b.png");
+            when(storageService.getFile(1L, USER_ID)).thenReturn(Optional.of(htmlFile));
+            when(storageService.getFile(2L, USER_ID)).thenReturn(Optional.of(pngFile));
+            when(storageService.getFilePath(htmlFile)).thenReturn(html);
+            when(storageService.getFilePath(pngFile)).thenReturn(png);
+
+            ResponseEntity<Resource> htmlR = storageController.viewFile(1L, USER_ID_HEADER);
+            ResponseEntity<Resource> pngR = storageController.viewFile(2L, USER_ID_HEADER);
+
+            assertThat(htmlR.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(htmlR.getHeaders().getFirst("Content-Disposition")).startsWith("attachment;");
+            assertThat(htmlR.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+            assertThat(htmlR.getHeaders().getFirst("Content-Security-Policy")).contains("sandbox");
+            assertThat(pngR.getHeaders().getFirst("Content-Disposition")).startsWith("inline;");
+            assertThat(pngR.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+        }
     }
 
     @Nested

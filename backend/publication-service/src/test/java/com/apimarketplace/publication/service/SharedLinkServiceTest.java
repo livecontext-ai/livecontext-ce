@@ -633,6 +633,26 @@ class SharedLinkServiceTest {
         }
 
         @Test
+        @DisplayName("LC-070: unregister also reaches a link hashed with the pre-v2 (password-keyed) HMAC once writes use the HKDF key")
+        void unregisterReachesLegacyHashAfterKeySeparation() {
+            String legacyHash = TokenAtRest.hash("ch_old");   // installed service writes version 1
+            TokenAtRest.install(new CredentialEncryptionService("test-password-123", "0123456789abcdef",
+                    "", "", false, false, "2", "allow", ""));
+            try {
+                assertThat(TokenAtRest.hash("ch_old")).isNotEqualTo(legacyHash);
+                when(repository.deactivateByResourceTokenHash(anyString())).thenReturn(0);
+                when(repository.deactivateByResourceTokenHash(legacyHash)).thenReturn(1);
+
+                service.unregister("ch_old");
+
+                verify(repository).deactivateByResourceTokenHash(legacyHash);
+                verify(repository).deactivateByResourceTokenHash(TokenAtRest.hash("ch_old"));
+            } finally {
+                TokenAtRest.install(new CredentialEncryptionService("test-password-123", "0123456789abcdef"));
+            }
+        }
+
+        @Test
         @DisplayName("register idempotency reaches a legacy active link by resource token through the fallback, filtered on active")
         void registerSeesLegacyActiveLink() {
             SharedLinkEntity legacy = buildEntity("ch_legacy", ResourceType.CHAT);

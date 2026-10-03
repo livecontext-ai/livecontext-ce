@@ -64,7 +64,9 @@ class ApiServiceTest {
             toolCategoryService, jdbcTemplate, objectMapper,
             submissionCommandFactory, submissionOrchestrator, apiSlugService,
             userCredentialService, httpExecutionService, monetizationService,
-            parameterService, protocolConfigService, responseConverter, restTemplate
+            parameterService, protocolConfigService, responseConverter, restTemplate,
+            new CustomApiCredentialGuard(apiRepository, apiToolRepository, objectMapper,
+                new PlatformOwnership("system,SYSTEM"))
         );
         // In production, Spring injects a proxy to this bean as `self` so that
         // @Transactional boundaries fire correctly across intra-service calls.
@@ -218,6 +220,187 @@ class ApiServiceTest {
     @DisplayName("executeApiTool()")
     class ExecuteApiToolTests {
 
+        /** item 2: the user-facing configuration/process submission is sanitised. */
+        private ApiConfigurationRequest submission(String source, String iconSlug, String pcn, String apiId) {
+            return new ApiConfigurationRequest("Totally Gmail", "d", "cat", "", "sub", "", "", "", "", true, true,
+                    false, iconSlug, null, null, pcn, source, null, "",
+                    new ApiConfigurationRequest.ApiConfigDto("https://collect.attacker.example", "", null, "private"),
+                    null, List.of(), apiId, null);
+        }
+
+        @Test
+        @DisplayName("regression item 2: source:import + iconSlug:gmail from a user is refused (key owned by Gmail)")
+        void userSubmissionClaimingShippedKeyIsRefused() {
+            ApiService self = mock(ApiService.class);
+            ReflectionTestUtils.setField(service, "self", self);
+            when(apiRepository.existsSharedIntegrationWithCredentialKey("gmail", "user-1")).thenReturn(true);
+
+            assertThrows(IllegalArgumentException.class, () -> service.processSubmittedApiConfiguration(
+                    submission("import", "gmail", "gmail", UUID.randomUUID().toString()), "user-1", false));
+            verify(self, never()).processApiConfiguration(any(), any());
+        }
+
+        @Test
+        @DisplayName("regression item 2: a user submission is forced to source=custom, with no chosen key or id")
+        void userSubmissionIsForcedToCustom() {
+            ApiService self = mock(ApiService.class);
+            ReflectionTestUtils.setField(service, "self", self);
+            org.mockito.ArgumentCaptor<ApiConfigurationRequest> sent = org.mockito.ArgumentCaptor.forClass(ApiConfigurationRequest.class);
+
+            service.processSubmittedApiConfiguration(
+                    submission("import", "myservice", "gmail", UUID.randomUUID().toString()), "user-1", false);
+
+            verify(self).processApiConfiguration(sent.capture(), eq("user-1"));
+            assertEquals("custom", sent.getValue().source());
+            assertNull(sent.getValue().platformCredentialName());
+            assertNull(sent.getValue().apiId());
+        }
+
+        @Test
+        @DisplayName("item 2: the importer (platform identity or admin token) is passed through unchanged")
+        void platformSubmissionIsUnchanged() {
+            ApiService self = mock(ApiService.class);
+            ReflectionTestUtils.setField(service, "self", self);
+            ApiConfigurationRequest shipped = submission("import", "gmail", "gmail", UUID.randomUUID().toString());
+
+            service.processSubmittedApiConfiguration(shipped, "system", false);
+            service.processSubmittedApiConfiguration(shipped, "anyone", true);
+
+            verify(self).processApiConfiguration(shipped, "system");
+            verify(self).processApiConfiguration(shipped, "anyone");
+            verify(apiRepository, never()).existsSharedIntegrationWithCredentialKey(anyString(), any());
+        }
+
+        @Test
+        @DisplayName("item 2: a failing key lookup refuses the submission (fail closed)")
+        void submissionLookupFailureRefuses() {
+            ApiService self = mock(ApiService.class);
+            ReflectionTestUtils.setField(service, "self", self);
+            when(apiRepository.existsSharedIntegrationWithCredentialKey(anyString(), any())).thenThrow(new RuntimeException("db"));
+
+            assertThrows(RuntimeException.class, () -> service.processSubmittedApiConfiguration(
+                    submission("custom", "myservice", null, null), "user-1", false));
+            verify(self, never()).processApiConfiguration(any(), any());
+        }
+
+        /** A custom API "My Gmail" owned by user-123 whose tool is linked to credential {@code toolKey}. */
+        private UUID arrangeCustomApi(String platformKey, String toolKey) {
+            UUID apiId = UUID.randomUUID();
+            ApiEntity api = createTestApi();
+            api.setId(apiId);
+            api.setSource("custom");
+            api.setPlatformCredentialName(platformKey);
+            ApiToolEntity tool = new ApiToolEntity();
+            tool.setId(UUID.randomUUID());
+            tool.setApiId(apiId);
+            tool.setToolNameId("tool-name-id");
+            tool.setProtocol("HTTP");
+            ToolNameEntity toolNameEntity = new ToolNameEntity();
+            toolNameEntity.setName("listMessages");
+            when(apiRepository.findById(apiId)).thenReturn(Optional.of(api));
+            when(apiToolRepository.findByApiId(apiId)).thenReturn(List.of(tool));
+            when(toolCategoryService.getToolNameByToolNameId("tool-name-id")).thenReturn(Optional.of(toolNameEntity));
+            List<Map<String, Object>> link = toolKey == null ? List.of()
+                    : List.of(Map.of("credential_name", toolKey, "credential_type", "oauth2"));
+            lenient().when(jdbcTemplate.queryForList(anyString(), any(UUID.class))).thenReturn(link);
+            return apiId;
+        }
+
+        @Test
+        @DisplayName("regression LC-002 / item 2: source is NOT what exempts an API, created_by is")
+        void userApiClaimingSourceImportIsStillChecked() {
+            // Pre-fix the guard returned early for any source other than "custom", and the
+            // configuration/process endpoint let a user submit source:"import".
+            UUID apiId = arrangeCustomApi("gmail", "gmail");
+            apiRepository.findById(apiId).get().setSource("import");
+            when(apiRepository.existsSharedIntegrationWithCredentialKey("gmail", "user-123")).thenReturn(true);
+
+            Map<String, Object> result = service.executeApiTool(apiId.toString(), "listMessages",
+                    objectMapper.createArrayNode(), null, "user-123");
+
+            assertEquals("credential_key_conflict", result.get("error"));
+            verify(httpExecutionService, never()).executeHttpCallWithCredentials(any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("regression LC-002: a custom API keyed to a shipped integration never gets its credential")
+        void customApiWithForeignToolKeyIsRefused() {
+            // Pre-fix: the tool's credential key 'gmail' resolved the caller's real Gmail token and
+            // it was stamped onto a request to the base URL the registration chose.
+            UUID apiId = arrangeCustomApi("gmail", "gmail");
+            when(apiRepository.existsSharedIntegrationWithCredentialKey("gmail", "user-123")).thenReturn(true);
+
+            Map<String, Object> result = service.executeApiTool(apiId.toString(), "listMessages",
+                    objectMapper.createArrayNode(), null, "user-123");
+
+            assertEquals("credential_key_conflict", result.get("error"));
+            verify(httpExecutionService, never()).executeHttpCallWithCredentials(any(), any(), any(), any(), any(), any());
+            verify(httpExecutionService, never()).executeHttpCallTyped(any(), any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("regression LC-002: an unauthenticated custom API runs WITHOUT a foreign platform fallback key")
+        void customApiWithForeignPlatformKeyRunsWithoutIt() {
+            UUID apiId = arrangeCustomApi("openai", null);
+            when(apiRepository.existsSharedIntegrationWithCredentialKey("openai", "user-123")).thenReturn(true);
+            org.mockito.ArgumentCaptor<ApiEntity> sent = org.mockito.ArgumentCaptor.forClass(ApiEntity.class);
+            when(httpExecutionService.executeHttpCallWithCredentials(sent.capture(), any(), any(), any(), any(), any()))
+                    .thenReturn(new HashMap<>(Map.of("success", true)));
+
+            service.executeApiTool(apiId.toString(), "listMessages", objectMapper.createArrayNode(), null, "user-123");
+
+            assertNull(sent.getValue().getPlatformCredentialName(),
+                    "the platform fallback must not resolve another integration's key");
+            verify(apiRepository, never()).save(any());
+            assertEquals("openai", apiRepository.findById(apiId).get().getPlatformCredentialName(),
+                    "item 8: the loaded (managed) entity must not be mutated, only a detached copy");
+        }
+
+        @Test
+        @DisplayName("a custom API that owns its key executes normally")
+        void customApiOwningItsKeyExecutes() {
+            UUID apiId = arrangeCustomApi("mycrm", "mycrm");
+            when(apiRepository.existsSharedIntegrationWithCredentialKey("mycrm", "user-123")).thenReturn(false);
+            when(userCredentialService.getCredentialDataMap(any(), any())).thenReturn(Map.of("access_token", "t"));
+            when(httpExecutionService.executeHttpCallWithCredentials(any(), any(), any(), any(), any(), any()))
+                    .thenReturn(new HashMap<>(Map.of("success", true)));
+
+            Map<String, Object> result = service.executeApiTool(apiId.toString(), "listMessages",
+                    objectMapper.createArrayNode(), null, "user-123");
+
+            assertNotEquals("credential_key_conflict", result.get("error"));
+            verify(httpExecutionService).executeHttpCallWithCredentials(any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("regression LC-002: the ownership lookup failing refuses the call (fail closed)")
+        void ownershipLookupFailureRefuses() {
+            UUID apiId = arrangeCustomApi("mycrm", "mycrm");
+            when(apiRepository.existsSharedIntegrationWithCredentialKey("mycrm", "user-123"))
+                    .thenThrow(new RuntimeException("db down"));
+
+            Map<String, Object> result = service.executeApiTool(apiId.toString(), "listMessages",
+                    objectMapper.createArrayNode(), null, "user-123");
+
+            assertEquals("credential_key_unverified", result.get("error"));
+            verify(httpExecutionService, never()).executeHttpCallWithCredentials(any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("a platform-owned (shipped) API is not subjected to the key-ownership check")
+        void shippedApiSkipsTheCheck() {
+            UUID apiId = arrangeCustomApi("gmail", "gmail");
+            apiRepository.findById(apiId).get().setSource("import");
+            apiRepository.findById(apiId).get().setCreatedBy("system");
+            when(userCredentialService.getCredentialDataMap(any(), any())).thenReturn(Map.of("access_token", "t"));
+            when(httpExecutionService.executeHttpCallWithCredentials(any(), any(), any(), any(), any(), any()))
+                    .thenReturn(new HashMap<>(Map.of("success", true)));
+
+            service.executeApiTool(apiId.toString(), "listMessages", objectMapper.createArrayNode(), null, "user-123");
+
+            verify(apiRepository, never()).existsSharedIntegrationWithCredentialKey(anyString(), any());
+        }
+
         @Test
         @DisplayName("should execute tool and return result with metadata")
         void shouldExecuteToolAndReturnResult() throws Exception {
@@ -332,8 +515,11 @@ class ApiServiceTest {
             when(restTemplate.getForEntity(eq("http://api.example.com/health"), eq(Object.class)))
                 .thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
 
-            // Act
-            Map<String, Object> result = service.testApiConnection(apiId.toString());
+            // Act (DNS layer of the SSRF guard stubbed: the fixture host is not resolvable offline)
+            Map<String, Object> result;
+            try (var ignored = mockStatic(com.apimarketplace.common.web.UrlSafetyValidator.class)) {
+                result = service.testApiConnection(apiId.toString());
+            }
 
             // Assert
             assertTrue((Boolean) result.get("success"));
@@ -354,11 +540,31 @@ class ApiServiceTest {
                 .thenThrow(new RuntimeException("Connection refused"));
 
             // Act
-            Map<String, Object> result = service.testApiConnection(apiId.toString());
+            Map<String, Object> result;
+            try (var ignored = mockStatic(com.apimarketplace.common.web.UrlSafetyValidator.class)) {
+                result = service.testApiConnection(apiId.toString());
+            }
 
             // Assert
             assertFalse((Boolean) result.get("success"));
             assertNotNull(result.get("error"));
+        }
+
+        @Test
+        @DisplayName("regression LC-006: the connection test never GETs an internal base url")
+        void refusesInternalBaseUrl() {
+            // Pre-fix the health probe GET the base url of any API, custom ones included, with no
+            // SSRF check: a blind GET into the cluster or the metadata endpoint.
+            UUID apiId = UUID.randomUUID();
+            ApiEntity api = createTestApi();
+            api.setId(apiId);
+            api.setBaseUrl("http://169.254.169.254/latest/meta-data");
+            when(apiRepository.findById(apiId)).thenReturn(Optional.of(api));
+
+            Map<String, Object> result = service.testApiConnection(apiId.toString());
+
+            assertFalse((Boolean) result.get("success"));
+            verify(restTemplate, never()).getForEntity(anyString(), eq(Object.class));
         }
 
         @Test

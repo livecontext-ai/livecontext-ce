@@ -238,7 +238,7 @@ class CustomApiRegistrationServiceTest {
 
         // The catalog-side template and tool links go, because the tools they point at are
         // replaced; the re-registration rebuilds them immediately.
-        verify(catalogSeedCredentialService).deleteCredentialByName("oldapi");
+        verify(catalogSeedCredentialService).deleteCredentialsForApi(any(), eq("oldapi"));
         verify(apiService).deleteApi(apiId);
 
         // The author's OWN stored key must survive. This assertion used to be its mirror image:
@@ -264,7 +264,7 @@ class CustomApiRegistrationServiceTest {
 
         service.deleteCustomApi(apiId.toString(), "tenant-1");
 
-        verify(catalogSeedCredentialService).deleteCredentialByName("oldapi");
+        verify(catalogSeedCredentialService).deleteCredentialsForApi(any(), eq("oldapi"));
         verify(credentialClient).deleteTenantPlatformCredential("oldapi", "tenant-1");
         verify(apiService).deleteApi(apiId);
     }
@@ -811,7 +811,7 @@ class CustomApiRegistrationServiceTest {
         service.registerCustomApi(json, "tenant-1");
 
         verify(catalogSeedCredentialService).linkCredentials(
-                eq(apiId), eq("testapi"), eq("bearer_token"), eq("testapi"), any(), any(), any());
+                eq(apiId), eq("testapi"), eq("bearer_token"), eq("testapi"), any(), any(), any(), eq("tenant-1"), anyBoolean());
     }
 
     @Test
@@ -840,7 +840,7 @@ class CustomApiRegistrationServiceTest {
         assertEquals("weatherapi", requestCaptor.getValue().iconSlug(),
                 "the API must carry the same slug the credential is named by");
         verify(catalogSeedCredentialService).linkCredentials(
-                eq(apiId), eq("weatherapi"), eq("bearer_token"), eq("weatherapi"), any(), any(), any());
+                eq(apiId), eq("weatherapi"), eq("bearer_token"), eq("weatherapi"), any(), any(), any(), eq("tenant-1"), anyBoolean());
     }
 
     @Test
@@ -888,7 +888,7 @@ class CustomApiRegistrationServiceTest {
 
         service.deleteCustomApi(apiId.toString(), "tenant-1");
 
-        verify(catalogSeedCredentialService).deleteCredentialByName("myapi");
+        verify(catalogSeedCredentialService).deleteCredentialsForApi(any(), eq("myapi"));
         verify(credentialClient).deleteTenantPlatformCredential("myapi", "tenant-1");
         verify(apiService).deleteApi(apiId);
     }
@@ -909,7 +909,7 @@ class CustomApiRegistrationServiceTest {
         // Should not throw - best-effort cleanup
         service.deleteCustomApi(apiId.toString(), "tenant-1");
 
-        verify(catalogSeedCredentialService).deleteCredentialByName("myapi");
+        verify(catalogSeedCredentialService).deleteCredentialsForApi(any(), eq("myapi"));
         verify(apiService).deleteApi(apiId);
     }
 
@@ -922,7 +922,7 @@ class CustomApiRegistrationServiceTest {
 
         service.deleteCustomApi(apiId.toString(), "tenant-1");
 
-        verify(catalogSeedCredentialService, never()).deleteCredentialByName(anyString());
+        verify(catalogSeedCredentialService, never()).deleteCredentialsForApi(any(), anyString());
         verify(credentialClient, never()).deleteTenantPlatformCredential(anyString(), anyString());
         verify(apiService).deleteApi(apiId);
     }
@@ -1327,7 +1327,7 @@ class CustomApiRegistrationServiceTest {
         ArgumentCaptor<CatalogSeedCredentialService.ApiKeyConfig> captor =
                 ArgumentCaptor.forClass(CatalogSeedCredentialService.ApiKeyConfig.class);
         verify(catalogSeedCredentialService).linkCredentials(
-                eq(apiId), anyString(), anyString(), anyString(), any(), captor.capture(), any());
+                eq(apiId), anyString(), anyString(), anyString(), any(), captor.capture(), any(), eq("tenant-1"), anyBoolean());
         return captor.getValue();
     }
 
@@ -1338,7 +1338,7 @@ class CustomApiRegistrationServiceTest {
         service.registerCustomApi(json, "tenant-1");
         ArgumentCaptor<JsonNode> captor = ArgumentCaptor.forClass(JsonNode.class);
         verify(catalogSeedCredentialService).linkCredentials(
-                eq(apiId), anyString(), anyString(), anyString(), any(), any(), captor.capture());
+                eq(apiId), anyString(), anyString(), anyString(), any(), any(), captor.capture(), eq("tenant-1"), anyBoolean());
         return captor.getValue();
     }
 
@@ -1532,7 +1532,7 @@ class CustomApiRegistrationServiceTest {
 
         service.deleteCustomApi(apiId.toString(), "tenant-1");
 
-        verify(catalogSeedCredentialService, never()).deleteCredentialByName(anyString());
+        verify(catalogSeedCredentialService, never()).deleteCredentialsForApi(any(), anyString());
         verify(apiService).deleteApi(apiId);
     }
 
@@ -1549,30 +1549,55 @@ class CustomApiRegistrationServiceTest {
 
         service.deleteCustomApi(apiId.toString(), "tenant-1");
 
-        verify(catalogSeedCredentialService, never()).deleteCredentialByName(anyString());
+        verify(catalogSeedCredentialService, never()).deleteCredentialsForApi(any(), anyString());
     }
 
     @Test
-    void aKeylessApiIsNotSubjectedToTheCollisionCheck() {
-        // With no credential there is no shared row to overwrite, so the check must not run and
-        // must not refuse a legitimate name.
+    void regressionLc057AKeylessApiIsSubjectedToTheCollisionCheckToo() {
+        // INVERTED (CASA readiness). An authType:none API still carries its key as
+        // platform_credential_name / icon_slug, which the ownership predicate and the platform
+        // fallback read: skipping the check let a keyless API named "imap" claim the native
+        // imap template and then delete it with delete_api.
         ObjectNode json = buildValidApiJson();
-        json.put("apiName", "Stripe");
+        json.put("apiName", "IMAP");
+        when(apiRepository.existsSharedIntegrationWithCredentialKey("imap", "tenant-1")).thenReturn(true);
+
+        assertThrows(IllegalArgumentException.class, () -> service.registerCustomApi(json, "tenant-1"));
+        verify(apiService, never()).processApiConfiguration(any(), any());
+    }
+
+    @Test
+    void aKeylessApiWithAFreeNameStillRegisters() {
+        ObjectNode json = buildValidApiJson();
+        json.put("apiName", "My Free Name");
         when(apiService.processApiConfiguration(any(), eq("tenant-1"))).thenReturn(mockApiResponse());
 
         assertDoesNotThrow(() -> service.registerCustomApi(json, "tenant-1"));
-        verify(apiRepository, never()).existsSharedIntegrationWithCredentialKey(anyString(), any());
+        verify(apiRepository).existsSharedIntegrationWithCredentialKey(anyString(), eq("tenant-1"));
     }
 
     @Test
-    void aFailingCollisionLookupLetsTheRegistrationThrough() {
-        // Fail OPEN. The collision is rare and recoverable; refusing every registration because
-        // one query failed is neither.
+    void regressionLc002AFailingCollisionLookupRefusesTheRegistration() {
+        // INVERTED for LC-002 (CASA readiness). This used to be fail OPEN: a lookup error
+        // accepted the key, so a registration over a shared key (the caller's Gmail token, sent to
+        // the base URL the registration chose) went through whenever the query failed.
         when(apiRepository.existsSharedIntegrationWithCredentialKey(anyString(), any()))
                 .thenThrow(new RuntimeException("db down"));
-        when(apiService.processApiConfiguration(any(), eq("tenant-1"))).thenReturn(mockApiResponse());
 
-        assertDoesNotThrow(() -> service.registerCustomApi(withAuth(buildValidApiJson(), "bearer"), "tenant-1"));
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> service.registerCustomApi(withAuth(buildValidApiJson(), "bearer"), "tenant-1"));
+        assertTrue(ex.getMessage().contains("retry"), ex.getMessage());
+        verify(apiService, never()).processApiConfiguration(any(), any());
+    }
+
+    @Test
+    void regressionLc002AFailingShippedLookupRefusesTheRegistration() {
+        when(apiRepository.existsShippedIntegrationWithCredentialKey(anyString()))
+                .thenThrow(new RuntimeException("db down"));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.registerCustomApi(withAuth(buildValidApiJson(), "bearer"), ""));
+        verify(apiService, never()).processApiConfiguration(any(), any());
     }
 
     @Test
@@ -1617,7 +1642,7 @@ class CustomApiRegistrationServiceTest {
 
         verify(apiRepository).existsSharedIntegrationWithCredentialKey("ghost", "author-A");
         verify(apiRepository, never()).existsSharedIntegrationWithCredentialKey(anyString(), eq("member-B"));
-        verify(catalogSeedCredentialService, never()).deleteCredentialByName(anyString());
+        verify(catalogSeedCredentialService, never()).deleteCredentialsForApi(any(), anyString());
     }
 
     @Test
@@ -1643,7 +1668,7 @@ class CustomApiRegistrationServiceTest {
         TenantResolver.runWithOrgScope("org-1",
                 () -> service.deleteCustomApi(apiId.toString(), "member-B"));
 
-        verify(catalogSeedCredentialService, never()).deleteCredentialByName(anyString());
+        verify(catalogSeedCredentialService, never()).deleteCredentialsForApi(any(), anyString());
         verify(credentialClient, never()).deleteTenantPlatformCredential(anyString(), anyString());
         // The API itself still goes. Refusing to touch a key that is not ours must not turn into
         // refusing to delete the API the caller asked to delete.
@@ -1673,7 +1698,7 @@ class CustomApiRegistrationServiceTest {
         TenantResolver.runWithOrgScope("org-1",
                 () -> service.deleteCustomApi(apiId.toString(), "member-B"));
 
-        verify(catalogSeedCredentialService).deleteCredentialByName("mything");
+        verify(catalogSeedCredentialService).deleteCredentialsForApi(any(), eq("mything"));
         verify(credentialClient).deleteTenantPlatformCredential("mything", "member-B");
         verify(credentialClient, never()).deleteTenantPlatformCredential(anyString(), eq("author-A"));
         // The design claim is "ask once, gate both deletes on the answer". Two lookups could
@@ -1705,10 +1730,10 @@ class CustomApiRegistrationServiceTest {
 
         service.updateCustomApi(apiId.toString(), updates, "tenant-1");
 
-        verify(catalogSeedCredentialService, never()).deleteCredentialByName(anyString());
+        verify(catalogSeedCredentialService, never()).deleteCredentialsForApi(any(), anyString());
         verify(credentialClient, never()).deleteTenantPlatformCredential(anyString(), anyString());
         verify(catalogSeedCredentialService).linkCredentials(
-                any(UUID.class), eq("ghost"), anyString(), eq("ghost"), any(), any(), any());
+                any(UUID.class), eq("ghost"), anyString(), eq("ghost"), any(), any(), any(), eq("tenant-1"), anyBoolean());
     }
 
     @Test
@@ -1726,7 +1751,7 @@ class CustomApiRegistrationServiceTest {
 
         service.deleteCustomApi(apiId.toString(), "tenant-1");
 
-        verify(catalogSeedCredentialService, never()).deleteCredentialByName(anyString());
+        verify(catalogSeedCredentialService, never()).deleteCredentialsForApi(any(), anyString());
         verify(credentialClient, never()).deleteTenantPlatformCredential(anyString(), anyString());
         verify(apiService).deleteApi(apiId);
     }

@@ -1881,7 +1881,7 @@ export class NodeCreationService {
 
     // 8. Create note nodes
     if (plan.notes) {
-      const noteResult = createNoteNodes(plan.notes as any, currentX, currentY);
+      const noteResult = createNoteNodes(plan.notes as any, currentX, currentY, nodes);
       nodes.push(...noteResult.nodes);
       currentY = noteResult.nextY;
     }

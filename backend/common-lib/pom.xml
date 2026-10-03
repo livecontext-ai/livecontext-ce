@@ -68,6 +68,22 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- Netty resolver (optional - SafeAddressResolverGroup, the connect-time SSRF pin for
+             Reactor Netty clients; version from the Spring Boot BOM, already on every service
+             that uses webflux or redis) -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-resolver</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <!-- OutboundHttpTransport: the transport limits of the pinned outbound Reactor Netty clients.
+             Optional, like netty-resolver: only services that already run Reactor Netty load it. -->
+        <dependency>
+            <groupId>io.projectreactor.netty</groupId>
+            <artifactId>reactor-netty-http</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Actuator (optional - for HealthIndicator in scaling readiness probe) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

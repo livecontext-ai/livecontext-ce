@@ -46,18 +46,29 @@ public class AvatarFileCloneService {
 
     private final RestTemplate restTemplate;
     private final String storageBaseUrl;
+    private final String gatewaySecretKey;
 
     // Two constructors: mark the DI one @Autowired so Spring doesn't require a no-arg
     // constructor (the package-private one below is for tests). Without this, Spring cannot
     // pick a constructor and fails context startup with "No default constructor found".
     @Autowired
-    public AvatarFileCloneService(@Value("${services.storage-url:http://localhost:8082}") String storageBaseUrl) {
-        this(new RestTemplate(), storageBaseUrl);
+    public AvatarFileCloneService(@Value("${services.storage-url:http://localhost:8082}") String storageBaseUrl,
+                                  @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
+        this(new RestTemplate(), storageBaseUrl, gatewaySecretKey);
     }
 
     AvatarFileCloneService(RestTemplate restTemplate, String storageBaseUrl) {
+        this(restTemplate, storageBaseUrl, null);
+    }
+
+    AvatarFileCloneService(RestTemplate restTemplate, String storageBaseUrl, String gatewaySecretKey) {
         this.restTemplate = restTemplate;
         this.storageBaseUrl = storageBaseUrl;
+        this.gatewaySecretKey = gatewaySecretKey;
+        if (gatewaySecretKey != null && !gatewaySecretKey.isBlank()) {
+            restTemplate.getInterceptors().add(
+                    new com.apimarketplace.common.web.GatewaySignatureV2Interceptor(() -> gatewaySecretKey));
+        }
     }
 
     /**
@@ -120,6 +131,11 @@ public class AvatarFileCloneService {
         if (organizationId != null && !organizationId.isBlank()) {
             headers.set("X-Organization-ID", organizationId);
         }
+        // /api/files/ is not a public path on storage-service: without the gateway signature
+        // this upload is refused (401) in the cloud and the clone silently fell back to the
+        // default preset. Signed over the identity headers set just above.
+        com.apimarketplace.common.web.InternalGatewaySigner.stamp(
+                headers, "internal-publication-avatar-clone", gatewaySecretKey);
 
         ResponseEntity<Map> response = restTemplate.exchange(
                 storageBaseUrl + "/api/files/generic-upload",

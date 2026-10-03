@@ -67,6 +67,7 @@ class WorkflowDeletionCascadeTest {
     @Mock private ObjectMapper objectMapper;
     @Mock private EntityManager entityManager;
     @Mock private OrgAccessGuard orgAccessService;
+    @Mock private com.apimarketplace.orchestrator.services.notification.delivery.NotificationDeliveryService notificationDelivery;
 
     @InjectMocks
     private WorkflowManagementService service;
@@ -96,6 +97,17 @@ class WorkflowDeletionCascadeTest {
     @Nested
     @DisplayName("deleteWorkflow cleanup cascade")
     class DeleteCascadeTests {
+
+        @Test
+        @DisplayName("Regression (reminder after a stop): a deleted workflow's failure incident is closed")
+        void closesTheFailureIncident() {
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));
+            when(workflowRunRepository.findByWorkflowIdOrderByStartedAtDesc(WORKFLOW_ID)).thenReturn(runs);
+
+            service.deleteWorkflow(WORKFLOW_ID, TENANT_ID);
+
+            verify(notificationDelivery).onWorkflowStopped(WORKFLOW_ID);
+        }
 
         @Test
         @DisplayName("Soft-deletes storage entries for the workflow")
@@ -314,6 +326,7 @@ class WorkflowDeletionCascadeTest {
 
             assertThat(result).isFalse();
             verify(workflowRunRepository, never()).findByWorkflowIdOrderByStartedAtDesc(any());
+            verify(notificationDelivery, never()).onWorkflowStopped(any());
         }
     }
 

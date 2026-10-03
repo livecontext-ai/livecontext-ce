@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.trigger;
 
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.workflow.RunStatus;
 import com.apimarketplace.orchestrator.services.triggers.TriggerUserResolver;
@@ -49,7 +50,7 @@ public class DatasourceTriggerDispatchService {
                                    Map<String, Object> row, Map<String, Object> previousRow,
                                    Instant triggeredAt) {
         return dispatch(workflowId, triggerId, eventType, dataSourceId, rowId,
-                row, previousRow, triggeredAt, null);
+                row, previousRow, triggeredAt, null, null);
     }
 
     /**
@@ -67,6 +68,22 @@ public class DatasourceTriggerDispatchService {
                                    Long dataSourceId, Long rowId,
                                    Map<String, Object> row, Map<String, Object> previousRow,
                                    Instant triggeredAt, String eventOrgId) {
+        return dispatch(workflowId, triggerId, eventType, dataSourceId, rowId,
+                row, previousRow, triggeredAt, eventOrgId, null);
+    }
+
+    /**
+     * LC-066 re-audit item 1 overload: {@code rowDataSensitivity} is the classification stamped
+     * on the event by datasource-service ({@code DatasourceEventDispatchRequest.dataSensitivity} -
+     * {@code "RESTRICTED"} or {@code "NORMAL"}, null on a legacy caller). When RESTRICTED, the fire
+     * carries {@link ReusableTriggerService#RESTRICTED_DATA_MARKER}, so the run is marked
+     * restricted before the fire writes its first payload - the same taint a restricted parent
+     * workflow gives a sub-workflow.
+     */
+    public DispatchResult dispatch(UUID workflowId, String triggerId, String eventType,
+                                   Long dataSourceId, Long rowId,
+                                   Map<String, Object> row, Map<String, Object> previousRow,
+                                   Instant triggeredAt, String eventOrgId, String rowDataSensitivity) {
         if (workflowId == null || triggerId == null || eventType == null) {
             return DispatchResult.malformed();
         }
@@ -115,6 +132,11 @@ public class DatasourceTriggerDispatchService {
         // the internal plan-control marker as defense-in-depth.
         Map<String, Object> payload = ReusableTriggerService.sanitizePlanMarker(
                 buildPayload(eventType, dataSourceId, rowId, row, previousRow, triggeredAt, run.getTenantId()));
+        // LC-066: a row derived from Gmail / Drive makes this fire's run restricted. Carried with
+        // the fire rather than marked here: the execution queue may run it on another replica.
+        if (DataSensitivity.parse(rowDataSensitivity).isRestricted()) {
+            payload = ReusableTriggerService.withRestrictedDataMarker(payload);
+        }
 
         try {
             TriggerExecutionResult result = triggerService.executeTrigger(

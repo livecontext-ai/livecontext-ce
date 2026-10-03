@@ -593,6 +593,53 @@ class WorkflowPinServiceTest {
             verify(triggerSyncService).syncAllTriggersFromPinnedVersion(wf);
         }
 
+        private com.apimarketplace.orchestrator.services.notification.delivery.NotificationDeliveryService closesIncidents() {
+            var delivery = org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.notification.delivery.NotificationDeliveryService.class);
+            service.setNotificationDelivery(delivery);
+            return delivery;
+        }
+
+        @Test
+        @DisplayName("Regression (reminder after a stop): unpin closes the workflow's failure incident")
+        void unpinClosesTheFailureIncident() {
+            var delivery = closesIncidents();
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow(TENANT_ID, 5)));
+
+            service.pin(WORKFLOW_ID, TENANT_ID, null);
+
+            verify(delivery).onWorkflowStopped(WORKFLOW_ID);
+        }
+
+        @Test
+        @DisplayName("A refused unpin closes nothing")
+        void refusedUnpinClosesNothing() {
+            var delivery = closesIncidents();
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow("other-tenant", 5)));
+
+            assertThat(service.pin(WORKFLOW_ID, TENANT_ID, null))
+                    .isInstanceOf(WorkflowPinService.PinResult.Forbidden.class);
+
+            verify(delivery, never()).onWorkflowStopped(any());
+        }
+
+        @Test
+        @DisplayName("A pin (the workflow keeps running) closes nothing")
+        void pinClosesNothing() {
+            var delivery = closesIncidents();
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow(TENANT_ID, 5)));
+            when(versionService.getVersion(WORKFLOW_ID, 3))
+                    .thenReturn(Optional.of(new WorkflowPlanVersionEntity()));
+            when(workflowRunRepository
+                    .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                            eq(WORKFLOW_ID), eq(3), anyList()))
+                    .thenReturn(Optional.of(new WorkflowRunEntity()));
+
+            assertThat(service.pin(WORKFLOW_ID, TENANT_ID, 3))
+                    .isInstanceOf(WorkflowPinService.PinResult.Success.class);
+
+            verify(delivery, never()).onWorkflowStopped(any());
+        }
+
         @Test
         @DisplayName("skips version lookups when unpinning")
         void unpinSkipsVersionLookup() {

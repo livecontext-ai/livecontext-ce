@@ -20,6 +20,11 @@ interface PageHeaderProps {
    * Purely semantic: both levels render with the same styling.
    */
   headingLevel?: 'h1' | 'h2';
+  /**
+   * Rendered on the title's line but OUTSIDE the heading element (an info button, a badge), so
+   * it never becomes part of the heading's accessible name.
+   */
+  titleAddon?: React.ReactNode;
 }
 
 /**
@@ -31,15 +36,24 @@ export function PageHeader({
   title,
   subtitle,
   iconClassName = "w-5 h-5 text-theme-primary",
-  headingLevel: Heading = 'h1'
+  headingLevel: Heading = 'h1',
+  titleAddon,
 }: PageHeaderProps) {
   return (
-    <div className="flex items-center gap-3">
-      <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
+    <div className="flex items-center gap-3 min-w-0">
+      {/* shrink-0: beside a long subtitle on a narrow column the tile was squeezed into an oval. */}
+      <div className="w-10 h-10 shrink-0 bg-theme-secondary rounded-xl flex items-center justify-center">
         <Icon className={iconClassName} />
       </div>
-      <div>
-        <Heading className="text-lg font-semibold text-theme-primary">{title}</Heading>
+      <div className="min-w-0">
+        {titleAddon ? (
+          <div className="flex items-center gap-1.5">
+            <Heading className="text-lg font-semibold text-theme-primary">{title}</Heading>
+            {titleAddon}
+          </div>
+        ) : (
+          <Heading className="text-lg font-semibold text-theme-primary">{title}</Heading>
+        )}
         {subtitle && (
           <p className="text-sm text-theme-secondary">{subtitle}</p>
         )}

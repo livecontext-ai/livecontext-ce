@@ -471,6 +471,29 @@ public class CredentialRepository {
         return jdbc.query(sql, new CredentialRowMapper(), tenantId, integration);
     }
 
+    /**
+     * Every usable OAuth2 credential, in ANY tenant, that holds a token from OAuth client
+     * {@code clientId}: the candidates for sharing one provider grant (LC-065). A provider revokes
+     * per account x client whichever of our tenants holds the tokens, so this deliberately crosses
+     * tenants; auth-service owns the table. When {@code subjectHash} is known, rows of ANOTHER known
+     * account are left out in SQL (they cannot share the grant), so the platform-wide client does
+     * not load every connection; capped at 200 rows, enough to decide. Token host is checked in Java.
+     */
+    public List<Credential> findUsableOAuth2ByClientId(String clientId, String subjectHash) {
+        String sql = """
+            SELECT * FROM auth.credentials
+            WHERE type = 'OAuth2'
+              AND status IN ('active', 'expiring')
+              AND COALESCE(credential_data->>'oauth_client_id', credential_data->>'client_id') = ?
+              AND (jsonb_exists(credential_data, 'refresh_token') OR jsonb_exists(credential_data, 'access_token'))
+              AND (CAST(? AS text) IS NULL
+                   OR credential_data->>'oauth_subject' IS NULL
+                   OR credential_data->>'oauth_subject' = CAST(? AS text))
+            LIMIT 200
+            """;
+        return jdbc.query(sql, new CredentialRowMapper(), clientId, subjectHash, subjectHash);
+    }
+
     public List<Credential> findAllByTenantId(String tenantId) {
         String sql = """
             SELECT * FROM auth.credentials

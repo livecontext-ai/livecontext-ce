@@ -452,6 +452,76 @@ class NotificationDeliveryStoresPostgresTest {
     }
 
     @Test
+    @DisplayName("Regression (reminder after a stop): a stopped workflow's incident closes, so it is no longer due a reminder")
+    void stoppedWorkflowIsNoLongerReminded() {
+        UUID stopped = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        Instant dayAgo = Instant.now().minus(Duration.ofHours(25));
+        for (UUID wf : List.of(stopped, other)) {
+            incidents.recordFailure(TENANT, ORG, wf, dayAgo);
+            // Failed once more since it was last reported: exactly what makes a reminder due.
+            incidents.recordFailure(TENANT, ORG, wf, dayAgo.plusSeconds(60));
+        }
+        Instant cutoff = Instant.now().minus(Duration.ofHours(24));
+        assertThat(incidents.dueReminders(cutoff, 0L, 10)).as("both due before the stop").hasSize(2);
+
+        assertThat(incidents.closeStopped(stopped, Instant.now())).isEqualTo(1);
+
+        assertThat(incidents.hasOpen(stopped)).isFalse();
+        assertThat(incidents.dueReminders(cutoff, 0L, 10)).as("only the workflow still running")
+                .singleElement().satisfies(i -> assertThat(i.workflowId()).isEqualTo(other));
+        assertThat(incidents.closeStopped(stopped, Instant.now())).as("idempotent").isZero();
+    }
+
+    @Test
+    @DisplayName("A stop announces nothing, and a failure after it opens a NEW incident that is sent")
+    void failureAfterAStopIsANewAlert() {
+        UUID wf = UUID.randomUUID();
+        incidents.recordFailure(TENANT, ORG, wf, Instant.now().minus(Duration.ofHours(2)));
+        Instant stop = Instant.now();
+        incidents.closeStopped(wf, stop);
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM orchestrator.notification_incidents "
+                + "WHERE workflow_id = ? AND recovered_notified_at IS NOT NULL", Integer.class, wf))
+                .as("no recovery was claimed").isZero();
+        assertThat(incidents.recordFailure(TENANT, ORG, wf, stop.plusSeconds(60), stop.plusSeconds(60)))
+                .isEqualTo(NotificationIncidentStore.FailureOutcome.OPENED);
+    }
+
+    @Test
+    @DisplayName("Regression (reminder after a stop, flapping workflow): a failure after the stop is a NEW alert, never a silent reopen")
+    void failureAfterAStopOfAFlappingWorkflowIsANewAlert() {
+        UUID wf = UUID.randomUUID();
+        Instant t = Instant.now().minus(Duration.ofHours(3));
+        // failed, recovered (announced), failing again (announced): the state in which a further
+        // failure would reopen the SAME incident with no message at all.
+        incidents.recordFailure(TENANT, ORG, wf, t, t);
+        incidents.resolve(wf, t.plusSeconds(60));
+        assertThat(incidents.recordFailure(TENANT, ORG, wf, t.plusSeconds(120), t.plusSeconds(120)))
+                .isEqualTo(NotificationIncidentStore.FailureOutcome.FAILING_AGAIN);
+        Instant stop = t.plusSeconds(180);
+        incidents.closeStopped(wf, stop);
+
+        assertThat(incidents.recordFailure(TENANT, ORG, wf, stop.plusSeconds(60), stop.plusSeconds(60)))
+                .isEqualTo(NotificationIncidentStore.FailureOutcome.OPENED);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM orchestrator.notification_incidents "
+                + "WHERE workflow_id = ?", Integer.class, wf)).as("a fresh row, the stopped one stays closed").isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("A failure that HAPPENED before the stop but is processed after it does not reopen anything")
+    void failureInFlightDuringTheStopStaysClosed() {
+        UUID wf = UUID.randomUUID();
+        Instant stop = Instant.now();
+        incidents.recordFailure(TENANT, ORG, wf, stop.minus(Duration.ofHours(2)));
+        incidents.closeStopped(wf, stop);
+
+        assertThat(incidents.recordFailure(TENANT, ORG, wf, stop.minusSeconds(5), stop.plusSeconds(5)))
+                .isEqualTo(NotificationIncidentStore.FailureOutcome.JOINED);
+        assertThat(incidents.hasOpen(wf)).isFalse();
+    }
+
+    @Test
     @DisplayName("An incident with no failure for a week closes silently")
     void staleIncidentCloses() {
         UUID wf = UUID.randomUUID();

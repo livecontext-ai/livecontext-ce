@@ -211,6 +211,15 @@ public class AgentTaskEntity implements OrgScopedEntity {
     @Column(name = "attachments", columnDefinition = "jsonb")
     private List<Map<String, Object>> attachments = new ArrayList<>();
 
+    /**
+     * CASA LC-066: RESTRICTED when the task was written (assigned, updated, completed) from an
+     * execution that held Gmail / Google Drive content. The executions that work on it (assignee
+     * and reviewer) are then tagged restricted, so the provider allow-list applies. Only ever
+     * ratchets up. NORMAL otherwise (V561).
+     */
+    @Column(name = "data_sensitivity", nullable = false, length = 16)
+    private String dataSensitivity = "NORMAL";
+
     public AgentTaskEntity() {}
 
     @PrePersist
@@ -335,4 +344,12 @@ public class AgentTaskEntity implements OrgScopedEntity {
 
     public List<Map<String, Object>> getAttachments() { return attachments; }
     public void setAttachments(List<Map<String, Object>> attachments) { this.attachments = attachments == null ? new ArrayList<>() : attachments; }
+
+    public String getDataSensitivity() { return dataSensitivity; }
+    public void setDataSensitivity(String dataSensitivity) { this.dataSensitivity = dataSensitivity == null ? "NORMAL" : dataSensitivity; }
+
+    /** True when the task holds content from a restricted execution (see {@link #dataSensitivity}). */
+    public boolean holdsRestrictedData() {
+        return com.apimarketplace.common.classification.DataSensitivity.parse(dataSensitivity).isRestricted();
+    }
 }

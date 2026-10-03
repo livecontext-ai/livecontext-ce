@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.common.web.UrlSafetyValidator;
 import com.apimarketplace.credential.client.CredentialClient;
 import com.apimarketplace.credential.client.dto.CredentialSummaryDto;
 import com.apimarketplace.orchestrator.domain.file.FileRef;
@@ -11,6 +12,7 @@ import com.apimarketplace.orchestrator.utils.file.FileNameExtractor;
 import com.apimarketplace.orchestrator.utils.file.MimeTypeRegistry;
 import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.Session;
 import com.jcraft.jsch.SftpATTRS;
 import org.slf4j.Logger;
@@ -200,6 +202,22 @@ public class SftpNode extends BaseNode {
                 System.currentTimeMillis() - startTime);
         }
 
+        // SSRF: the host and port come from workflow input or a stored credential and go straight
+        // to a socket, so they get the same shared filter a URL-shaped input gets (LC-075).
+        //
+        // JSch is handed the vetted ADDRESS, not the name, so the guard is not check-then-connect
+        // here: see the same comment in SshNode for why the pin costs nothing over SSH.
+        String connectHost;
+        try {
+            connectHost = UrlSafetyValidator.toSocketHost(
+                UrlSafetyValidator.resolveOutboundHostSafe(host, port));
+        } catch (IllegalArgumentException e) {
+            return NodeExecutionResult.failureWithOutput(nodeId,
+                "SFTP: " + e.getMessage(),
+                buildErrorResult(host, operation, remotePath, startTime, resolvedParams),
+                System.currentTimeMillis() - startTime);
+        }
+
         Session session = null;
         ChannelSftp channel = null;
         try {
@@ -211,7 +229,7 @@ public class SftpNode extends BaseNode {
                 }
             }
 
-            session = jsch.getSession(username, host, port);
+            session = openSession(jsch, username, connectHost, port);
 
             if ("password".equals(authMethod)) {
                 if (password != null) {
@@ -431,6 +449,15 @@ public class SftpNode extends BaseNode {
             try { return Integer.parseInt(s); } catch (NumberFormatException e) { return defaultVal; }
         }
         return defaultVal;
+    }
+
+    /**
+     * The one place JSch is told where to dial. Package-private and overridable so a test can
+     * assert the SSRF-vetted ADDRESS is what gets there, without opening a socket: the whole point
+     * of the guard is lost if the configured NAME reaches this call and JSch resolves it again.
+     */
+    Session openSession(JSch jsch, String username, String connectHost, int port) throws JSchException {
+        return jsch.getSession(username, connectHost, port);
     }
 
     private Map<String, Object> buildErrorResult(String host, String operation, String remotePath, long startTime,

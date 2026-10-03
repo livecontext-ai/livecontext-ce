@@ -69,6 +69,7 @@ class CloudLinkServiceFreeLinkTest {
                 "https://kc.example.com/realms/test", "ce-link", "http://localhost/callback",
                 "test-encryption-key-for-unit-tests", CLOUD_API, "1.4.0-test", new ObjectMapper(),
                 restTemplate, clock);
+        CloudLinkTokenColumnsFake.backByStubbedEntity(cloudLinkRepository);
         lenient().when(cloudLinkRepository.findByTenantId(TENANT_ID))
                 .thenAnswer(inv -> Optional.ofNullable(stored.get()));
         lenient().when(cloudLinkRepository.save(any())).thenAnswer(inv -> {

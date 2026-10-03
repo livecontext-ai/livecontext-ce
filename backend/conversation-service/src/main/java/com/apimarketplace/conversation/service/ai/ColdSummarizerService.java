@@ -5,6 +5,7 @@ import com.apimarketplace.agent.summary.ColdSummarizerPromptBuilder.Turn;
 import com.apimarketplace.agent.summary.ColdSummaryEnvelope;
 import com.apimarketplace.agent.summary.ColdSummaryGate;
 import com.apimarketplace.agent.summary.CompactionTrigger;
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.conversation.repository.ConversationRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -98,6 +99,14 @@ public class ColdSummarizerService {
     private final Counter gateRefusedTrigger;
     private final MeterRegistry meterRegistry;
 
+    /** LC-004 gate; optional so the unit tests that build this service directly keep working. */
+    private RestrictedDataTransferGuard restrictedDataTransferGuard;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setRestrictedDataTransferGuard(RestrictedDataTransferGuard restrictedDataTransferGuard) {
+        this.restrictedDataTransferGuard = restrictedDataTransferGuard;
+    }
+
     public ColdSummarizerService(ConversationRepository conversationRepository,
                                  ObjectMapper mapper,
                                  LockProvider lockProvider,
@@ -148,6 +157,29 @@ public class ColdSummarizerService {
     public SummarizeOutcome summarize(SummarizeRequest req, LlmJsonInvoker invoker) {
         Objects.requireNonNull(req, "SummarizeRequest required");
         Objects.requireNonNull(invoker, "LlmJsonInvoker required");
+
+        // LC-004: summarising re-sends the old turns to a model. Computed once, regardless of
+        // the billed provider: the conversation's tag travels with the request (see below) so
+        // JsonCompletionService's RestrictedDataRouting can judge the provider that will ACTUALLY
+        // execute it, which a model execution link can move away from the billed pair. Checking
+        // only the billed provider here (as the pre-re-audit version did) missed exactly that
+        // rerouting case.
+        DataSensitivity sensitivity = restrictedDataTransferGuard != null
+                && restrictedDataTransferGuard.conversationHoldsRestrictedData(req.conversationId())
+                ? DataSensitivity.RESTRICTED
+                : DataSensitivity.NORMAL;
+
+        // Fast pre-lock refusal when even the BILLED provider may not receive it - no need to
+        // pay for the dedup lock or the prompt build just to have the downstream call refuse.
+        // A billed provider that IS allowed but whose execution link reroutes to one that is not
+        // still reaches JsonCompletionService's RestrictedDataRouting.apply, which is handed
+        // `sensitivity` on every call below and refuses there instead.
+        if (sensitivity.isRestricted()
+                && !com.apimarketplace.common.classification.RestrictedDataPolicy.mayReceiveRestricted(req.providerName())) {
+            log.info("COLD summary skipped: conv={} holds restricted data and provider={} may not receive it",
+                    req.conversationId(), req.providerName());
+            return new SummarizeOutcome.SkippedGate();
+        }
 
         // ---- gate -----------------------------------------------------------
         // Check the gate BEFORE the distributed lock: obvious-skip paths
@@ -206,13 +238,13 @@ public class ColdSummarizerService {
         lockAcquired.increment();
         SimpleLock lock = maybeLock.get();
         try {
-            return runLocked(req, invoker);
+            return runLocked(req, invoker, sensitivity);
         } finally {
             lock.unlock();
         }
     }
 
-    private SummarizeOutcome runLocked(SummarizeRequest req, LlmJsonInvoker invoker) {
+    private SummarizeOutcome runLocked(SummarizeRequest req, LlmJsonInvoker invoker, DataSensitivity sensitivity) {
         // ---- prompt ---------------------------------------------------------
         String system = ColdSummarizerPromptBuilder.systemPrompt();
         String user = ColdSummarizerPromptBuilder.buildUserPrompt(req.coldTurns());
@@ -220,7 +252,10 @@ public class ColdSummarizerService {
         // ---- invoke ---------------------------------------------------------
         String rawJson;
         try {
-            rawJson = invoker.invoke(req.providerName(), req.modelName(), system, user);
+            // LC-004: the sensitivity tag rides along so a production invoker can thread it into
+            // JsonCompletionRequestDto - without it JsonCompletionService's RestrictedDataRouting
+            // check is a no-op (the legacy 5-arg constructor always sends dataSensitivity=null).
+            rawJson = invoker.invoke(req.providerName(), req.modelName(), system, user, sensitivity);
         } catch (Exception e) {
             log.warn("COLD summary LLM call failed: conv={}, provider={}, model={}, err={}",
                     req.conversationId(), req.providerName(), req.modelName(), e.toString());
@@ -246,7 +281,7 @@ public class ColdSummarizerService {
         } catch (JsonProcessingException e) {
             log.warn("COLD summary JSON parse failed: conv={}, err={}, json[0..200]={}",
                     req.conversationId(), e.getOriginalMessage(),
-                    rawJson.substring(0, Math.min(200, rawJson.length())));
+                    com.apimarketplace.common.logging.PayloadLogSafety.describeText(rawJson, 200));
             return new SummarizeOutcome.Failed("parse: " + e.getOriginalMessage());
         }
 
@@ -457,5 +492,19 @@ public class ColdSummarizerService {
     @FunctionalInterface
     public interface LlmJsonInvoker {
         String invoke(String provider, String model, String system, String user);
+
+        /**
+         * Sensitivity-aware overload (LC-004 re-audit). Default delegates to the 3-arg SAM and
+         * drops the tag, so a bare lambda / a test stub keeps compiling unchanged. Production
+         * wiring ({@link ChatCompactionOrchestrator}'s tenant-aware adapter, backed by
+         * {@link HttpLlmJsonInvoker}) overrides this to forward {@code sensitivity} all the way
+         * into {@code JsonCompletionRequestDto}, which is what lets
+         * {@code JsonCompletionService}'s {@code RestrictedDataRouting.apply} judge the provider
+         * an execution link would actually route to, not just the billed one.
+         */
+        default String invoke(String provider, String model, String system, String user,
+                              DataSensitivity sensitivity) {
+            return invoke(provider, model, system, user);
+        }
     }
 }

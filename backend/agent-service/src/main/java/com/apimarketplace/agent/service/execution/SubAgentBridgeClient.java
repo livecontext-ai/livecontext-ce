@@ -6,9 +6,11 @@ import com.apimarketplace.agent.client.dto.execution.AgentExecutionResponseDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.*;
+import com.apimarketplace.common.web.BridgeDispatchSigning;
 import com.apimarketplace.common.web.OrgContextHeaderForwarder;
 import org.springframework.web.client.RestTemplate;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.Set;
 
@@ -30,6 +32,8 @@ public class SubAgentBridgeClient {
 
     private final String bridgeUrl;
     private final RestTemplate restTemplate;
+    private final String gatewaySecretKey;
+    private final boolean hostToolsEnabled;
 
     /**
      * Read timeout of the blocking {@code /execute} POST = the total wall-clock budget
@@ -41,8 +45,22 @@ public class SubAgentBridgeClient {
      */
     static final Duration EXECUTION_READ_TIMEOUT = Duration.ofMinutes(130);
 
-    public SubAgentBridgeClient(String bridgeUrl) {
+    /**
+     * @param bridgeUrl        base URL of the bridge server
+     * @param gatewaySecretKey shared gateway HMAC secret ({@code GATEWAY_SECRET_KEY}). The bridge
+     *                         rejects an unsigned dispatch 401 when it enforces authentication
+     *                         (its default), so this must be the SAME value the bridge holds.
+     *                         Blank leaves the request unsigned (dev / CE, where the bridge runs
+     *                         with {@code BRIDGE_REQUIRE_GATEWAY_AUTH=false}).
+     * @param hostToolsEnabled {@code conversation.bridge.host-tools-enabled}: whether this deployment
+     *                         lets a PLATFORM ADMIN's run use the native host toolset at all. Even
+     *                         when true, every non-admin run (and every run with no roles in scope)
+     *                         is signed restricted, see {@link BridgeDispatchSigning#providerIdFor}.
+     */
+    public SubAgentBridgeClient(String bridgeUrl, String gatewaySecretKey, boolean hostToolsEnabled) {
         this.bridgeUrl = bridgeUrl;
+        this.gatewaySecretKey = gatewaySecretKey;
+        this.hostToolsEnabled = hostToolsEnabled;
         this.restTemplate = new RestTemplateBuilder()
             .connectTimeout(Duration.ofSeconds(30))
             .readTimeout(EXECUTION_READ_TIMEOUT)
@@ -54,10 +72,10 @@ public class SubAgentBridgeClient {
      *
      * @return execution response, or null on failure
      */
-    public AgentExecutionResponseDto execute(AgentExecutionRequestDto request) {
-        String url = bridgeUrl + "/api/bridge/execute";
-        HttpEntity<AgentExecutionRequestDto> entity = new HttpEntity<>(request, buildHeaders(request.tenantId()));
+    public AgentExecutionResponseDto execute(AgentExecutionRequestDto request, String userRoles) {
+        URI url = URI.create(bridgeUrl + "/api/bridge/execute");
         try {
+            HttpEntity<byte[]> entity = buildEntity(request, userRoles, url);
             log.info("[SUB_AGENT_BRIDGE] Dispatching to bridge: url={}, conv={}, stream={}, provider={}, model={}",
                 url, request.conversationId(), request.streamChannelId(),
                 request.provider(), request.model());
@@ -79,9 +97,16 @@ public class SubAgentBridgeClient {
         return BRIDGE_PROVIDERS.contains(provider.toLowerCase());
     }
 
-    private HttpHeaders buildHeaders(String tenantId) {
+    /**
+     * Headers + the exact JSON body bytes, signed (v1 gateway HMAC + body-bound bridge signature).
+     *
+     * @param userRoles the requesting user's {@code X-User-Roles} (null when no user is in scope);
+     *                  decides, with the deployment flag, whether the run may be unrestricted.
+     */
+    HttpEntity<byte[]> buildEntity(AgentExecutionRequestDto request, String userRoles, URI uri) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        String tenantId = request.tenantId();
         if (tenantId != null) {
             headers.set("X-User-ID", tenantId);
         }
@@ -91,7 +116,10 @@ public class SubAgentBridgeClient {
         // must be threaded through AgentExecutionRequestDto.organizationId
         // (consumed by the receiving agent-service controller, PR20 scope).
         OrgContextHeaderForwarder.forward(headers);
-        return headers;
+        // LC-001: sign LAST so both signatures cover the identity headers actually sent.
+        String providerId = BridgeDispatchSigning.providerIdFor(
+            hostToolsEnabled, userRoles, request.claimsRestrictedToolset());
+        return BridgeDispatchSigning.signedJsonEntity(request, headers, gatewaySecretKey, providerId, "POST", uri);
     }
 
 }

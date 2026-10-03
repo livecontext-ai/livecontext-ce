@@ -206,4 +206,49 @@ class MemoryToolsProviderTest {
         assertThat(result.errorCode()).isEqualTo(ToolErrorCode.EXECUTION_FAILED);
         assertThat(result.error()).contains("boom");
     }
+
+    // ==================== LC-004 / LC-066: restricted-data memory gate ====================
+
+    private static ToolExecutionContext restrictedCtx() {
+        return new ToolExecutionContext("42",
+            Map.of(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "RESTRICTED"),
+            Map.of(), Set.of(), null, null, "org", "MEMBER");
+    }
+
+    @Test
+    @DisplayName("refuses save when the conversation holds Gmail / Drive data, without ever reaching the CRUD module")
+    void refusesSaveWhenConversationIsRestricted() {
+        ToolExecutionResult result = provider.execute("memory",
+            Map.of("action", "save", "title", "t", "content", "Gmail body"), restrictedCtx());
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.errorCode()).isEqualTo(ToolErrorCode.EXECUTION_FAILED);
+        assertThat(result.error()).contains("RESTRICTED_DATA_PROVIDER_NOT_ALLOWED").contains("long-term memory");
+        // Routing still asks the module whether it owns the action; nothing may be WRITTEN.
+        org.mockito.Mockito.verify(crudModule, org.mockito.Mockito.never()).execute(anyString(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("a restricted conversation may still read memory: get/list/search/delete are unaffected")
+    void restrictedConversationCanStillReadMemory() {
+        when(crudModule.execute(anyString(), any(), any(), any()))
+            .thenReturn(Optional.of(ToolExecutionResult.success(Map.of("entries", List.of()))));
+
+        for (String action : List.of("get", "list", "search", "delete")) {
+            ToolExecutionResult result = provider.execute("memory", Map.of("action", action), restrictedCtx());
+            assertThat(result.success()).as(action).isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("an ordinary conversation can still save to memory")
+    void ordinaryConversationCanSave() {
+        when(crudModule.execute(anyString(), any(), any(), any()))
+            .thenReturn(Optional.of(ToolExecutionResult.success(Map.of("slug", "s"))));
+
+        ToolExecutionResult result = provider.execute("memory",
+            Map.of("action", "save", "title", "t", "content", "ordinary fact"), ctx());
+
+        assertThat(result.success()).isTrue();
+    }
 }

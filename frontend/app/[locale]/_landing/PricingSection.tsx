@@ -2,21 +2,17 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { useAuth } from '@/lib/providers/smart-providers';
 import { setLandingIntent, track } from '@/lib/analytics/analytics';
 import { calcPrice, creditFactsFor, CREDIT_TIERS } from '@/lib/billing/pricing-constants';
-import DeploymentBadge from '@/components/pricing/DeploymentBadge';
-import ReferencePrice from '@/components/pricing/ReferencePrice';
-import FoundingPriceNote from '@/components/pricing/FoundingPriceNote';
 import { usePricingEvent } from '@/hooks/usePricingEvent';
 import type { ResolvedPricingEvent } from '@/lib/billing/pricing-events';
-import FeatureLabel from '@/components/pricing/FeatureLabel';
 import { planFeatureLabels } from '@/lib/billing/planFeatureLabels';
 import ComparePlansLink from '@/components/pricing/ComparePlansLink';
 import PlanComparisonDialog from '@/components/pricing/PlanComparisonDialog';
-import PlanGrid, { planCardClasses, PlanCardToggle, PLAN_HEAD_CLASS } from '@/components/pricing/PlanGrid';
+import PlanGrid from '@/components/pricing/PlanGrid';
+import PlanCardFrame from '@/components/pricing/PlanCardFrame';
 
 type Cycle = 'monthly' | 'yearly';
 // The landing has no credit slider (by design); cards show the entry tier (5,000 credits).
@@ -209,10 +205,6 @@ function PlanCardView({
 }) {
   const isRecommended = !!plan.badge;
   const tCardsView = useTranslations('pricing.planCards');
-  // Mobile collapses a card to its header row (the recommended one starts open);
-  // from md every card is open.
-  const [open, setOpen] = useState(isRecommended);
-  const collapsed = open ? '' : 'max-md:hidden';
   const router = useRouter();
   const { isAuthenticated, isLoading, loginWithRedirect } = useAuth();
 
@@ -244,17 +236,24 @@ function PlanCardView({
   );
 
   return (
-    <div
-      className={`relative p-5 rounded-3xl transition-colors duration-300 ${planCardClasses}`}
-      style={{
+    <PlanCardFrame
+      planId={plan.id}
+      name={plan.name}
+      priceLabel={plan.priceLabel}
+      period={plan.showSuffix ? tCardsView('period') : undefined}
+      cycle={cycle}
+      creditTierIndex={TIER_INDEX}
+      event={event}
+      features={plan.features}
+      defaultOpen={isRecommended}
+      frameStyle={{
         border: isRecommended ? `2px solid var(--text-primary)` : `1px solid var(--border-color)`,
         // Set by PlanGrid on a tinted group (the organization plans).
         background: 'var(--plan-card-bg, transparent)',
         opacity: plan.disabled ? 0.7 : 1,
         pointerEvents: plan.disabled ? 'none' : 'auto',
       }}
-    >
-      {plan.badge && (
+      badge={plan.badge && (
         <div
           className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 text-[11px] font-semibold rounded-full"
           style={{ background: 'var(--text-primary)', color: 'var(--bg-primary)' }}
@@ -262,83 +261,23 @@ function PlanCardView({
           {plan.badge}
         </div>
       )}
-
-      {/* Header: name + price. On mobile a single tappable row (name
-          left, price right) that opens the card; from md, stacked and centred. */}
-      <div data-plan-head className={`relative flex flex-wrap items-center gap-x-3 md:block md:text-center ${PLAN_HEAD_CLASS}`}>
-        <h3
-          className="min-w-0 flex-1 text-lg md:text-xl font-bold md:mb-3"
-          style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-outfit), Outfit, sans-serif' }}
+      footer={(collapsed) => (
+        <a
+          href={
+            plan.id === 'enterprise'
+              ? `/contact?category=other&message=${encodeURIComponent(plan.contactMessage ?? '')}`
+              : '/app/settings/pricing'
+          }
+          onClick={plan.id === 'enterprise' ? trackPlanClick : handleSignIn}
+          className={`${collapsed} mt-5 md:mt-6 inline-flex items-center justify-center w-full h-9 rounded-xl text-sm font-medium transition-colors duration-200 hover:bg-[var(--accent-hover)] active:scale-[0.98] cursor-pointer`}
+          style={{
+            background: 'var(--accent-primary)',
+            color: 'var(--accent-foreground)',
+          }}
         >
-          {plan.name}
-        </h3>
-        <div className="text-right md:text-center">
-          <div className="flex items-baseline justify-end md:justify-center gap-2">
-            <ReferencePrice
-              planId={plan.id}
-              cycle={cycle}
-              creditTierIndex={TIER_INDEX}
-              event={event}
-            />
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-2xl md:text-3xl font-bold" style={{ color: 'var(--text-primary)' }}>
-                {plan.priceLabel}
-              </span>
-              {plan.showSuffix && (
-                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  {tCardsView('period')}
-                </span>
-              )}
-            </span>
-          </div>
-        </div>
-        {/* Its own line on mobile (under name and price), so a long caption never
-            runs over the plan name. */}
-        <div className="max-md:order-last max-md:basis-full">
-          <FoundingPriceNote
-            planId={plan.id}
-            cycle={cycle}
-            creditTierIndex={TIER_INDEX}
-            event={event}
-          />
-        </div>
-        <PlanCardToggle open={open} onToggle={() => setOpen((o) => !o)} label={plan.name} />
-      </div>
-
-      {/* The feature list, full card width so every card's checks start on
-          the same edge and every "i" sits in one column at the right. */}
-      <div className={`mt-4 md:mt-6 ${collapsed}`}>
-        <ul className="space-y-2.5 text-sm flex flex-col">
-          <DeploymentBadge />
-          {plan.features.map((f) => (
-            <li key={f} className="flex items-start gap-2">
-              <Check className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#10b981' }} />
-              {/* `flex-1` so FeatureLabel owns the rest of the row and can pin
-                  its "i" to the right edge; `items-start` so a label that wraps
-                  keeps the check and the "i" on its first line. */}
-              <span className="flex flex-1 min-w-0" style={{ color: 'var(--text-secondary)' }}>
-                <FeatureLabel feature={f} />
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <a
-        href={
-          plan.id === 'enterprise'
-            ? `/contact?category=other&message=${encodeURIComponent(plan.contactMessage ?? '')}`
-            : '/app/settings/pricing'
-        }
-        onClick={plan.id === 'enterprise' ? trackPlanClick : handleSignIn}
-        className={`${collapsed} mt-5 md:mt-6 inline-flex items-center justify-center w-full h-9 rounded-xl text-sm font-medium transition-colors duration-200 hover:bg-[var(--accent-hover)] active:scale-[0.98] cursor-pointer`}
-        style={{
-          background: 'var(--accent-primary)',
-          color: 'var(--accent-foreground)',
-        }}
-      >
-        {plan.cta}
-      </a>
-    </div>
+          {plan.cta}
+        </a>
+      )}
+    />
   );
 }

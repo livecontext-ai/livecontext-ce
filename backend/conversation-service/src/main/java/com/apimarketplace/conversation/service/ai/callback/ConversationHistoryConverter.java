@@ -597,9 +597,8 @@ public class ConversationHistoryConverter {
         log.info("=== CONVERSATION HISTORY ({} messages, chronological order) ===", history.size());
         for (int i = 0; i < history.size(); i++) {
             Message msg = history.get(i);
-            String preview = msg.content() != null
-                ? msg.content().substring(0, Math.min(80, msg.content().length())) + "..."
-                : "(null)";
+            // Message content can quote a Gmail body pulled in by a tool: size only.
+            String preview = com.apimarketplace.common.logging.PayloadLogSafety.describeText(msg.content(), 80);
             log.info("  [{}] {} - {}", i + 1, msg.role(), preview);
         }
         log.info("================================================================");

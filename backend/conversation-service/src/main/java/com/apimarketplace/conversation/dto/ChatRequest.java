@@ -87,6 +87,14 @@ public class ChatRequest {
     @JsonProperty("executionId")
     private String executionId;
 
+    /**
+     * CASA LC-066: {@code RESTRICTED} when the message carries Gmail / Drive content (a delegated
+     * task written from a restricted execution). Honoured on the internal synchronous path only,
+     * and only ever tightens: the message is stored restricted, which tags the turn.
+     */
+    @JsonProperty("dataSensitivity")
+    private String dataSensitivity;
+
     // Org context: set by the controllers from the validated HTTP headers, never from the JSON body.
     //
     // SECURITY: these are authorization inputs (__orgRole__ / __userRoles__ in the agent context,
@@ -168,6 +176,9 @@ public class ChatRequest {
     public void setReviewerExecutionId(String reviewerExecutionId) { this.reviewerExecutionId = reviewerExecutionId; }
     public String getExecutionId() { return executionId; }
     public void setExecutionId(String executionId) { this.executionId = executionId; }
+
+    public String getDataSensitivity() { return dataSensitivity; }
+    public void setDataSensitivity(String dataSensitivity) { this.dataSensitivity = dataSensitivity; }
 
     public String getOrgId() { return orgId; }
     public void setOrgId(String orgId) { this.orgId = orgId; }

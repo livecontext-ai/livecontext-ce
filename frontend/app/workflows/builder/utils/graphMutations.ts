@@ -71,6 +71,12 @@ export interface CloneOptions {
   position?: XYPosition | null;
   /** Fixed translation used when `position` is not provided. Defaults to +40,+40. */
   offset?: XYPosition;
+  /**
+   * Ids of the nodes already on the target canvas. A note copied without its node stays
+   * attached to that node when it is one of these (a duplicate on the same canvas); it
+   * becomes a free note otherwise (a paste into another workflow).
+   */
+  existingNodeIds?: ReadonlySet<string>;
 }
 
 export interface CloneResult {
@@ -126,6 +132,20 @@ export function cloneNodesForPaste(
       selected: true,
       data,
     };
+  });
+
+  // A copied note follows the copy of its node. Copied without it, it stays on the same node
+  // when that node is on the canvas (a duplicate), and becomes a free note otherwise.
+  newNodes.forEach((node) => {
+    const anchor = node.data?.noteAttachedTo;
+    if (!anchor) return;
+    const copiedAnchor = idMap.get(anchor);
+    if (copiedAnchor) {
+      node.data = { ...node.data, noteAttachedTo: copiedAnchor };
+    } else if (!options.existingNodeIds?.has(anchor)) {
+      const { noteAttachedTo: _dropped, ...rest } = node.data;
+      node.data = rest as BuilderNodeData;
+    }
   });
 
   const newEdges: Edge[] = [];

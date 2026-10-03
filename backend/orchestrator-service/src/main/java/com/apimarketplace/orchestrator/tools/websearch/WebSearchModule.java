@@ -117,7 +117,7 @@ public class WebSearchModule implements ToolModule {
             return ToolExecutionResult.success(response);
 
         } catch (Exception e) {
-            log.error("Web search failed for query '{}': {}", query, e.getMessage(), e);
+            log.error("Web search failed for query {}: {}", com.apimarketplace.common.logging.PayloadLogSafety.describeText(query, 80), e.getMessage(), e);
             return ToolExecutionResult.failure(ToolErrorCode.EXTERNAL_SERVICE_ERROR, "Web search failed: " + e.getMessage());
         }
     }

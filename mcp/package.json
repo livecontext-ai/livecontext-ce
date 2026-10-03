@@ -12,9 +12,9 @@
     "@playwright/mcp": "^0.0.75",
     "@upstash/context7-mcp": "^2.2.5",
     "diff": "9.0.0",
-    "undici": "^6.27.0"
+    "undici": "^6.28.1"
   },
   "overrides": {
-    "undici": "^6.27.0"
+    "undici": "^6.28.1"
   }
 }

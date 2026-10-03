@@ -134,7 +134,8 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
       canonical: `${SITE_URL.replace(/\/$/, '')}${homeHref(locale)}`,
       languages: homeAlternates(SITE_URL),
     },
-    robots: IS_CE_DEPLOY ? { index: false, follow: false } : undefined,
+    // Only when set: an explicit 'robots: undefined' wiped the root layout's directives.
+    ...(IS_CE_DEPLOY ? { robots: { index: false, follow: false } } : {}),
   };
 }
 

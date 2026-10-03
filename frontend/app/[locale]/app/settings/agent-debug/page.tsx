@@ -17,6 +17,7 @@ import {
   User,
 } from "lucide-react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
+import { urlEnum, urlNullable, urlString, useUrlSearchState, useUrlState } from "@/hooks/useUrlState";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { agentToolsService } from "@/lib/api/orchestrator";
 import type {
@@ -195,12 +196,20 @@ function WorkflowPromptInfo() {
 function PromptsTab() {
   const [prompts, setPrompts] = useState<AgentPrompt[]>([]);
   const [selectedPrompt, setSelectedPrompt] = useState<AgentPrompt | null>(null);
+  // The open prompt's name lives in the address, so a reload reopens it.
+  const [promptName, setPromptName] = useUrlState<string | null>("prompt", null, {
+    codec: urlNullable(urlString),
+  });
   const [loading, setLoading] = useState(true);
   const [loadingPrompt, setLoadingPrompt] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     loadPrompts();
+    // The name comes from the address and goes into a request path: only a plain prompt name
+    // is followed, never something that could walk to another path.
+    if (promptName && /^[\w.-]+$/.test(promptName) && !promptName.includes('..')) selectPrompt(promptName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadPrompts = async () => {
@@ -215,6 +224,7 @@ function PromptsTab() {
   };
 
   const selectPrompt = async (name: string) => {
+    setPromptName(name);
     setLoadingPrompt(true);
     try {
       const prompt = await agentToolsService.getPrompt(name);
@@ -351,9 +361,12 @@ function ToolsTab({
 }) {
   const [categories, setCategories] = useState<ToolCategory[]>([]);
   const [tools, setTools] = useState<AgentTool[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  // The category and the search live in the address, so a reload keeps the filtered list.
+  const [selectedCategory, setSelectedCategory] = useUrlState<string | null>("category", null, {
+    codec: urlNullable(urlString),
+  });
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useUrlSearchState("q");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -703,7 +716,13 @@ export default function AgentDebugPage() {
   const { loginWithRedirect, hasRole } = useAuth();
   const tSettings = useTranslations("settings");
   const [selectedTool, setSelectedTool] = useState<AgentTool | null>(null);
-  const [activeTab, setActiveTab] = useState("prompts");
+  // The open tab lives in the address. What a tab keeps there (the open prompt, the tools
+  // search and category) leaves with it.
+  const [activeTab, setActiveTab] = useUrlState<string>("tab", "prompts", {
+    codec: urlEnum(["prompts", "tools", "tester"]),
+    history: "push",
+    clears: ["prompt", "q", "category"],
+  });
 
   // Wait for auth to be ready
   if (isAuthChecking || isLoading) {

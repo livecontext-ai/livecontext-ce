@@ -102,7 +102,7 @@ class TableResourceStrategyTest {
                 Map.of("name", "Alice"), 0, null);
         DataSourceItemDto row2 = new DataSourceItemDto(2L, 42L, OWNER,
                 Map.of("name", "Bob"), 1, null);
-        when(dataSourceClient.getAllItems(42L, OWNER)).thenReturn(List.of(row1, row2));
+        when(dataSourceClient.copyAllItems(42L, OWNER, null)).thenReturn(List.of(row1, row2));
 
         Map<String, Object> snapshot = strategy.buildSnapshot("42", OWNER);
 
@@ -121,13 +121,30 @@ class TableResourceStrategyTest {
     }
 
     @Test
+    @DisplayName("regression (silent empty publish): a table whose copy fails refuses the publish (TABLE_COPY_FAILED), never an empty listing")
+    void buildSnapshotRefusesAFailedCopy() {
+        DataSourceDto ds = tableDto(42L, OWNER, "Contacts", "CRM");
+        when(dataSourceClient.findByIdAndTenantId(42L, OWNER)).thenReturn(ds);
+        when(dataSourceClient.copyAllItems(42L, OWNER, null))
+                .thenThrow(new com.apimarketplace.datasource.client.TableCopyException(42L, "down", null));
+
+        assertThatThrownBy(() -> strategy.buildSnapshot("42", OWNER))
+                .isInstanceOfSatisfying(com.apimarketplace.publication.service.PublicationValidationException.class,
+                        e -> {
+                            assertThat(e.getErrorCode()).isEqualTo(
+                                    com.apimarketplace.publication.service.PublicationValidationException.TABLE_COPY_FAILED);
+                            assertThat(e.getMessage()).contains("'Contacts' (id 42)");
+                        });
+    }
+
+    @Test
     @DisplayName("buildSnapshot defaults sourceType to INLINE when null")
     void buildSnapshotDefaultsSourceType() {
         DataSourceDto ds = new DataSourceDto(42L, OWNER, "N", "D",
                 null, Map.of(), null, null, null, null,
                 List.of(), Map.of(), null, null, null, null);
         when(dataSourceClient.findByIdAndTenantId(42L, OWNER)).thenReturn(ds);
-        when(dataSourceClient.getAllItems(42L, OWNER)).thenReturn(List.of());
+        when(dataSourceClient.copyAllItems(42L, OWNER, null)).thenReturn(List.of());
 
         Map<String, Object> snapshot = strategy.buildSnapshot("42", OWNER);
 
@@ -235,16 +252,16 @@ class TableResourceStrategyTest {
     void buildSnapshotWithOrgUsesOrgScopedLookup() {
         DataSourceDto ds = tableDto(42L, OWNER, "Org table", "d");
         when(dataSourceClient.findByIdAndTenantId(42L, OWNER, OWNER_ORG)).thenReturn(ds);
-        when(dataSourceClient.getAllItems(42L, OWNER, OWNER_ORG)).thenReturn(List.of());
+        when(dataSourceClient.copyAllItems(42L, OWNER, OWNER_ORG)).thenReturn(List.of());
 
         Map<String, Object> snapshot = strategy.buildSnapshot("42", OWNER, OWNER_ORG);
 
         assertThat(snapshot).containsEntry("name", "Org table");
         verify(dataSourceClient).findByIdAndTenantId(42L, OWNER, OWNER_ORG);
-        verify(dataSourceClient).getAllItems(42L, OWNER, OWNER_ORG);
+        verify(dataSourceClient).copyAllItems(42L, OWNER, OWNER_ORG);
         // must NOT fall back to the personal (2-arg) lookup for an org-owned table
         verify(dataSourceClient, never()).findByIdAndTenantId(42L, OWNER);
-        verify(dataSourceClient, never()).getAllItems(42L, OWNER);
+        verify(dataSourceClient, never()).copyAllItems(42L, OWNER, null);
     }
 
     @Test
@@ -252,7 +269,7 @@ class TableResourceStrategyTest {
     void buildSnapshotWithBlankOrgUsesPersonalLookup() {
         DataSourceDto ds = tableDto(42L, OWNER, "Personal table", "d");
         when(dataSourceClient.findByIdAndTenantId(42L, OWNER)).thenReturn(ds);
-        when(dataSourceClient.getAllItems(42L, OWNER)).thenReturn(List.of());
+        when(dataSourceClient.copyAllItems(42L, OWNER, null)).thenReturn(List.of());
 
         Map<String, Object> snapshot = strategy.buildSnapshot("42", OWNER, "  ");
 

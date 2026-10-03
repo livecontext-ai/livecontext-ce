@@ -101,6 +101,9 @@ public class BillingController {
     @Autowired(required = false)
     private com.apimarketplace.auth.service.PersonalOfferService personalOffers;
 
+    @Autowired(required = false)
+    private com.apimarketplace.auth.service.PartnerOfferCheckoutService partnerOfferCheckout;
+
     @GetMapping("/offers/current")
     public ResponseEntity<?> currentPersonalOffer(HttpServletRequest request) {
         Long userId = extractUserId(request);
@@ -126,6 +129,10 @@ public class BillingController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(409).body(Map.of("code", "PLAN_PACK_UNSUPPORTED"));
         }
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     /**
@@ -183,7 +190,7 @@ public class BillingController {
      * <p>Body: {@code { "code": "ABCD2345" }}. Status codes: 200 immediate benefit,
      * 202 attributed pending conversion (or held over the soft cap), 404 INVALID_CODE,
      * 409 NOT_REDEEMABLE / ALREADY_REDEEMED / EXHAUSTED / SELF_REFERRAL / ALREADY_PAID / ALREADY_ATTRIBUTED /
-     * NOT_NEW_ACCOUNT / NOTHING_TO_GRANT, 403 EMAIL_NOT_VERIFIED (retryable once verified), 503 REDEEM_RETRY.
+     * NOT_NEW_ACCOUNT / NOTHING_TO_GRANT / PARTNER_ACCOUNT, 403 EMAIL_NOT_VERIFIED (retryable once verified), 503 REDEEM_RETRY.
      */
     @PostMapping("/redeem")
     public ResponseEntity<Map<String, Object>> redeemRewardCode(
@@ -246,13 +253,16 @@ public class BillingController {
                     return rewardError(409, "EXHAUSTED", "This code has reached its redemption limit.");
                 }
                 case SELF_REFERRAL -> {
-                    return rewardError(409, "SELF_REFERRAL", "You can't redeem your own referral code.");
+                    return rewardError(409, "SELF_REFERRAL", "You can't use your own code.");
                 }
                 case ALREADY_PAID -> {
                     return rewardError(409, "ALREADY_PAID", "This code is for new subscriptions only.");
                 }
                 case ALREADY_ATTRIBUTED -> {
                     return rewardError(409, "ALREADY_ATTRIBUTED", "Your account already uses a partner code.");
+                }
+                case PARTNER_ACCOUNT -> {
+                    return rewardError(409, "PARTNER_ACCOUNT", "A partner cannot use another partner's code.");
                 }
                 case EMAIL_NOT_VERIFIED -> {
                     // 403, not 409: not final, the same code works once the email is verified.
@@ -432,10 +442,38 @@ public class BillingController {
                             ? Long.valueOf(request.get("personalOfferId")) : null;
                     Integer offerVersion = request.containsKey("offerVersion")
                             ? Integer.valueOf(request.get("offerVersion")) : null;
-                    String checkoutUrl = personalOfferId == null
-                            ? stripeBillingService.createCheckoutSession(userId, normalizedPlanCode, billingCycle, creditTierIndex)
-                            : stripeBillingService.createCheckoutSession(userId, normalizedPlanCode,
-                                    billingCycle, creditTierIndex, personalOfferId, offerVersion);
+                    // A checkout opened from a partner's offer page (never combined with a personal offer):
+                    // the offer must still be live, and the client is attributed to its partner here.
+                    String partnerOfferToken = personalOfferId == null ? blankToNull(request.get("partnerOfferToken")) : null;
+                    if (partnerOfferToken != null) {
+                        var verdict = partnerOfferCheckout == null
+                                ? com.apimarketplace.auth.service.PartnerOfferCheckoutService.Verdict.OFFER_UNAVAILABLE
+                                : partnerOfferCheckout.prepare(userId, partnerOfferToken, normalizedPlanCode);
+                        switch (verdict) {
+                            case OFFER_UNAVAILABLE:
+                                return ResponseEntity.status(409).body(Map.of("error", "offer_unavailable"));
+                            case EMAIL_NOT_VERIFIED:
+                                return ResponseEntity.status(409).body(Map.of("error", "email_not_verified"));
+                            case ALREADY_SUBSCRIBED:
+                                return ResponseEntity.status(409).body(Map.of("error", "offer_already_subscribed"));
+                            case PLAN_TOO_LOW:
+                                return ResponseEntity.status(409).body(Map.of("error", "offer_plan_too_low"));
+                            default:
+                                break;
+                        }
+                    }
+                    String checkoutUrl = personalOfferId != null
+                            ? stripeBillingService.createCheckoutSession(userId, normalizedPlanCode,
+                                    billingCycle, creditTierIndex, personalOfferId, offerVersion)
+                            : partnerOfferToken != null
+                                    ? stripeBillingService.createCheckoutSession(userId, normalizedPlanCode,
+                                            billingCycle, creditTierIndex, null, null, partnerOfferToken)
+                                    : stripeBillingService.createCheckoutSession(userId, normalizedPlanCode, billingCycle, creditTierIndex);
+                    // Only a real Stripe session can be paid: no URL (a live subscription's plan change)
+                    // leaves nothing waiting for a payment.
+                    if (partnerOfferToken != null && partnerOfferCheckout != null && checkoutUrl != null && !checkoutUrl.isBlank()) {
+                        partnerOfferCheckout.opened(userId, partnerOfferToken);
+                    }
                     response.put("url", checkoutUrl);
                     if (personalOfferId != null) {
                         var attached = personalOffers.current(userId);

@@ -335,13 +335,23 @@ public class McpCreator extends CreatorBase {
             ));
         }
 
-        // Build metadata
-        Map<String, Object> metadata = new LinkedHashMap<>();
-        if (toolInfo.iconSlug != null) metadata.put("iconSlug", toolInfo.iconSlug);
-        if (toolInfo.toolName != null) metadata.put("toolName", toolInfo.toolName);
-        metadata.put("label", label);
-        if (toolInfo.credentialRequired) metadata.put("credentialRequired", true);
+        return ToolExecutionResult.success(response,
+            resultMetadata(toolInfo.iconSlug, toolInfo.toolName, label, toolInfo.credentialRequired));
+    }
 
-        return ToolExecutionResult.success(response, metadata);
+    /** Metadata of an add_node result: what the node card is drawn with. */
+    static Map<String, Object> resultMetadata(String iconSlug, String toolName, String label,
+                                              boolean credentialRequired) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (iconSlug != null) {
+            metadata.put("iconSlug", iconSlug);
+            // Adding a Gmail node to a plan reads no mailbox: the icon labels the node card only, so
+            // the result is not restricted data (CASA LC-066) and the agent sees it on any model.
+            metadata.put(com.apimarketplace.common.classification.RestrictedDataPolicy.CREDENTIAL_NEEDED_KEY, true);
+        }
+        if (toolName != null) metadata.put("toolName", toolName);
+        metadata.put("label", label);
+        if (credentialRequired) metadata.put("credentialRequired", true);
+        return metadata;
     }
 }

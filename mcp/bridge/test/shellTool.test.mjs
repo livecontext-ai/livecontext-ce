@@ -23,10 +23,12 @@ before(() => {
   execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'dev']);
   writeFileSync(resolve(repo, 'marker.txt'), 'hi');
   process.env.AGENT_REPO_PATH = repo;
+  process.env.AGENT_SHELL_ENABLED = 'true';
 });
 
 after(() => {
   delete process.env.AGENT_REPO_PATH;
+  delete process.env.AGENT_SHELL_ENABLED;
   try { rmSync(repo, { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
@@ -37,11 +39,28 @@ test('SHELL_TOOL_DEF is a valid MCP tool named shell requiring command', () => {
   assert.ok(SHELL_TOOL_DEF.inputSchema.properties.timeout_ms);
 });
 
-test('isShellEnabled tracks AGENT_REPO_PATH (same gate as repo)', () => {
+test('isShellEnabled requires AGENT_REPO_PATH', () => {
   assert.equal(isShellEnabled(), true);
   const saved = process.env.AGENT_REPO_PATH;
   delete process.env.AGENT_REPO_PATH;
   try { assert.equal(isShellEnabled(), false); } finally { process.env.AGENT_REPO_PATH = saved; }
+});
+
+// LC-022 regression: a configured checkout alone used to enable a raw host shell.
+test('isShellEnabled requires its own AGENT_SHELL_ENABLED opt-in, a checkout alone is not enough', async () => {
+  const saved = process.env.AGENT_SHELL_ENABLED;
+  try {
+    for (const value of [undefined, '', 'false', '1', 'yes']) {
+      if (value === undefined) delete process.env.AGENT_SHELL_ENABLED; else process.env.AGENT_SHELL_ENABLED = value;
+      assert.equal(isShellEnabled(), false, `AGENT_SHELL_ENABLED=${value} must not enable the shell`);
+    }
+    delete process.env.AGENT_SHELL_ENABLED;
+    const r = await handleShellTool({ command: 'node -e "1"' });
+    assert.ok(r.isError);
+    assert.match(txt(r), /not available/);
+    process.env.AGENT_SHELL_ENABLED = 'TRUE';
+    assert.equal(isShellEnabled(), true);
+  } finally { process.env.AGENT_SHELL_ENABLED = saved; }
 });
 
 test('runs a command and returns stdout + exit code 0', async () => {

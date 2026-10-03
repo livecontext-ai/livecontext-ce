@@ -168,6 +168,87 @@ class PartnerProgramServiceTest {
         throw new AssertionError("no " + prefix + " on " + type.getSimpleName());
     }
 
+    @Test
+    @DisplayName("months: the last 12 calendar months oldest first, current one included, voided lines and older months left out")
+    void monthlyEarnings() {
+        Instant now = Instant.parse("2026-10-15T12:00:00Z");
+        PartnerCommission october = line(1, 300, PartnerCommission.Status.HOLD, Instant.parse("2026-10-02T00:00:00Z"), null);
+        PartnerCommission octoberPaid = line(2, 200, PartnerCommission.Status.PAID, Instant.parse("2026-10-14T23:59:59Z"), null);
+        PartnerCommission octoberUsd = line(3, 50, PartnerCommission.Status.HOLD, Instant.parse("2026-10-03T00:00:00Z"), null);
+        octoberUsd.setCurrency("usd");
+        PartnerCommission voided = line(4, 999, PartnerCommission.Status.VOID, Instant.parse("2026-10-05T00:00:00Z"), null);
+        PartnerCommission november2025 = line(5, 70, PartnerCommission.Status.PAID, Instant.parse("2025-11-01T00:00:00Z"), null);
+        PartnerCommission tooOld = line(6, 40, PartnerCommission.Status.PAID, Instant.parse("2025-10-31T23:59:59Z"), null);
+
+        List<PartnerProgramService.Month> months = PartnerProgramService.months(
+                List.of(october, octoberPaid, octoberUsd, voided, november2025, tooOld), now);
+
+        assertThat(months).hasSize(12);
+        assertThat(months.get(0).month()).isEqualTo("2025-11");
+        assertThat(months.get(11).month()).isEqualTo("2026-10");
+        // Every state counts (on hold, paid), per currency; the voided line does not.
+        assertThat(months.get(11).commissions()).containsExactlyInAnyOrderEntriesOf(Map.of("eur", 500L, "usd", 50L));
+        assertThat(months.get(0).commissions()).containsExactlyEntriesOf(Map.of("eur", 70L));
+        // A month with nothing earned is present, empty: the chart has no holes.
+        assertThat(months.get(5).commissions()).isEmpty();
+        // October 2025 is outside the 12-month window.
+        assertThat(months).noneMatch(m -> m.month().equals("2025-10"));
+    }
+
+    @Test
+    @DisplayName("months: a line with no invoice date, or dated after the current month, is not charted")
+    void monthlyEarningsSkipsUndatedAndFutureLines() {
+        Instant now = Instant.parse("2026-10-15T12:00:00Z");
+        PartnerCommission undated = line(1, 300, PartnerCommission.Status.HOLD, null, null);
+        PartnerCommission nextMonth = line(2, 200, PartnerCommission.Status.HOLD, Instant.parse("2026-11-01T00:00:00Z"), null);
+        PartnerCommission october = line(3, 50, PartnerCommission.Status.PAID, Instant.parse("2026-10-01T00:00:00Z"), null);
+
+        List<PartnerProgramService.Month> months = PartnerProgramService.months(List.of(undated, nextMonth, october), now);
+
+        assertThat(months).hasSize(12);
+        assertThat(months.get(11).commissions()).containsExactlyEntriesOf(Map.of("eur", 50L));
+        assertThat(months).noneMatch(m -> m.month().equals("2026-11"));
+        assertThat(months.stream().mapToLong(m -> m.commissions().getOrDefault("eur", 0L)).sum()).isEqualTo(50L);
+    }
+
+    @Test
+    @DisplayName("code offer: a live partner code tells a visitor its credits, never its owner")
+    void codeOfferOfALivePartnerCode() {
+        when(codeRepository.findByCodeIgnoreCase("agency-x")).thenReturn(Optional.of(liveCode(3000)));
+
+        var offer = service.codeOffer(" agency-x ");
+
+        assertThat(offer).contains(new PartnerProgramService.CodeOffer("AGENCY-X", 10_000));
+    }
+
+    @Test
+    @DisplayName("code offer: nothing for a creator code, a disabled, expired or used-up partner code, or junk input")
+    void codeOfferOnlyForARedeemablePartnerCode() {
+        RewardCode creator = liveCode(3000);
+        creator.setProgram(RewardProgram.PROMO);
+        when(codeRepository.findByCodeIgnoreCase("CREATOR")).thenReturn(Optional.of(creator));
+        RewardCode disabled = liveCode(3000);
+        disabled.setActive(false);
+        when(codeRepository.findByCodeIgnoreCase("OFF")).thenReturn(Optional.of(disabled));
+        RewardCode expired = liveCode(3000);
+        expired.setValidUntil(Instant.now().minus(1, ChronoUnit.HOURS));
+        when(codeRepository.findByCodeIgnoreCase("OLD")).thenReturn(Optional.of(expired));
+        RewardCode usedUp = liveCode(3000);
+        usedUp.setCapScope(com.apimarketplace.auth.domain.CapScope.GLOBAL);
+        usedUp.setCapLimit(1);
+        usedUp.setCurrentRedemptions(1);
+        when(codeRepository.findByCodeIgnoreCase("FULL")).thenReturn(Optional.of(usedUp));
+
+        assertThat(service.codeOffer("CREATOR")).isEmpty();
+        assertThat(service.codeOffer("OFF")).isEmpty();
+        assertThat(service.codeOffer("OLD")).isEmpty();
+        assertThat(service.codeOffer("FULL")).isEmpty();
+        assertThat(service.codeOffer("UNKNOWN")).isEmpty();
+        assertThat(service.codeOffer("  ")).isEmpty();
+        assertThat(service.codeOffer(null)).isEmpty();
+        assertThat(service.codeOffer("X".repeat(65))).isEmpty();
+    }
+
     @Nested
     @DisplayName("dashboard")
     class DashboardState {
@@ -181,6 +262,8 @@ class PartnerProgramServiceTest {
             assertThat(d.code()).isNull();
             assertThat(d.terms().commissionPercent()).isEqualTo(30.0);
             assertThat(d.standing()).isNull();
+            // No code, no earnings to chart.
+            assertThat(d.months()).isEmpty();
         }
 
         @Test
@@ -229,6 +312,10 @@ class PartnerProgramServiceTest {
             assertThat(d.standing().tier()).isEqualTo(PartnerTier.SILVER);
             // The code was created at 50%: above the Silver rate, so that is what it earns.
             assertThat(d.commissionPercent()).isEqualTo(50.0);
+            // The chart's year, built from the same lines: 12 months, the voided line left out
+            // wherever the month boundaries fall today (the window itself is pinned by months()).
+            assertThat(d.months()).hasSize(12);
+            assertThat(d.months().stream().mapToLong(m -> m.commissions().getOrDefault("eur", 0L)).sum()).isEqualTo(1500L);
         }
 
         @Test

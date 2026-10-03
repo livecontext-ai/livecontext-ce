@@ -18,6 +18,8 @@ public class ApiKeyEntryResponse {
     private List<String> scopes;
     private LocalDateTime createdAt;
     private LocalDateTime lastUsedAt;
+    /** When the key stops working; null = never (keys created before expiry existed). */
+    private LocalDateTime expiresAt;
 
     public ApiKeyEntryResponse() {}
 
@@ -38,4 +40,7 @@ public class ApiKeyEntryResponse {
 
     public LocalDateTime getLastUsedAt() { return lastUsedAt; }
     public void setLastUsedAt(LocalDateTime lastUsedAt) { this.lastUsedAt = lastUsedAt; }
+
+    public LocalDateTime getExpiresAt() { return expiresAt; }
+    public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }
 }

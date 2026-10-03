@@ -21,29 +21,71 @@ import java.util.Map;
  * {@code /api/agent-tools/execute}. Used only by the cloud MCP server for tools it
  * does not host locally; local tools stay on the fast in-process path.
  *
- * <p><b>Authority.</b> External MCP callers act with full account authority: this
- * path carries the resolved tenant / org headers and runs the tool directly, with
- * no interactive approval gate (that gate lives on the agent chat loop, not here),
- * matching the behaviour of local MCP tool calls.
+ * <p><b>Authority.</b> External MCP callers act with the authority their API key was
+ * granted: this path carries the resolved tenant / org headers, the per-tool access modes
+ * derived from the key's scopes, and runs the tool directly, with no interactive approval
+ * gate (that gate lives on the agent chat loop, not here), matching the behaviour of local
+ * MCP tool calls.
  */
 @Slf4j
 public class RemoteToolGateway {
 
     private static final String EXECUTE_PATH = "/api/agent-tools/execute";
 
+    /** Suffix of every per-tool access-mode body key ({@code tableAccessMode}, ...). */
+    private static final String ACCESS_MODE_SUFFIX = "AccessMode";
+
     private final AggregatedToolCatalog catalog;
     private final RestTemplate executionRestTemplate;
     private final ObjectMapper objectMapper;
+    private final String gatewaySecretKey;
 
     public RemoteToolGateway(AggregatedToolCatalog catalog, RestTemplate executionRestTemplate,
                              ObjectMapper objectMapper) {
+        this(catalog, executionRestTemplate, objectMapper, null);
+    }
+
+    /**
+     * @param gatewaySecretKey shared gateway secret; the execute call is signed with it (CASA
+     *                         LC-013) so the sibling can authorize on the signed identity. Blank
+     *                         sends unsigned (dev).
+     */
+    public RemoteToolGateway(AggregatedToolCatalog catalog, RestTemplate executionRestTemplate,
+                             ObjectMapper objectMapper, String gatewaySecretKey) {
         this.catalog = catalog;
         this.executionRestTemplate = executionRestTemplate;
         this.objectMapper = objectMapper;
+        this.gatewaySecretKey = gatewaySecretKey;
+        if (gatewaySecretKey != null && !gatewaySecretKey.isBlank()) {
+            executionRestTemplate.getInterceptors().add(
+                    new com.apimarketplace.common.web.GatewaySignatureV2Interceptor(() -> gatewaySecretKey));
+        }
     }
 
+    /** Unrestricted variant, for callers that carry no per-tool access modes. */
     public ToolExecutionResult execute(String toolName, Map<String, Object> arguments,
                                        String tenantId, String orgId, String orgRole) {
+        return execute(toolName, arguments, tenantId, orgId, orgRole, Map.of());
+    }
+
+    /**
+     * Executes {@code toolName} on its owning service, carrying the caller's per-tool access
+     * modes (LC-055, security audit 2026-08-13).
+     *
+     * <p>The receiving {@code /api/agent-tools/execute} rebuilds its {@code ToolExecutionContext}
+     * credentials map key by key from the request BODY, and every tool module reads an absent
+     * {@code <category>AccessMode} as UNRESTRICTED. So a mode this request does not carry does
+     * not exist at the far end: before these keys were forwarded, a read-only API key kept full
+     * write authority inside every tool the orchestrator does not host locally, while the very
+     * same key was correctly restricted on the tools it does host. The modes are put in the body
+     * under their plain names, which is the shape all five receivers already read.
+     *
+     * @param restrictions per-tool access modes ({@code <category>AccessMode -> read|write}),
+     *                     empty for a full-access caller, which is what unrestricted means
+     */
+    public ToolExecutionResult execute(String toolName, Map<String, Object> arguments,
+                                       String tenantId, String orgId, String orgRole,
+                                       Map<String, Object> restrictions) {
         String baseUrl = catalog.serviceUrlFor(toolName);
         if (baseUrl == null) {
             return ToolExecutionResult.failure(ToolErrorCode.TOOL_NOT_FOUND, "Unknown tool: " + toolName);
@@ -55,6 +97,22 @@ public class RemoteToolGateway {
         if (tenantId != null) request.put("tenantId", tenantId);
         if (orgId != null) request.put("orgId", orgId);
         if (orgRole != null) request.put("orgRole", orgRole);
+        // Top-level body keys, NOT nested and NOT inside "parameters": a receiver copies them
+        // from the request root, and anything under "parameters" would reach the tool as a
+        // caller-supplied argument instead of an access-control decision.
+        //
+        // Only <category>AccessMode keys are copied. The category half comes from the API
+        // key's own scope strings, so the map's key set is caller-influenced; restricting the
+        // shape here makes it structurally impossible for a scope to name "tool",
+        // "parameters" or an identity field and overwrite what was put above.
+        if (restrictions != null) {
+            restrictions.forEach((key, value) -> {
+                if (key != null && value != null && key.endsWith(ACCESS_MODE_SUFFIX)
+                        && key.length() > ACCESS_MODE_SUFFIX.length()) {
+                    request.put(key, value);
+                }
+            });
+        }
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -64,6 +122,7 @@ public class RemoteToolGateway {
         }
         if (orgId != null) headers.set("X-Organization-ID", orgId);
         if (orgRole != null) headers.set("X-Organization-Role", orgRole);
+        com.apimarketplace.common.web.InternalGatewaySigner.stamp(headers, "internal-mcp-gateway", gatewaySecretKey);
 
         try {
             @SuppressWarnings("rawtypes")

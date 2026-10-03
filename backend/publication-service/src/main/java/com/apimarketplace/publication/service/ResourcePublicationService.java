@@ -70,6 +70,13 @@ public class ResourcePublicationService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private CeExclusiveAcquisitionGuard ceExclusiveGuard;
 
+    /**
+     * The snapshot size budget shared by every listing type. Field-injected and optional like
+     * the guard above; null in plain unit constructions, which then get the default limits.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    PublicationSnapshotBudget snapshotBudget;
+
     public ResourcePublicationService(WorkflowPublicationRepository publicationRepository,
                                        PublicationReceiptRepository receiptRepository,
                                        OrchestratorInternalClient orchestratorClient,
@@ -222,6 +229,11 @@ public class ResourcePublicationService {
                     landingInterfaceId, tenantId, organizationId));
             publication.setShowcaseInterfaceId(landingInterfaceId);
         }
+        // Size budget (rows per copied table, total bytes) on the assembled snapshot, before it
+        // is set or saved: a TABLE copy, or the table an INTERFACE embeds, above the limit is
+        // refused here instead of shipping (publish and re-publish both pass here).
+        (snapshotBudget != null ? snapshotBudget : PublicationSnapshotBudget.defaults(objectMapper))
+                .assertWithinBudget(snapshot, PublicationSnapshotBudget.Listing.forResource(type));
         publication.setPlanSnapshot(snapshot);
 
         // CE-exclusive label: a standalone TABLE carrying a vector (embedding)

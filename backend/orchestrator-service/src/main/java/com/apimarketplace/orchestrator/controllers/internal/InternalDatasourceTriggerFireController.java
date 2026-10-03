@@ -50,9 +50,12 @@ public class InternalDatasourceTriggerFireController {
         // Null = legacy caller or personal scope. The dispatch service uses it
         // to refuse cross-workspace fan-out when present.
         String organizationId = asString(body.get("organizationId"));
+        // LC-066 re-audit item 1: the row(s) behind this event's own stored classification. Null =
+        // legacy caller, parsed as NORMAL by DataSensitivity.parse downstream.
+        String dataSensitivity = asString(body.get("dataSensitivity"));
 
         DispatchResult result = dispatchService.dispatch(workflowId, triggerId, eventType,
-                dataSourceId, rowId, row, previousRow, triggeredAt, organizationId);
+                dataSourceId, rowId, row, previousRow, triggeredAt, organizationId, dataSensitivity);
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", result.success());

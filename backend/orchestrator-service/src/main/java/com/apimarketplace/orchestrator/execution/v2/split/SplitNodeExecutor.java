@@ -10,6 +10,7 @@ import com.apimarketplace.orchestrator.services.template.ResolvedValuePreview;
 import com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -45,14 +46,115 @@ public class SplitNodeExecutor {
 
     private static final Logger logger = LoggerFactory.getLogger(SplitNodeExecutor.class);
 
+    /**
+     * Hard server-side ceiling on the number of items ONE split may fan out to.
+     *
+     * <p>{@code maxItems = 0} used to mean UNLIMITED, and the item list comes from upstream data
+     * the workflow author controls (an HTTP response, a table read, a webhook body). Each item
+     * becomes its own task with its own retained per-item context until the whole fan-out
+     * completes, so a list fetched from an attacker-chosen URL sized the heap and the worker
+     * pool of the orchestrator serving every other tenant on that replica (LC-064).
+     *
+     * <p>Aligned with {@code FindNode.FIND_NODE_HARD_CAP} (10_000), the cap already enforced on
+     * the sibling collection node, so the two paths agree on what "too many rows" means.
+     */
+    public static final int SPLIT_HARD_CEILING = 10_000;
+
     private final SplitContextManager contextManager;
     private final V2TemplateAdapter templateAdapter;
+    private final int hardCeiling;
 
+    /**
+     * The constructor Spring uses.
+     *
+     * <p>{@code @Autowired} is REQUIRED here, not decorative: this class declares two constructors
+     * and Spring only auto-detects a single one. With two candidates and no annotation it falls
+     * back to the no-argument constructor, finds none, and the whole orchestrator context fails to
+     * start. Do not remove it while the test seam below exists.
+     */
+    @Autowired
     public SplitNodeExecutor(
             SplitContextManager contextManager,
             V2TemplateAdapter templateAdapter) {
+        this(contextManager, templateAdapter, SPLIT_HARD_CEILING);
+    }
+
+    /** Test seam: lets a test exercise the ceiling without building a 10_000-element list. */
+    SplitNodeExecutor(
+            SplitContextManager contextManager,
+            V2TemplateAdapter templateAdapter,
+            int hardCeiling) {
         this.contextManager = contextManager;
         this.templateAdapter = templateAdapter;
+        this.hardCeiling = hardCeiling;
+    }
+
+    /**
+     * Applies the fan-out ceiling to a resolved item list.
+     *
+     * <p>Three cases, deliberately treated differently:
+     * <ul>
+     *   <li>An EXPLICIT {@code maxItems} AT OR BELOW the ceiling is the author saying "process at
+     *       most N of these", a documented feature. It truncates, as it always has.</li>
+     *   <li>{@code maxItems <= 0} used to mean unlimited. It now means the ceiling, and a list
+     *       ABOVE the ceiling FAILS the node instead of being quietly cut down to it. Silent
+     *       truncation would be the worst outcome available here: the run stays green while
+     *       most of the data is never processed, which is indistinguishable from success until
+     *       someone counts the rows. An explicit failure names the number and the fix.</li>
+     *   <li>An EXPLICIT {@code maxItems} ABOVE the ceiling is the same situation wearing a
+     *       different hat, and gets the same answer. It used to be rewritten down to the ceiling
+     *       when the DAG was built, with only a server-side WARN: a plan asking for 1,000,000
+     *       processed 10,000 and the run was green, which is exactly the silent truncation the
+     *       case above refuses. It only fails when the list ACTUALLY exceeds the ceiling, so a
+     *       plan carrying an oversized number but a normal-sized list behaves as it always
+     *       did.</li>
+     * </ul>
+     *
+     * <p>The fan-out is bounded either way: it is {@code min(itemCount, maxItems)}, and every
+     * combination where that could exceed the ceiling is refused here.
+     *
+     * @return the diagnostic to fail with, or {@code null} when the fan-out may proceed.
+     */
+    private String ceilingViolationOrNull(String nodeId, int itemCount, int maxItems) {
+        if (itemCount <= hardCeiling) {
+            return null;
+        }
+        if (maxItems > 0 && maxItems <= hardCeiling) {
+            return null;
+        }
+        logger.error("[SplitExecutor] Split refused: {} items exceeds the {} ceiling (maxItems={}): nodeId={}",
+            itemCount, hardCeiling, maxItems, nodeId);
+        if (maxItems > hardCeiling) {
+            return "Split resolved " + itemCount + " items and `maxItems` is set to " + maxItems
+                + ", above the server ceiling of " + hardCeiling
+                + ". Set `maxItems` to " + hardCeiling + " or less; the split is refused rather "
+                + "than truncated so no item is dropped silently.";
+        }
+        return "Split resolved " + itemCount + " items, above the server ceiling of " + hardCeiling
+            + ". Set `maxItems` on this split to the number you actually want to process; "
+            + "the split is refused rather than truncated so no item is dropped silently.";
+    }
+
+    /**
+     * States the fan-out ceiling for the author of a plan, before any list has been resolved.
+     *
+     * <p>The run-time diagnostic above can name the resolved item count. Nothing at plan-writing
+     * time can, so this states the RULE instead of the incident: an author who declares a
+     * {@code maxItems} above the ceiling has written a limit the run cannot honour, and finding
+     * that out on the first oversized list, in a failure that reads like a data problem, is the
+     * gap this closes.
+     *
+     * <p>Lives here, beside {@link #SPLIT_HARD_CEILING} and beside the run-time wording, so the
+     * number and the sentence have exactly one source. Every plan-writing surface that rejects an
+     * oversized declaration reads this method, and each appends the action it wants retried.
+     *
+     * @param declared the {@code maxItems} the author wrote
+     * @return the reason, with no trailing fix hint
+     */
+    public static String maxItemsAboveCeilingReason(int declared) {
+        return "maxItems is set to " + declared + ", above the ceiling of " + SPLIT_HARD_CEILING
+            + " items for one split. A split whose list actually exceeds the ceiling is refused "
+            + "when it runs, not truncated, so no item is dropped silently.";
     }
 
     /**
@@ -101,6 +203,13 @@ public class SplitNodeExecutor {
                 splitStrategy, evaluation.resolvedPreview());
         }
         List<Object> items = evaluation.items();
+
+        // 2a. Hard ceiling BEFORE any context is created (LC-064)
+        String ceilingViolation = ceilingViolationOrNull(nodeId, items.size(), maxItems);
+        if (ceilingViolation != null) {
+            return createErrorResult(nodeId, ceilingViolation, sourceExpression, maxItems,
+                splitStrategy, null);
+        }
 
         // 2. Apply maxItems limit if specified
         if (maxItems > 0 && items.size() > maxItems) {
@@ -320,6 +429,14 @@ public class SplitNodeExecutor {
         if (items == null) {
             logger.error("[SplitExecutor] Items list is null: nodeId={}", nodeId);
             return createErrorResult(nodeId, "Items list is null", null, maxItems, null, null);
+        }
+
+        // Hard ceiling on the pre-resolved path too. The list arrives from a CRUD read here
+        // instead of a template, but it is the same fan-out with the same cost, and a fix
+        // applied only to the expression path would leave the identical primitive open (LC-064).
+        String ceilingViolation = ceilingViolationOrNull(nodeId, items.size(), maxItems);
+        if (ceilingViolation != null) {
+            return createErrorResult(nodeId, ceilingViolation, null, maxItems, null, null);
         }
 
         // Apply maxItems limit if specified

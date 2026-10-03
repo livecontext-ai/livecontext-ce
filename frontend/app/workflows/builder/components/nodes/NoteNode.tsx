@@ -4,6 +4,9 @@ import clsx from 'clsx';
 import { Edit2 } from 'lucide-react';
 import * as React from 'react';
 import { NodeProps } from 'reactflow';
+import { useTranslations } from 'next-intl';
+
+import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 
 import type { BuilderNodeData } from '../../types';
 import { NodeActionButtons, useHoverVisibility } from './shared';
@@ -22,6 +25,9 @@ const MIN_WIDTH = 200;
 const MIN_HEIGHT = 100;
 
 export function NoteNode({ data, selected }: NodeProps<BuilderNodeData>) {
+  const t = useTranslations('workflowBuilder.forms');
+  // A run shows the workflow as it ran: its notes are read, not edited.
+  const { isRunMode } = useWorkflowMode();
   const [isEditing, setIsEditing] = React.useState(false);
   const [text, setText] = React.useState(data.noteText || '');
   const { targetRef: nodeRef, isVisible: showActions, show } = useHoverVisibility<HTMLDivElement>();
@@ -46,6 +52,7 @@ export function NoteNode({ data, selected }: NodeProps<BuilderNodeData>) {
 
   const handleDoubleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (isRunMode) return;
     setIsEditing(true);
   };
 
@@ -64,7 +71,9 @@ export function NoteNode({ data, selected }: NodeProps<BuilderNodeData>) {
         'border-2 transition-colors',
       )}
       style={{
-        borderColor: selected ? borderColor : 'var(--border-color)',
+        // Selected, or its node is: the note is the explanation of what is focused.
+        borderColor: selected || data.noteFocused ? borderColor : 'var(--border-color)',
+        boxShadow: data.noteFocused && !selected ? `0 0 0 3px ${borderColor}55` : undefined,
         borderStyle: 'solid',
         backgroundColor: noteColor,
         width: '100%',
@@ -74,14 +83,14 @@ export function NoteNode({ data, selected }: NodeProps<BuilderNodeData>) {
       onDoubleClick={handleDoubleClick}
     >
       <ResizableNodeWrapper
-        enabled={true}
+        enabled={!isRunMode}
         minWidth={MIN_WIDTH}
         minHeight={MIN_HEIGHT}
         onResizeEnd={handleResizeEnd}
         color={borderColor}
       />
 
-      {isEditing ? (
+      {isEditing && !isRunMode ? (
         <textarea
           value={text}
           onChange={(e) => handleTextChange(e.target.value)}
@@ -105,9 +114,9 @@ export function NoteNode({ data, selected }: NodeProps<BuilderNodeData>) {
           <p
             className="text-sm whitespace-pre-wrap break-words text-black"
           >
-            {text || 'Double-click to edit...'}
+            {text || (isRunMode ? '' : t('note.emptyText'))}
           </p>
-          {selected && (
+          {selected && !isRunMode && (
             <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity">
               <Edit2 className="h-3 w-3 text-black" />
             </div>
@@ -116,7 +125,7 @@ export function NoteNode({ data, selected }: NodeProps<BuilderNodeData>) {
       )}
 
       <NodeActionButtons
-        isVisible={showActions}
+        isVisible={showActions && !isRunMode}
         onDelete={data.onDeleteNode ? () => data.onDeleteNode?.(data.id) : undefined}
         onDuplicate={data.onDuplicateNode ? () => data.onDuplicateNode?.(data.id) : undefined}
         onHover={show}

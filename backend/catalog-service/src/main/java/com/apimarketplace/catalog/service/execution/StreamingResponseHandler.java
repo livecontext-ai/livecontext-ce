@@ -66,6 +66,18 @@ public class StreamingResponseHandler {
      * @return aggregated response map ready to be wrapped in the standard tool envelope and
      *         projected against the tool's {@code outputSchema}
      */
+    /** Pinned consumer in production (OutboundHttpClients); the constructor one in unit tests. */
+    private SseStreamConsumer outboundConsumer;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setOutboundHttpClients(com.apimarketplace.catalog.service.http.OutboundHttpClients clients) {
+        this.outboundConsumer = clients == null ? null : clients.sseStreamConsumer();
+    }
+
+    SseStreamConsumer consumer() {
+        return outboundConsumer != null ? outboundConsumer : sseStreamConsumer;
+    }
+
     public Map<String, Object> handle(String url,
                                        HttpMethod method,
                                        HttpHeaders headers,
@@ -74,7 +86,7 @@ public class StreamingResponseHandler {
         // query key), and the caller has logged the redacted form of it just before.
         log.info("[StreamingResponseHandler] {} {} (streaming)", method, hostOf(url));
 
-        SseAggregatedResponse aggregated = sseStreamConsumer.consume(
+        SseAggregatedResponse aggregated = consumer().consume(
                 url,
                 method,
                 headers,

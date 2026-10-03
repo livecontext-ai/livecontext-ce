@@ -83,7 +83,7 @@ export default function TableDetailPage({ params }: Props) {
 
     return (
         <div className="h-full w-full p-6 flex flex-col">
-            <DataTable key={refreshKey} dataSourceId={numericId} readOnly={!canMutate} />
+            <DataTable key={refreshKey} dataSourceId={numericId} readOnly={!canMutate} urlState />
         </div>
     );
 }

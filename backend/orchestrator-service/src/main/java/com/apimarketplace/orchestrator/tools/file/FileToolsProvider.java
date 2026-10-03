@@ -37,6 +37,18 @@ public class FileToolsProvider implements ToolsProvider {
     private final FileDownloader fileDownloader;
     private final MimeTypeRegistry mimeTypeRegistry;
 
+    /**
+     * LC-066: tags the storage row of a file stored from a restricted execution. Optional so the
+     * narrow tests that build this provider by hand keep working; a restricted store_file is
+     * refused when it is missing rather than stored untagged.
+     */
+    private com.apimarketplace.common.storage.service.StorageService storageIndex;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setStorageIndex(com.apimarketplace.common.storage.service.StorageService storageIndex) {
+        this.storageIndex = storageIndex;
+    }
+
     @Override
     public ToolCategory getCategory() {
         return ToolCategory.UTILITY;
@@ -149,6 +161,11 @@ public class FileToolsProvider implements ToolsProvider {
 
                 Example: store_file(content="SGVsbG8...", filename="output.txt", mime_type="text/plain")
                 Returns: FileRef with path, name, mimeType, size
+
+                Once this conversation or run has read Gmail or Google Drive, the stored file is
+                classified as restricted: it is deleted after the restricted retention window, and
+                files(action='view') of it is refused to a model outside the approved providers
+                (Anthropic or OpenAI direct API).
                 """)
             .requiresAuth(true)
             .tags(List.of("file", "store", "storage"))
@@ -249,6 +266,15 @@ public class FileToolsProvider implements ToolsProvider {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "mime_type is required");
         }
 
+        // LC-066: the bytes come from the agent, so a restricted execution (Gmail / Drive content in
+        // its context) may be storing exactly that content. The file must carry the tag: bounded
+        // retention, and refused to non-allow-listed models when read back.
+        boolean restricted = context != null && com.apimarketplace.common.classification.DataSensitivity
+                .fromCredentials(context.credentials()).isRestricted();
+        if (restricted && storageIndex == null) {
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, RESTRICTED_FILE_UNTAGGABLE);
+        }
+
         try {
             // Decode base64 content
             byte[] data = java.util.Base64.getDecoder().decode(content);
@@ -274,6 +300,17 @@ public class FileToolsProvider implements ToolsProvider {
                 com.apimarketplace.common.storage.service.StorageSourceTypes.STEP_OUTPUT
             );
 
+            if (restricted) {
+                RestrictedTagOutcome outcome = tagRestricted(tenantId, fileRef);
+                if (outcome == RestrictedTagOutcome.REMOVED) {
+                    return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, RESTRICTED_FILE_UNTAGGABLE);
+                }
+                if (outcome == RestrictedTagOutcome.LEFT_BEHIND) {
+                    return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                        String.format(RESTRICTED_FILE_LEFT_BEHIND, filename));
+                }
+            }
+
             log.info("File stored successfully: path={}, size={} bytes", fileRef.path(), fileRef.size());
 
             Map<String, Object> result = Map.of(
@@ -292,6 +329,95 @@ public class FileToolsProvider implements ToolsProvider {
     }
 
     // ==================== Helper Methods ====================
+
+    static final String RESTRICTED_FILE_UNTAGGABLE =
+        "The file was not stored: this conversation holds Gmail or Google Drive content, so a stored file "
+        + "must be classified as restricted, and that classification could not be recorded right now. "
+        + "Nothing was saved. Try store_file again in a moment.";
+
+    static final String RESTRICTED_FILE_LEFT_BEHIND =
+        "The file was not stored correctly: this conversation holds Gmail or Google Drive content, so a "
+        + "stored file must be classified as restricted, that classification could not be recorded, and "
+        + "removing the unclassified copy also failed. A file named '%s' may still appear in the user's "
+        + "files. Do not use it and do not call store_file again for it; tell the user to delete that "
+        + "file and to retry later.";
+
+    /** Result of tagging a file stored from a restricted context. */
+    enum RestrictedTagOutcome {
+        /** Tagged RESTRICTED (or nothing to tag: local/mock storage without an index row). */
+        TAGGED,
+        /** Not taggable, and both the object and its index row were removed: nothing was saved. */
+        REMOVED,
+        /** Not taggable, and the cleanup failed: an untagged copy may remain. */
+        LEFT_BEHIND
+    }
+
+    /**
+     * Tags the stored file's index row RESTRICTED (bounded retention, refused to non-allow-listed
+     * models when read back). A file with no index row (local/mock storage) has nothing to tag. On
+     * failure the file is removed again, object AND index row: a restricted file stored untagged is
+     * the leak this closes, so it fails closed, and the outcome says whether the removal worked so
+     * the tool never claims "nothing was saved" when bytes survive.
+     */
+    private RestrictedTagOutcome tagRestricted(String tenantId, FileRef fileRef) {
+        if (fileRef == null || fileRef.id() == null || fileRef.id().isBlank()) {
+            return RestrictedTagOutcome.TAGGED;
+        }
+        java.util.UUID fileId;
+        try {
+            fileId = java.util.UUID.fromString(fileRef.id());
+        } catch (IllegalArgumentException e) {
+            log.warn("store_file: restricted file has a non-UUID id {}; deleting it", fileRef.id());
+            fileId = null;
+        }
+        if (fileId != null) {
+            try {
+                int tagged = storageIndex.markRestricted(tenantId, List.of(fileId), null);
+                if (tagged > 0) {
+                    return RestrictedTagOutcome.TAGGED;
+                }
+                log.warn("store_file: restricted file {} has no index row to tag; deleting it", fileRef.id());
+            } catch (Exception e) {
+                log.warn("store_file: could not tag restricted file {}; deleting it: {}", fileRef.id(), e.getMessage());
+            }
+        }
+        boolean objectRemoved = removeObject(tenantId, fileRef.path());
+        boolean rowRemoved = fileId == null || removeIndexRow(tenantId, fileId, fileRef.path());
+        return objectRemoved && rowRemoved ? RestrictedTagOutcome.REMOVED : RestrictedTagOutcome.LEFT_BEHIND;
+    }
+
+    /**
+     * Deletes the object under its OWNER tenant (the key's prefix): the remote internal delete
+     * route refuses any other identity, and a tool thread has no request-scope X-User-ID to fall
+     * back on, so the key-only delete would be refused and report {@code false}.
+     */
+    private boolean removeObject(String ownerTenantId, String key) {
+        try {
+            if (fileStorageService.delete(ownerTenantId, key)) {
+                return true;
+            }
+            log.error("store_file: untagged restricted file was NOT deleted from object storage, key={}", key);
+        } catch (Exception e) {
+            log.error("store_file: untagged restricted file was NOT deleted from object storage, key={}: {}",
+                key, e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Soft-deletes the index row so the file no longer lists. A row that is already absent is
+     * fine (nothing lists it); only a failing call counts as a failed cleanup.
+     */
+    private boolean removeIndexRow(String tenantId, java.util.UUID fileId, String key) {
+        try {
+            storageIndex.deleteById(fileId, tenantId);
+            return true;
+        } catch (Exception e) {
+            log.error("store_file: index row {} of untagged restricted file was NOT deleted, key={}: {}",
+                fileId, key, e.getMessage());
+            return false;
+        }
+    }
 
     private String getContextValue(ToolExecutionContext context, String key, String defaultValue) {
         if (context == null || context.credentials() == null) {

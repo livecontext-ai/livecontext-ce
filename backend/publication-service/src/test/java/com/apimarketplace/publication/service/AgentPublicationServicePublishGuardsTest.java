@@ -172,7 +172,7 @@ class AgentPublicationServicePublishGuardsTest {
         stubDataSource(tableId, 6);
 
         AgentPublicationService service = newService();
-        service.agentSnapshotMaxTableRows = 5;
+        service.snapshotBudget = new PublicationSnapshotBudget(new ObjectMapper(), PublicationSnapshotBudget.DEFAULT_MAX_BYTES, 5);
 
         Throwable thrown = catchThrowable(() -> publish(service));
 
@@ -186,6 +186,27 @@ class AgentPublicationServicePublishGuardsTest {
         assertThat(breakdown.get(0)).containsEntry("type", "datasource");
         assertThat(breakdown.get(0)).containsEntry("name", "DataSource " + tableId);
         assertThat(breakdown.get(0)).containsEntry("items", 6);
+        verify(publicationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("regression (silent empty publish): a table whose copy fails refuses the agent publish with the retryable TABLE_COPY_FAILED")
+    void tableCopyFailureRefusesTheAgentPublish() {
+        long tableId = 4243L;
+        Map<String, Object> rootConfig = new LinkedHashMap<>();
+        rootConfig.put("tablesGrant", "custom");
+        rootConfig.put("tables", List.of(Long.toString(tableId)));
+        stubRootAgent(rootConfig);
+        stubDataSource(tableId, 0);
+        when(dataSourceClient.copyAllItems(tableId, TENANT_ID, ORG_ID))
+                .thenThrow(new com.apimarketplace.datasource.client.TableCopyException(tableId, "down", null));
+
+        Throwable thrown = catchThrowable(() -> publish());
+
+        PublicationValidationException refusal = unwrap(thrown);
+        assertThat(refusal.getErrorCode()).isEqualTo(PublicationValidationException.TABLE_COPY_FAILED);
+        assertThat(refusal.getDetails()).containsEntry("retryable", true).containsEntry("tableId", "4243");
+        assertThat(refusal.getMessage()).contains("'DataSource 4243' (id 4243)");
         verify(publicationRepository, never()).save(any());
     }
 
@@ -207,7 +228,7 @@ class AgentPublicationServicePublishGuardsTest {
         when(interfaceClient.getInterface(ifaceId, TENANT_ID, ORG_ID)).thenReturn(iface);
 
         AgentPublicationService service = newService();
-        service.agentSnapshotMaxBytes = 100;
+        service.snapshotBudget = new PublicationSnapshotBudget(new ObjectMapper(), 100, PublicationSnapshotBudget.DEFAULT_MAX_TABLE_ROWS);
 
         Throwable thrown = catchThrowable(() -> publish(service));
 
@@ -254,7 +275,7 @@ class AgentPublicationServicePublishGuardsTest {
         for (int i = 0; i < itemCount; i++) {
             items.add(new DataSourceItemDto((long) i, dataSourceId, TENANT_ID, Map.of("col", "v" + i), i, null));
         }
-        when(dataSourceClient.getAllItems(dataSourceId, TENANT_ID, ORG_ID)).thenReturn(items);
+        when(dataSourceClient.copyAllItems(dataSourceId, TENANT_ID, ORG_ID)).thenReturn(items);
     }
 
     private WorkflowPublicationEntity publish() {

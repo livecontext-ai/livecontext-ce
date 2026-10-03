@@ -723,6 +723,69 @@ class OrganizationMemberServiceTest {
         }
     }
 
+    // ===== CE inbox mailbox proof (CASA LC-084) =====
+
+    @Nested
+    @DisplayName("CE inbox: an account created AFTER the invitation must use the link (LC-084)")
+    class CeInboxMailboxProof {
+
+        private OrganizationInvitation invitationCreatedAt(java.time.LocalDateTime createdAt) {
+            OrganizationInvitation invitation = new OrganizationInvitation(org, "target@test.com", OrganizationRole.MEMBER, owner);
+            invitation.setId(UUID.randomUUID());
+            ReflectionTestUtils.setField(invitation, "createdAt", createdAt);
+            when(invitationRepository.findById(invitation.getId())).thenReturn(Optional.of(invitation));
+            when(userRepository.findById(targetUser.getId())).thenReturn(Optional.of(targetUser));
+            return invitation;
+        }
+
+        @Test
+        @DisplayName("CE: a self-registered squatter of the invited address cannot accept from the inbox")
+        void squatterCannotAcceptFromInbox() {
+            ReflectionTestUtils.setField(service, "authMode", "embedded");
+            targetUser.setCreatedAt(java.time.LocalDateTime.now());
+            OrganizationInvitation invitation = invitationCreatedAt(java.time.LocalDateTime.now().minusHours(1));
+
+            assertThatThrownBy(() -> service.acceptInvitationById(invitation.getId(), targetUser.getId()))
+                    .isInstanceOf(InvitationRequiresLinkException.class);
+            verify(memberRepository, never()).save(any(OrganizationMember.class));
+        }
+
+        @Test
+        @DisplayName("CE: ... nor decline it (which would silently cancel the real invitee's invitation)")
+        void squatterCannotDeclineFromInbox() {
+            ReflectionTestUtils.setField(service, "authMode", "embedded");
+            targetUser.setCreatedAt(java.time.LocalDateTime.now());
+            OrganizationInvitation invitation = invitationCreatedAt(java.time.LocalDateTime.now().minusHours(1));
+
+            assertThatThrownBy(() -> service.declineInvitationById(invitation.getId(), targetUser.getId()))
+                    .isInstanceOf(InvitationRequiresLinkException.class);
+            verify(invitationRepository, never()).save(any(OrganizationInvitation.class));
+        }
+
+        @Test
+        @DisplayName("CE: an account that existed before the invitation can decline it from the inbox")
+        void existingAccountCanStillUseInbox() {
+            ReflectionTestUtils.setField(service, "authMode", "embedded");
+            targetUser.setCreatedAt(java.time.LocalDateTime.now().minusDays(3));
+            OrganizationInvitation invitation = invitationCreatedAt(java.time.LocalDateTime.now().minusHours(1));
+            when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            assertThat(service.declineInvitationById(invitation.getId(), targetUser.getId()).getStatus())
+                    .isEqualTo(InvitationStatus.CANCELLED);
+        }
+
+        @Test
+        @DisplayName("cloud (keycloak mode): the rule does not apply, the IdP and onboarding code verify the address")
+        void cloudIsUnaffected() {
+            targetUser.setCreatedAt(java.time.LocalDateTime.now());
+            OrganizationInvitation invitation = invitationCreatedAt(java.time.LocalDateTime.now().minusHours(1));
+            when(invitationRepository.save(any(OrganizationInvitation.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            assertThat(service.declineInvitationById(invitation.getId(), targetUser.getId()).getStatus())
+                    .isEqualTo(InvitationStatus.CANCELLED);
+        }
+    }
+
     // ===== declineInvitationById =====
 
     @Nested

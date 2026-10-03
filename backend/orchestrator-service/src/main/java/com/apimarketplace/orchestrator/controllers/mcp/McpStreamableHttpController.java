@@ -218,9 +218,21 @@ public class McpStreamableHttpController {
                 "capabilities", Map.of(
                         "tools", Map.of(),
                         "resources", Map.of()
-                )
+                ),
+                "instructions", SCOPE_INSTRUCTIONS
         );
     }
+
+    /**
+     * What an API-key scope does and does not bound, from the calling agent's point of view
+     * (LC-055, audit round 2). Sent in the MCP initialize result.
+     */
+    static final String SCOPE_INSTRUCTIONS =
+            "If this connection uses an API key restricted to some tools or actions, tools/list only "
+            + "shows those tools, and calling an action the key was not granted is refused "
+            + "(PERMISSION_DENIED names the actions it allows). The restriction applies to the calls "
+            + "you make here, not to what runs as a consequence: a workflow, application or agent you "
+            + "start runs with the permissions its owner configured for it, not with this key's scope.";
 
     private Map<String, Object> toolsCall(JsonNode idNode, JsonNode params,
                                           String tenantId, String orgId, String orgRole,

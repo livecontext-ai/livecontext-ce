@@ -8,6 +8,7 @@ import com.apimarketplace.catalog.repository.ApiCategoryRepository;
 import com.apimarketplace.catalog.repository.ApiRepository;
 import com.apimarketplace.catalog.repository.ApiSubcategoryRepository;
 import com.apimarketplace.catalog.repository.ApiToolRepository;
+import com.apimarketplace.common.web.MonolithSecurityFilter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -106,7 +107,8 @@ class ApiControllerIntegrationTest {
         @DisplayName("should return APIs for authenticated user")
         void shouldReturnApisForAuthenticatedUser() throws Exception {
             mockMvc.perform(get("/api/apis/me")
-                            .header("X-User-ID", "user-1"))
+                            .header("X-User-ID", "user-1")
+                            .header(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret()))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$", hasSize(1)))
                     .andExpect(jsonPath("$[0].apiName", is("Test API")));
@@ -116,7 +118,8 @@ class ApiControllerIntegrationTest {
         @DisplayName("should return empty list for user with no APIs")
         void shouldReturnEmptyForUserWithNoApis() throws Exception {
             mockMvc.perform(get("/api/apis/me")
-                            .header("X-User-ID", "user-no-apis"))
+                            .header("X-User-ID", "user-no-apis")
+                            .header(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret()))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$", hasSize(0)));
         }
@@ -174,7 +177,8 @@ class ApiControllerIntegrationTest {
         void shouldReturnUniqueForNewName() throws Exception {
             mockMvc.perform(get("/api/apis/check-name")
                             .param("name", "Brand New API")
-                            .header("X-User-ID", "user-1"))
+                            .header("X-User-ID", "user-1")
+                            .header(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret()))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.isUnique", is(true)))
                     .andExpect(jsonPath("$.nameIsUnique", is(true)))
@@ -186,7 +190,8 @@ class ApiControllerIntegrationTest {
         void shouldReturnNotUniqueForExistingName() throws Exception {
             mockMvc.perform(get("/api/apis/check-name")
                             .param("name", "Test API")
-                            .header("X-User-ID", "user-1"))
+                            .header("X-User-ID", "user-1")
+                            .header(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret()))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.nameIsUnique", is(false)));
         }
@@ -209,7 +214,8 @@ class ApiControllerIntegrationTest {
         @DisplayName("should delete API when user is owner")
         void shouldDeleteApiWhenOwner() throws Exception {
             mockMvc.perform(delete("/api/apis/{id}", savedApi.getId())
-                            .header("X-User-ID", "user-1"))
+                            .header("X-User-ID", "user-1")
+                            .header(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret()))
                     .andExpect(status().isNoContent());
 
             // Verify API was deleted
@@ -223,7 +229,8 @@ class ApiControllerIntegrationTest {
         @DisplayName("should deny deletion when user is not owner")
         void shouldDenyDeletionForNonOwner() throws Exception {
             mockMvc.perform(delete("/api/apis/{id}", savedApi.getId())
-                            .header("X-User-ID", "other-user"))
+                            .header("X-User-ID", "other-user")
+                            .header(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret()))
                     .andExpect(status().isForbidden());
         }
     }

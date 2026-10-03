@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextIntlClientProvider } from 'next-intl';
 import enMessages from '@/messages/en.json';
@@ -33,14 +33,14 @@ vi.mock('@/lib/api/organization-api', () => ({
     restoreOrganization: vi.fn(),
   },
 }));
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
-  usePathname: () => '/app/settings/organization',
-  useSearchParams: () => ({
-    get: (k: string) => (k === 'tab' ? sp.tab : k === 'invite' ? sp.invite : null),
-    toString: () => '',
-  }),
-}));
+// A router backed by a live address: the tab is written to it, and a static stand-in would
+// keep answering the address the page was opened on after the tab has moved.
+vi.mock('next/navigation', async () => {
+  const mod = await import('@/lib/folders/testing/fakeFolderRouter');
+  return mod.fakeFolderRouter.nextNavigationModule();
+});
+import { fakeFolderRouter } from '@/lib/folders/testing/fakeFolderRouter';
+const PAGE = '/app/settings/organization';
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn() }) }));
 // Mutable so a test can toggle the workspace-creation entitlement (drives the Workspaces-tab
 // upgrade card). The hook's internals use react-query (mocked thin above), so it must be stubbed.
@@ -117,6 +117,11 @@ const otherOrg = {
 const orgFull = { ...orgSummary, members: [member], canInvite: true } as unknown as Organization;
 
 function renderPage() {
+  const query = new URLSearchParams();
+  if (sp.tab) query.set('tab', sp.tab);
+  if (sp.invite) query.set('invite', sp.invite);
+  fakeFolderRouter.reset(PAGE);
+  if (query.toString()) fakeFolderRouter.navigate(`${PAGE}?${query}`, 'replace');
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <OrganizationSettingsPage />
@@ -217,6 +222,39 @@ describe('OrganizationSettingsPage - categorized tabs', () => {
     expect(screen.queryByText('Jane Member')).not.toBeInTheDocument();
   });
 
+  it('picking a tab writes it to the address as a step Back can undo', async () => {
+    renderPage();
+    await screen.findByText('Jane Member');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Security' }));
+
+    expect(fakeFolderRouter.search()).toBe('tab=security');
+    expect(fakeFolderRouter.navigations.at(-1)?.method).toBe('push');
+
+    // Back to the default tab: spelled by absence.
+    fireEvent.click(screen.getByRole('button', { name: 'Members' }));
+    expect(fakeFolderRouter.search()).toBe('');
+  });
+
+  it('leaving the Security tab drops the audit log filter and page it owned', async () => {
+    sp.tab = 'security';
+    renderPage();
+    await screen.findByTestId('sso-panel');
+    act(() => fakeFolderRouter.navigate(`${PAGE}?tab=security&category=ORG_DELETED&page=2`, 'replace'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
+
+    expect(fakeFolderRouter.search()).toBe('tab=advanced');
+  });
+
+  it('regression - a tab the page does not have falls back to Members', async () => {
+    sp.tab = 'billing';
+    renderPage();
+
+    expect(await screen.findByText('Jane Member')).toBeInTheDocument();
+    expect(screen.queryByTestId('sso-panel')).not.toBeInTheDocument();
+  });
+
   it('Workspaces tab shows the PRO upgrade card when the plan cannot create more workspaces', async () => {
     entitlements.canCreateWorkspace = false;
     renderPage();
@@ -250,5 +288,7 @@ describe('OrganizationSettingsPage - categorized tabs', () => {
     expect(await screen.findByTestId('invite-modal')).toBeInTheDocument();
     expect(screen.getByText('Jane Member')).toBeInTheDocument();
     expect(screen.queryByTestId('sso-panel')).not.toBeInTheDocument();
+    // One-shot: neither the invite flag nor the tab it overrode is left in the address.
+    expect(fakeFolderRouter.search()).toBe('');
   });
 });

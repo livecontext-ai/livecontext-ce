@@ -49,6 +49,8 @@ public final class ToolAuthorizationPolicy {
      *       effects as application:execute, just by workflow id instead of publication id);</li>
      *   <li>{@code agent:execute} - launches a sub-agent (credit / LLM spend);</li>
      *   <li>{@code catalog:execute} / {@code catalog:call} - calls an external third-party API.</li>
+     *   <li>{@code web_search:agent_browse} / {@code agent_browse:agent_browse} - starts a browser
+     *       session against a host the model chose (LC-029).</li>
      * </ul>
      * To extend: add an action to a set, or add a {@code Map.entry(tool, Set.of(...))}.
      */
@@ -100,7 +102,21 @@ public final class ToolAuthorizationPolicy {
             // them would put a card in front of every inbox scan, which is the shape of gate
             // people learn to approve without reading. move and flag are the same: reversible,
             // inside the mailbox, and visible in it afterwards.
-            "mailbox",     Set.of("send", "delete")
+            "mailbox",     Set.of("send", "delete"),
+            // LC-029: agent_browse drives a full browser session against a host the model
+            // chose and navigates on its own afterwards, so it is an unbounded egress channel
+            // for whatever the agent has read. It raises the same card as catalog:execute.
+            // fetch is deliberately NOT here: a card on every page read would sit in front of
+            // the most common research step and teach users to approve blindly. fetch is bounded
+            // instead by the agent's read/write mode (ToolAccessControl classifies it as a
+            // write) and, for workspaces holding restricted-scope credentials, by the
+            // destination allow-list in WebSearchToolsProvider (RestrictedScopeTenantDetector).
+            // search, the browse_* controls and help open no new destination and stay ungated.
+            "web_search",  Set.of("agent_browse"),
+            // The SAME capability under the separate top-level tool name the CE edition
+            // registers when websearch.enabled=false (CloudRelayBrowserAgentToolsProvider).
+            // Without it the identical call raised no card in CE.
+            "agent_browse", Set.of("agent_browse")
     );
 
     /**

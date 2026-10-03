@@ -179,6 +179,16 @@ public class AgentObservabilityRequest {
     public void setStopReason(String stopReason) { this.stopReason = stopReason; }
     public String getBudgetScope() { return budgetScope; }
     public void setBudgetScope(String budgetScope) { this.budgetScope = budgetScope; }
+    /**
+     * {@code RESTRICTED} when the execution handled Google restricted-scope data (Gmail, Drive):
+     * agent-service then tags the execution so its transcript is redacted after the retention
+     * window. Null means NORMAL (tool calls are still classified individually).
+     */
+    private String dataSensitivity;
+
+    public String getDataSensitivity() { return dataSensitivity; }
+    public void setDataSensitivity(String dataSensitivity) { this.dataSensitivity = dataSensitivity; }
+
     public String getKeyRoute() { return keyRoute; }
     public void setKeyRoute(String keyRoute) { this.keyRoute = keyRoute; }
     public Boolean getModelReplaced() { return modelReplaced; }

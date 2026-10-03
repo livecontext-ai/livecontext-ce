@@ -46,10 +46,12 @@ export function AgentView() {
     // the bare pathname cannot do when the page was loaded at it. That is the "nothing
     // happens" the comment above describes, and reading the param at render did not cure it
     // because the address itself never changed.
+    // `push`, like every other tab in the app: a tab is a step the user chose, and Back
+    // returns to the one before it instead of leaving the page. Naming only `view` is what
+    // drops the search and filters of the tab being left.
     showSamePageUrl(
       tab === 'agents' ? pathname : `${pathname}?view=${tab}`,
       samePageUrl(pathname, searchParams),
-      'replace',
     );
   }, [pathname, searchParams]);
 

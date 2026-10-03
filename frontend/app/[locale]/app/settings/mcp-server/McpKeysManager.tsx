@@ -16,7 +16,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import LoadingSpinner from '@/components/LoadingSpinner';
-import { formatUtcDate } from '@/lib/utils/dateFormatters';
+import { formatUtcDate, parseUtcAware } from '@/lib/utils/dateFormatters';
 import { cn } from '@/lib/utils';
 import {
   mcpServerService,
@@ -33,6 +33,12 @@ interface McpKeysManagerProps {
 }
 
 type AccessMode = 'full' | 'scoped';
+
+/** True once the key's expiry (a server UTC timestamp) is in the past. */
+function isExpired(expiresAt: string): boolean {
+  const date = parseUtcAware(expiresAt);
+  return !Number.isNaN(date.getTime()) && date.getTime() <= Date.now();
+}
 
 /**
  * Multiple named lc_live_ keys, each optionally scoped to a set of MCP tools.
@@ -198,6 +204,13 @@ export function McpKeysManager({ availableScopes, onToast }: McpKeysManagerProps
                   <span className="text-xs text-theme-muted">
                     {t('keys.createdAt', { date: formatUtcDate(key.createdAt ?? '', { locale }) })}
                   </span>
+                  {key.expiresAt && (
+                    <span className="text-xs text-theme-muted">
+                      {t(isExpired(key.expiresAt) ? 'keys.expired' : 'keys.expiresAt', {
+                        date: formatUtcDate(key.expiresAt, { locale }),
+                      })}
+                    </span>
+                  )}
                 </div>
               </div>
               {confirmingRevokeId === key.id ? (

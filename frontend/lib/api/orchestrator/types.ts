@@ -709,6 +709,12 @@ export interface WorkflowPublication {
   /** V273 - publisher's pinned epoch for the marketplace preview; null = legacy multi-epoch view */
   showcaseChosenEpoch?: number | null;
   hasShowcase?: boolean;
+  /**
+   * LC-066 - why the showcase preview is not served, null/absent when it is. `RESTRICTED_DATA`:
+   * the showcased run holds Gmail or Google Drive data, which is never shown publicly. Any other
+   * value (`UNVERIFIED`) is transient.
+   */
+  showcaseWithheld?: string | null;
   /** True if publication has an interface (application), false if workflow-only */
   isApplication?: boolean;
   /** Pre-computed node icon props for marketplace card display */

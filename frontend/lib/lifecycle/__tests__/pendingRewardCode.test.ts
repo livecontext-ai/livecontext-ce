@@ -10,6 +10,7 @@ import {
   clearPendingRewardCode,
   codeFromUrl,
   readPendingRewardCode,
+  rememberPendingRewardCode,
 } from '../pendingRewardCode';
 
 function at(href: string): Window {
@@ -97,5 +98,39 @@ describe('capture / read / clear', () => {
     localStorage.setItem(PENDING_REWARD_CODE_KEY, '{not json');
 
     expect(readPendingRewardCode(window)).toBeNull();
+  });
+});
+
+describe("rememberPendingRewardCode (a partner's offer page, whose link carries a token, not the code)", () => {
+  it('remembers the code, upper-cased, and says it is the one that will apply', () => {
+    expect(rememberPendingRewardCode(window, ' northwind ', 1_000)).toBe('NORTHWIND');
+    expect(readPendingRewardCode(window, 1_000)).toBe('NORTHWIND');
+  });
+
+  it('first code wins, like a passing link: a fresh code already waiting is kept and returned', () => {
+    rememberPendingRewardCode(window, 'TECHDOX', 1_000);
+
+    expect(rememberPendingRewardCode(window, 'NORTHWIND', 2_000)).toBe('TECHDOX');
+    expect(readPendingRewardCode(window, 2_000)).toBe('TECHDOX');
+  });
+
+  it('an expired waiting code gives way to the new one', () => {
+    rememberPendingRewardCode(window, 'TECHDOX', 0);
+
+    expect(rememberPendingRewardCode(window, 'NORTHWIND', MAX_AGE_MS + 1)).toBe('NORTHWIND');
+    expect(readPendingRewardCode(window, MAX_AGE_MS + 1)).toBe('NORTHWIND');
+  });
+
+  it('a malformed code is never stored', () => {
+    expect(rememberPendingRewardCode(window, 'a b')).toBeNull();
+    expect(rememberPendingRewardCode(window, '')).toBeNull();
+    expect(localStorage.getItem(PENDING_REWARD_CODE_KEY)).toBeNull();
+  });
+
+  it('a blocked store never throws, and the code is still the one that applies', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
+
+    expect(rememberPendingRewardCode(window, 'NORTHWIND')).toBe('NORTHWIND');
   });
 });

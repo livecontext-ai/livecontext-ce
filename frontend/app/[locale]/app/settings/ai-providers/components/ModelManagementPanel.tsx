@@ -43,6 +43,7 @@ import {
   EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { urlEnum, useUrlSearchState, useUrlState } from "@/hooks/useUrlState";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -197,6 +198,13 @@ const EFFORT_SELECT_OPTIONS = [
 const ROW_GRID_COLS = IS_CE
   ? "grid-cols-[28px_40px_56px_minmax(0,1fr)_auto_auto_24px_100px_140px_76px]"
   : "grid-cols-[28px_40px_56px_88px_60px_minmax(0,1fr)_auto_auto_24px_100px_140px_76px]";
+/**
+ * The width below which the table scrolls sideways instead of squeezing. CE: the fixed columns
+ * (464px) and their nine gaps (72px), the row's padding and border (26px), the list's scrollbar
+ * gutter (~15px), which leaves ~180px for the provider badge and the two auto columns (tier,
+ * effort). Cloud rows add the CE-ship and free-tier chips: 148px plus two gaps, 164px.
+ */
+const ROW_MIN_WIDTH = IS_CE ? "min-w-[760px]" : "min-w-[924px]";
 
 function ProviderBadge({ provider }: { provider: string }) {
   const iconSrc = getProviderIconSrc(provider);
@@ -743,8 +751,10 @@ function SortableModelRow({
   /** Enabled models this one can be replaced by while it is disabled (V515). */
   replacementOptions: ModelConfigEntry[];
   /**
-   * Only on the chat tab, whose rows carry the GLOBAL enabled flag the runtime swap reads.
-   * Other tabs show a per-category flag, so a replacement offered there would do nothing.
+   * Only on the chat tab, whose rows carry the GLOBAL enabled flag the runtime swap reads
+   * and whose list holds every model a replacement can be picked from. Other tabs show a
+   * per-category flag (a replacement there would do nothing) or a partial list (the
+   * free-tier tab would offer free-tier models only).
    * Also gates the unlist button, for the same reason: unlisted is a global flag.
    */
   showReplacement: boolean;
@@ -1149,8 +1159,31 @@ function SortableModelRow({
 const CATEGORIES = [
   'chat',
   'browser_agent',
+  'free_tier',
 ] as const;
 type Category = typeof CATEGORIES[number];
+
+/**
+ * The free tier's own ranking: the models opened to the free tier (the Free chip), in the
+ * order a Free account meets them. The backend lists only those models for this category
+ * and reads a RANK from its sidecar, nothing else: enabled, unlisted, price and the rest
+ * are the same global values the chat tab edits.
+ *
+ * Cloud only, like the chip that feeds it: a self-hosted install has no free tier.
+ */
+const FREE_TIER_CATEGORY: Category = 'free_tier';
+const VISIBLE_CATEGORIES: readonly Category[] = IS_CE
+  ? CATEGORIES.filter((c) => c !== FREE_TIER_CATEGORY)
+  : CATEGORIES;
+
+/**
+ * Does this tab's enabled switch write the GLOBAL flags on the model's own row? True for
+ * chat (the legacy global view) and for the free tier (a ranking, with no switch of its
+ * own). Named per category, not `!== 'browser_agent'`: a category added later has to state
+ * which flag its switch writes rather than inherit the answer.
+ */
+const writesGlobalFlags = (category: Category) =>
+  category === 'chat' || category === FREE_TIER_CATEGORY;
 
 // Deliberately NOT here: the five generation formats (image, video, audio,
 // voice, music).
@@ -1187,7 +1220,9 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
   const [saving, setSaving] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [providerFilter, setProviderFilter] = useState<string>("all");
+  // The filters, the sort and the category tab live in the address, so a reload reopens the
+  // list as it was. The page's tab bar drops them when the admin leaves this tab.
+  const [providerFilter, setProviderFilter] = useUrlState<string>("provider", "all");
   /**
    * Providers switched off entirely, lower-cased. Absent from the list means on; null means
    * the answer could not be read, which is NOT the same and must not draw a switch.
@@ -1196,17 +1231,23 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
   /** Rows ticked for a bulk change, keyed `provider:id`. */
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
   /** Free-text match on the model id and on the name an admin gave it. */
-  const [search, setSearch] = useState<string>("");
-  const [tierFilter, setTierFilter] = useState<string>("all");
+  const [search, setSearch] = useUrlSearchState("q");
+  const [tierFilter, setTierFilter] = useUrlState<string>("tier", "all", {
+    codec: urlEnum(["all", ...TIER_OPTIONS.map((tier) => tier.value)]),
+  });
   /** "all" | "on" (listed) | "unlisted" | "off" - which of the three states to show (V554). */
-  const [stateFilter, setStateFilter] = useState<string>("all");
+  const [stateFilter, setStateFilter] = useUrlState<string>("status", "all", {
+    codec: urlEnum(["all", "on", "unlisted", "off"]),
+  });
   /** Only the models the catalogue gained in the last two weeks (the "New" badge). */
-  const [newOnly, setNewOnly] = useState(false);
+  const [newOnly, setNewOnly] = useUrlState("new", false);
   /**
    * "rank" (the fallback order, the default) or a release-date order, which is how an admin
    * finds the old models worth retiring. Models with no known release date go last either way.
    */
-  const [sortOrder, setSortOrder] = useState<SortOrder>("rank");
+  const [sortOrder, setSortOrder] = useUrlState<SortOrder>("sort", "rank", {
+    codec: urlEnum(["rank", "releaseAsc", "releaseDesc"]),
+  });
   /** Bumped after a retire so the Retired list re-reads. */
   const [retiredReload, setRetiredReload] = useState(0);
   const { toasts, addToast, removeToast } = useToast();
@@ -1217,7 +1258,10 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
    * behaviour is untouched. The other tabs target the V156 sidecar via
    * {@code bulkUpdateRankings(category)} + {@code setCategoryEnabled}.
    */
-  const [category, setCategory] = useState<Category>('chat');
+  const [category, setCategory] = useUrlState<Category>('category', 'chat', {
+    codec: urlEnum(VISIBLE_CATEGORIES),
+    history: 'push',
+  });
   /**
    * Every execution link, indexed per billed model below. Cloud only: the
    * endpoint is not loaded in CE, and the routing it configures does not exist
@@ -1376,7 +1420,7 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
     setStateFilter("all");
     setNewOnly(false);
     setSearch("");
-  }, []);
+  }, [setProviderFilter, setTierFilter, setStateFilter, setNewOnly, setSearch]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -1508,7 +1552,7 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
       applyToSelection(
         enabled ? t("modelConfig.bulkEnable") : t("modelConfig.bulkDisable"),
         (model) => {
-          if (category !== "chat") {
+          if (!writesGlobalFlags(category)) {
             return modelConfigService.setCategoryEnabled(model.provider, model.id, category, enabled);
           }
           // Like the row switch: "Disable" leaves no unlisted flag behind on an off row, and
@@ -1763,6 +1807,12 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
     );
     modelConfigService
       .saveOverride({ provider: model.provider, modelId: model.id, freeTierEnabled: next })
+      .then(() => {
+        // The pickers read the flag from the cached catalogue.
+        clearModelsCache();
+        // The free-tier tab lists the opened models only, so a model closed there leaves it.
+        if (category === FREE_TIER_CATEGORY) return fetchModels({ silent: true });
+      })
       .catch((e) => {
         setModels((prev) =>
           prev.map((m) =>
@@ -1857,9 +1907,10 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
   };
 
   const handleToggleEnabled = (model: ModelConfigEntry) => {
-    // chat = global flags on the parent row: off <-> listed, both flags written, so an
-    // unlisted model switched off and on again comes back listed, not silently unlisted.
-    if (category === 'chat') {
+    // chat (and the free-tier ranking, which has no switch of its own) = global flags on
+    // the parent row: off <-> listed, both flags written, so an unlisted model switched
+    // off and on again comes back listed, not silently unlisted.
+    if (writesGlobalFlags(category)) {
       applyListingState(model, nextStateFromSwitch(modelListingState(model)));
       return;
     }
@@ -2133,7 +2184,7 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
               opacity: categorySliderStyle.width ? 1 : 0,
             }}
           />
-          {CATEGORIES.map((tab) => (
+          {VISIBLE_CATEGORIES.map((tab) => (
             <button
               key={tab}
               data-category-id={tab}
@@ -2283,13 +2334,20 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
             <RotateCcw className="w-3.5 h-3.5 mr-1" />
             {t("modelConfig.resetAll")}
           </Button>
-          <Button
-            size="sm"
-            onClick={() => setShowAddDialog(true)}
-          >
-            <Plus className="w-3.5 h-3.5 mr-1" />
-            {t("modelConfig.addModel")}
-          </Button>
+          {/* Not on the free-tier tab: a model is added to the CATALOGUE, at the end of the
+              global ranking, and this tab's ranks are a different scale. Computed from them,
+              a new model would be saved near the top of the global order, and it would not
+              even show here, since it is not open to the free tier yet. */}
+          {category !== FREE_TIER_CATEGORY && (
+            <Button
+              size="sm"
+              data-testid="add-model"
+              onClick={() => setShowAddDialog(true)}
+            >
+              <Plus className="w-3.5 h-3.5 mr-1" />
+              {t("modelConfig.addModel")}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -2363,7 +2421,7 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
           <Button size="sm" variant="outline" data-testid="bulk-disable" onClick={() => bulkSetEnabled(false)}>
             {t("modelConfig.bulkDisable")}
           </Button>
-          {category === "chat" && (
+          {writesGlobalFlags(category) && (
             <Button size="sm" variant="outline" data-testid="bulk-unlist" onClick={bulkUnlist}>
               <EyeOff className="w-3.5 h-3.5 mr-1" />
               {t("modelConfig.bulkUnlist")}
@@ -2397,87 +2455,95 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         </div>
       )}
 
-      {/* Column headers */}
-      <div className={cn(
-        "grid items-center gap-2 px-3 py-1 text-sm text-theme-secondary font-medium",
-        ROW_GRID_COLS
-      )}
-        data-testid="model-list-header"
-        // The list below always reserves its scrollbar gutter; the header gives up the same
-        // width, or on a classic-scrollbar OS every column drifts from its heading.
-        style={{ paddingRight: `calc(0.75rem + ${scrollbarWidth}px)` }}
-      >
-        <Checkbox
-          checked={allFilteredSelected}
-          onCheckedChange={(v) => selectAllFiltered(v === true)}
-          aria-label={t("modelConfig.selectAll")}
-          data-testid="model-select-all"
-        />
-        <div>#</div>
-        <div />
-        {/* CE-ship chip column (cloud only) - the chip labels itself, no header text */}
-        {!IS_CE && <div />}
-        {/* Free-tier chip column (cloud only) - same, the chip labels itself */}
-        {!IS_CE && <div />}
-        <div>{t("modelConfig.columns.provider")}</div>
-        <div>{t("modelConfig.columns.tier")}</div>
-        <div>{t("modelConfig.columns.effort")}</div>
-        <div>
-          <Star className="w-3.5 h-3.5" />
-        </div>
-        <div className="text-right">{t("modelConfig.columns.pricing")}</div>
-        <div className="flex items-center justify-between gap-3 pl-4 text-xs uppercase tracking-wide">
-          <span>TPM</span>
-          <span>RPM</span>
-        </div>
-        <div />
-      </div>
-
-      {/* Sortable model list */}
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        autoScroll={LIST_AUTO_SCROLL}
-        onDragStart={(e) => setDraggingKey(String(e.active.id))}
-        onDragCancel={() => setDraggingKey(null)}
-        onDragEnd={(e) => {
-          setDraggingKey(null);
-          return handleDragEnd(e);
-        }}
-      >
-        <SortableContext
-          items={sortableIds}
-          strategy={verticalListSortingStrategy}
-        >
-          {visibleModels.length > 0 && (
-            <VirtualList
-              listRef={setListApi}
-              rowComponent={VirtualModelRow}
-              rowCount={visibleModels.length}
-              rowHeight={rowHeight}
-              rowProps={{ rows: visibleModels, renderRow, draggingKey }}
-              overscanCount={LIST_OVERSCAN}
-              style={{ height: listHeight, scrollbarGutter: "stable" }}
-              data-testid="model-list"
+      {/* Header and list scroll sideways TOGETHER, from one minimum width. The row is a fixed
+          grid (ROW_GRID_COLS): below that width it used to run past the list, whose own
+          overflow (it scrolls vertically, so it clips sideways too) cut the right-hand columns
+          off and scrolled them away from their headings. */}
+      <div className="overflow-x-auto" data-testid="model-table-scroll">
+        <div className={ROW_MIN_WIDTH}>
+          {/* Column headers */}
+          <div className={cn(
+            "grid items-center gap-2 px-3 py-1 text-sm text-theme-secondary font-medium",
+            ROW_GRID_COLS
+          )}
+            data-testid="model-list-header"
+            // The list below always reserves its scrollbar gutter; the header gives up the same
+            // width, or on a classic-scrollbar OS every column drifts from its heading.
+            style={{ paddingRight: `calc(0.75rem + ${scrollbarWidth}px)` }}
+          >
+            <Checkbox
+              checked={allFilteredSelected}
+              onCheckedChange={(v) => selectAllFiltered(v === true)}
+              aria-label={t("modelConfig.selectAll")}
+              data-testid="model-select-all"
             />
-          )}
-        </SortableContext>
-        {/* What follows the pointer. Without it the moving element is the row itself, whose
-            virtual slot unmounts once auto-scroll carries it past the overscan, and the row
-            vanished mid-drag. */}
-        <DragOverlay>
-          {draggedModel && (
-            <div
-              data-testid="model-drag-overlay"
-              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-theme bg-theme-primary shadow-lg"
-            >
-              <GripVertical className="w-3.5 h-3.5 text-theme-secondary" />
-              <span className="text-sm font-medium text-theme-primary truncate">{draggedModel.name}</span>
-              <ProviderBadge provider={draggedModel.provider} />
+            <div>#</div>
+            <div />
+            {/* CE-ship chip column (cloud only) - the chip labels itself, no header text */}
+            {!IS_CE && <div />}
+            {/* Free-tier chip column (cloud only) - same, the chip labels itself */}
+            {!IS_CE && <div />}
+            <div>{t("modelConfig.columns.provider")}</div>
+            <div>{t("modelConfig.columns.tier")}</div>
+            <div>{t("modelConfig.columns.effort")}</div>
+            <div>
+              <Star className="w-3.5 h-3.5" />
             </div>
-          )}
-        </DragOverlay>
-      </DndContext>
+            <div className="text-right">{t("modelConfig.columns.pricing")}</div>
+            <div className="flex items-center justify-between gap-3 pl-4 text-xs uppercase tracking-wide">
+              <span>TPM</span>
+              <span>RPM</span>
+            </div>
+            <div />
+          </div>
+
+          {/* Sortable model list */}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            autoScroll={LIST_AUTO_SCROLL}
+            onDragStart={(e) => setDraggingKey(String(e.active.id))}
+            onDragCancel={() => setDraggingKey(null)}
+            onDragEnd={(e) => {
+              setDraggingKey(null);
+              return handleDragEnd(e);
+            }}
+          >
+            <SortableContext
+              items={sortableIds}
+              strategy={verticalListSortingStrategy}
+            >
+              {visibleModels.length > 0 && (
+                <VirtualList
+                  listRef={setListApi}
+                  rowComponent={VirtualModelRow}
+                  rowCount={visibleModels.length}
+                  rowHeight={rowHeight}
+                  rowProps={{ rows: visibleModels, renderRow, draggingKey }}
+                  overscanCount={LIST_OVERSCAN}
+                  style={{ height: listHeight, scrollbarGutter: "stable" }}
+                  data-testid="model-list"
+                />
+              )}
+            </SortableContext>
+            {/* What follows the pointer. Without it the moving element is the row itself, whose
+                virtual slot unmounts once auto-scroll carries it past the overscan, and the row
+                vanished mid-drag. */}
+            <DragOverlay>
+              {draggedModel && (
+                <div
+                  data-testid="model-drag-overlay"
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg border border-theme bg-theme-primary shadow-lg"
+                >
+                  <GripVertical className="w-3.5 h-3.5 text-theme-secondary" />
+                  <span className="text-sm font-medium text-theme-primary truncate">{draggedModel.name}</span>
+                  <ProviderBadge provider={draggedModel.provider} />
+                </div>
+              )}
+            </DragOverlay>
+          </DndContext>
+        </div>
+      </div>
 
       {visibleModels.length === 0 && (
         <div className="text-center py-8 text-sm text-theme-secondary">

@@ -3,17 +3,46 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { routing } from './i18n/routing';
 import { IS_CE } from './lib/edition';
+import { enforceSecureLocaleCookie } from './lib/security/localeCookie';
 import { isDocsHost, resolveDocsRoute } from './lib/docs/docsHostRewrite';
 import { isJwtShapedToken } from './lib/utils/jwtShape';
 import { isServedFilePath } from './lib/seo/servedFiles';
+import { LOCALIZED_PUBLIC_PATHS, PAGE_LOCALE_HEADER } from './lib/seo/siteUrl';
+// Shared with next.config.mjs (LC-027): the ONE place that knows the nonce-CSP path list and
+// builds its header set, so the app-shell (`/app`, `/ce-setup`) exclusion here and the
+// exclusion baked into securityHeaderRules() can never drift apart. See that module's header.
+import { isNonceCspPath, nonceDocumentHeaders } from './lib/security/securityHeaders.mjs';
 
 const intlMiddleware = createMiddleware(routing);
 const GATEWAY_URL = process.env.NEXT_PUBLIC_SPRING_BASE_URL || 'http://localhost:8080';
 const API_PROXY_CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS, PATCH',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, X-Active-Organization-ID',
-  'Access-Control-Allow-Credentials': 'true',
 } as const;
+
+/**
+ * Browser origins allowed to call `/api/proxy/*` CROSS-origin (LC-033).
+ *
+ * The app calls this proxy same-origin, which needs no CORS header at all, and nothing in the
+ * product calls it from another origin (the widget, share pages and docs host are all served by
+ * this same app). So the default is an EMPTY allow-list: no CORS header is emitted. An operator
+ * who genuinely needs a cross-origin caller lists it, exactly, in
+ * `API_PROXY_CORS_ALLOWED_ORIGINS` (comma-separated).
+ *
+ * This used to reflect ANY `Origin` back (and send `*` when there was none) together with
+ * `Access-Control-Allow-Credentials: true`. Credentials are no longer sent at all: auth is the
+ * `Authorization` Bearer header, never an ambient cookie. A wildcard and the opaque `null`
+ * origin (sandboxed interface iframes) are refused even if configured.
+ */
+export function parseApiProxyAllowedOrigins(raw: string | undefined): Set<string> {
+  const origins = new Set<string>();
+  for (const entry of (raw ?? '').split(',')) {
+    const origin = entry.trim();
+    if (!origin || origin.includes('*') || origin.toLowerCase() === 'null') continue;
+    origins.add(origin);
+  }
+  return origins;
+}
 
 /**
  * Paths whose pages live under `/[locale]/...` only. They must keep the locale
@@ -108,12 +137,18 @@ export const PUBLIC_INDEX_SEGMENTS = [
   'compare',
   'contact',
   'docs',
+  // The interface-rendering shell route (LC-027 CASA E3): a route handler, not a page, but it
+  // is a REAL one-segment route (app/interface-frame/route.ts) that must not 404 here. See
+  // lib/security/securityHeaders.mjs's INTERFACE_FRAME_PATH for the header side of this route.
+  'interface-frame',
   'integrations',
   'local-mcp',
   'marketplace',
   'models',
   'partners',
   'redeem',
+  // Vulnerability disclosure policy, the Policy target of /.well-known/security.txt.
+  'security',
   'status',
   'videos',
 ] as const;
@@ -130,6 +165,7 @@ export const PUBLIC_ROUTE_SEGMENTS = [
   'billing',
   'f',
   'legal',
+  'offer',
   's',
   'u',
   'w',
@@ -154,6 +190,12 @@ function isKnownRoute(pathWithoutLocale: string): boolean {
 
   const known = segments.length === 1 ? PUBLIC_INDEX_SEGMENTS : PUBLIC_ROUTE_SEGMENTS;
   return (known as readonly string[]).includes(first);
+}
+
+/** The NEXT_LOCALE cookie when it names a locale this site serves, null otherwise. */
+function cookieLocale(request: NextRequest): string | null {
+  const value = request.cookies.get('NEXT_LOCALE')?.value;
+  return value && (routing.locales as readonly string[]).includes(value) ? value : null;
 }
 
 function getPathLocale(pathname: string): string | null {
@@ -195,16 +237,17 @@ function isApiProxyPath(pathname: string): boolean {
 }
 
 function getApiProxyCorsHeaders(request: NextRequest): Headers {
-  const headers = new Headers(API_PROXY_CORS_HEADERS);
-  const origin = request.headers.get('origin');
-
-  if (origin) {
-    headers.set('Access-Control-Allow-Origin', origin);
-    headers.set('Vary', 'Origin');
-  } else {
-    headers.set('Access-Control-Allow-Origin', '*');
+  const allowed = parseApiProxyAllowedOrigins(process.env.API_PROXY_CORS_ALLOWED_ORIGINS);
+  if (allowed.size === 0) {
+    return new Headers();
   }
-
+  // The answer depends on Origin once an allow-list exists, so shared caches must key on it.
+  const headers = new Headers({ Vary: 'Origin' });
+  const origin = request.headers.get('origin');
+  if (origin && allowed.has(origin)) {
+    Object.entries(API_PROXY_CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
+    headers.set('Access-Control-Allow-Origin', origin);
+  }
   return headers;
 }
 
@@ -228,8 +271,50 @@ function isRscRequest(request: NextRequest): boolean {
   );
 }
 
+/**
+ * A CSP nonce is a one-time, per-REQUEST secret: reusing it (or a constant) defeats the point
+ * (an attacker who ever observes one value could replay it forever). `crypto.randomUUID()` is
+ * available in the Edge runtime middleware executes in; base64-encoding it matches the value
+ * shape CSP expects and Next's own CSP guide. Exported for the header-generation unit test.
+ */
+export function generateCspNonce(): string {
+  return Buffer.from(crypto.randomUUID()).toString('base64');
+}
+
 export function proxy(request: NextRequest) {
-  const response = routeRequest(request);
+  const { pathname } = request.nextUrl;
+  const nonce = isNonceCspPath(pathname) ? generateCspNonce() : null;
+  const nonceHeaderRules = nonce
+    ? nonceDocumentHeaders({
+        nonce,
+        edition: process.env.NEXT_PUBLIC_APP_EDITION,
+        serviceUrls: [process.env.NEXT_PUBLIC_KEYCLOAK_URL, process.env.NEXT_PUBLIC_GATEWAY_WS_URL],
+      })
+    : null;
+
+  // The nonce class (`/app/*`, `/ce-setup/*`) needs its CSP on the REQUEST too, not only the
+  // response: Next's SSR reads the request's own Content-Security-Policy header to find the
+  // nonce and auto-apply it to its own hydration/flight scripts (see Next's CSP guide and
+  // securityHeaders.mjs's module header). A plain response-header mutation after the fact is
+  // too late - by then the page has already rendered without it, so this has to reach the
+  // `renderPage()` call sites inside routeRequest that actually render these paths (see
+  // routeRequest's `nonceRequestHeaders` parameter) rather than being bolted on here.
+  let nonceRequestHeaders: Headers | undefined;
+  if (nonceHeaderRules) {
+    nonceRequestHeaders = new Headers(request.headers);
+    nonceRequestHeaders.set('x-nonce', nonce as string);
+    for (const { key, value } of nonceHeaderRules) {
+      nonceRequestHeaders.set(key, value);
+    }
+  }
+
+  const response = routeRequest(request, nonceRequestHeaders);
+
+  if (nonceHeaderRules && response) {
+    for (const { key, value } of nonceHeaderRules) {
+      response.headers.set(key, value);
+    }
+  }
 
   // Flight/prefetch responses must NEVER be stored by shared caches (see the
   // headers() block in next.config.mjs - the PRIMARY guard, since middleware
@@ -240,11 +325,23 @@ export function proxy(request: NextRequest) {
     response.headers.set('cache-control', 'private, no-store');
   }
 
+  // next-intl's middleware sets NEXT_LOCALE without `Secure`; add it on HTTPS (CASA DAST).
+  if (response) {
+    enforceSecureLocaleCookie(request, response);
+  }
+
   return response;
 }
 
-function routeRequest(request: NextRequest) {
+function routeRequest(request: NextRequest, nonceRequestHeaders?: Headers) {
   const { pathname } = request.nextUrl;
+  // Every branch that lets a DOCUMENT render goes through here, so a nonce-class path carries its
+  // nonce to Next's SSR whichever branch serves it (`/en/app/...`, the public `/s/<token>` and
+  // `/f/<token>` links, and a dotted token like `/s/abc.def` or `/en/app/u/j.doe`). Without it the
+  // response would carry the nonce CSP while the page rendered un-nonced: hydration blocked.
+  // `nonceRequestHeaders` is undefined outside the nonce class, so this is a plain next() there.
+  const renderPage = () =>
+    NextResponse.next(nonceRequestHeaders ? { request: { headers: nonceRequestHeaders } } : undefined);
 
   if (isApiProxyPath(pathname) && request.method === 'OPTIONS') {
     return new NextResponse(null, {
@@ -270,17 +367,23 @@ function routeRequest(request: NextRequest) {
     // (signup country for the lifecycle e-mails, abuse-only signup IP). Never rebuild this
     // from an allow-list without keeping those two; pinned by proxy.cloudflareHeaders.test.ts.
     const headers = new Headers(request.headers);
-    const authHeader = headers.get('authorization');
-    // Only promote a `token` query param to a bearer when it is a JWT access token
-    // (the <img>/window.open fallback). An opaque/UUID RESOURCE token must reach the
-    // gateway in the query: the unauthenticated invitation-accept lookup, email verify
-    // and password reset all read it from ?token=. (Stripping it here is what made
-    // /organizations/invitations/info?token= always return valid:false.)
-    if (!authHeader && targetUrl.searchParams.has('token') && isJwtShapedToken(targetUrl.searchParams.get('token'))) {
-      const token = targetUrl.searchParams.get('token');
-      if (token) {
-        headers.set('authorization', `Bearer ${token}`);
-      }
+    // The browser's CORS decision for this proxy is made HERE (getApiProxyCorsHeaders, LC-033),
+    // so the browser Origin is not forwarded. Upstream, the backend sees a call from this server
+    // to a different host and would run its own CORS check against the page origin: the CE
+    // monolith only allows APP_PUBLIC_URL/APP_BASE_URL, so an install reached on any other address
+    // (default port 8870, a LAN IP, a reverse-proxy domain) got "403 Invalid CORS request" on every
+    // browser POST, since browsers send Origin on every non-GET request, same-origin included.
+    headers.delete('origin');
+    // LC-044: a session JWT is NOT accepted as a `?token=` query parameter. This proxy used to
+    // promote a JWT-shaped `token` to an `Authorization: Bearer` header (an <img>/window.open
+    // fallback). No shipped caller uses it any more (file URLs are fetched with the header and
+    // handed over as blob:/data: URLs), and it let a full-session credential travel in a URL,
+    // into access logs, history and Referer headers. An opaque RESOURCE token (invitation
+    // lookup, email verification, password reset) is forwarded untouched in the query: the
+    // backend itself reads it from `?token=`. A JWT-shaped one is still STRIPPED (never
+    // promoted): forwarding it would carry the session credential into the gateway and
+    // upstream access logs. The dead copy in `app/api/proxy/[...path]/route.ts` matches.
+    if (isJwtShapedToken(targetUrl.searchParams.get('token'))) {
       targetUrl.searchParams.delete('token');
     }
 
@@ -398,7 +501,7 @@ function routeRequest(request: NextRequest) {
     }
 
     if (isServedFilePath(pathname) || isKnownRoute(dottedPath) || requiresLocale(dottedPath)) {
-      return NextResponse.next();
+      return renderPage();
     }
     return NextResponse.rewrite(new URL('/_not-found', request.url), {
       headers: { 'X-Robots-Tag': 'noindex' },
@@ -478,6 +581,18 @@ function routeRequest(request: NextRequest) {
     return NextResponse.redirect(newUrl);
   }
 
+  // A personal offer's link (the email a free account receives once its credits run out, and
+  // every one already sent) points at the pricing page with the offer's code: it opens the offer's
+  // own full-screen page instead, in the email's language (that page lives outside the [locale]
+  // tree and reads the NEXT_LOCALE cookie). Cloud only: a self-hosted install has no such offer.
+  if (!IS_CE && pathnameWithoutLocale === '/app/settings/pricing' && request.nextUrl.searchParams.has('lc_offer')) {
+    const newUrl = new URL('/offer/personal', request.url);
+    newUrl.search = request.nextUrl.search;
+    const response = NextResponse.redirect(newUrl);
+    if (locale) response.cookies.set('NEXT_LOCALE', locale, { path: '/', maxAge: 31_536_000, sameSite: 'lax' });
+    return response;
+  }
+
   // Settings > Agents & Chat rendered a second copy of the agent & Orbi defaults editor,
   // which now lives only on the Agents page "Settings" tab. Old links and bookmarks land
   // there, in their own locale (a page-level redirect() would lose it to the /en fallback).
@@ -496,9 +611,45 @@ function routeRequest(request: NextRequest) {
   }
 
   if (!locale && requiresLocale(pathname)) {
-    const newUrl = new URL(`/en${pathname}`, request.url);
+    // The language the visitor chose (the NEXT_LOCALE cookie), English otherwise: an unprefixed
+    // link from a public page ("Open the app", a pricing link) must not drop a French reader
+    // into the English app.
+    const newUrl = new URL(`/${cookieLocale(request) ?? routing.defaultLocale}${pathname}`, request.url);
     newUrl.search = request.nextUrl.search;
     return NextResponse.redirect(newUrl);
+  }
+
+  // A public page with one URL per language outside the [locale] tree (LOCALIZED_PUBLIC_PATHS):
+  // English at the bare path, the others prefixed. The prefixed URL is rewritten onto the page
+  // with its language in PAGE_LOCALE_HEADER, so one URL always serves one language, whatever the
+  // cookie says: what a crawler reads is what a visitor reads.
+  if (!IS_CE && (LOCALIZED_PUBLIC_PATHS as readonly string[]).includes(pathnameWithoutLocale)) {
+    if (locale === routing.defaultLocale) {
+      const newUrl = new URL(pathnameWithoutLocale, request.url);
+      newUrl.search = request.nextUrl.search;
+      return permanentRedirect(newUrl);
+    }
+    const chosen = cookieLocale(request);
+    if (!locale && chosen && chosen !== routing.defaultLocale) {
+      // The bare URL is English: a visitor who chose another language goes to theirs.
+      const newUrl = new URL(`/${chosen}${pathnameWithoutLocale}`, request.url);
+      newUrl.search = request.nextUrl.search;
+      // It depends on the cookie: no shared cache may store it for the next visitor.
+      return NextResponse.redirect(newUrl, {
+        headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie' },
+      });
+    }
+    // Set here, never taken from the request: on these URLs a client cannot name another
+    // language. (Elsewhere a request carrying the header only changes its own sender's view.)
+    const headers = new Headers(nonceRequestHeaders ?? request.headers);
+    headers.set(PAGE_LOCALE_HEADER, locale ?? routing.defaultLocale);
+    if (!locale) return NextResponse.next({ request: { headers } });
+    const target = new URL(pathnameWithoutLocale, request.url);
+    target.search = request.nextUrl.search;
+    const response = NextResponse.rewrite(target, { request: { headers } });
+    // Opening a page in a language is choosing it, as a prefixed [locale] page does.
+    response.cookies.set('NEXT_LOCALE', locale, { path: '/', maxAge: 31_536_000, sameSite: 'lax' });
+    return response;
   }
 
   // Translated persona landings keep their locale and rewrite bare English URLs.
@@ -517,8 +668,16 @@ function routeRequest(request: NextRequest) {
   // Locale-required pages already live under [locale]. Let them through once a
   // locale is present; otherwise next-intl's `as-needed` redirect strips the
   // locale and the add-locale branch above puts it back, creating a loop.
+  //
+  // This is where the locale-prefixed nonce-class pages render: `/app/*`, `/ce-setup/*` and the
+  // auth/onboarding areas (`/login`, `/register`, `/onboarding`, `/forgot-password`,
+  // `/reset-password`, `/invitations`, `/auth`) are ALL of LOCALE_REQUIRED_PREFIXES, and every one
+  // of them takes no other branch above once it carries a dotless path. The public `/s` and `/f`
+  // links render through the known-route branch below, dotted paths through the dotted branch
+  // above - all three use renderPage(), which carries the per-request CSP nonce so Next's SSR can
+  // find and auto-apply it (see proxy() and lib/security/securityHeaders.mjs NONCE_CSP_PREFIXES).
   if (locale && requiresLocale(pathnameWithoutLocale)) {
-    return NextResponse.next();
+    return renderPage();
   }
 
   // The first segment decides, at EVERY depth, against two lists: it must name
@@ -536,7 +695,7 @@ function routeRequest(request: NextRequest) {
   }
 
   if (pathnameWithoutLocale !== '/') {
-    return NextResponse.next();
+    return renderPage();
   }
 
   return intlMiddleware(request);

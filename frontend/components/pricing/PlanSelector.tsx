@@ -49,6 +49,10 @@ interface PlanSelectorProps {
   personalOfferActive?: boolean;
   nextEligibleMonthlyCredits?: number | null;
   selectedPlanCode?: string | null;
+  /** The plan a partner's link recommends (upper case): its selected card names the partner. */
+  partnerRecommendedPlanCode?: string | null;
+  /** "Recommended by your partner", translated by the page. */
+  partnerRecommendedLabel?: string;
 }
 
 const PlanSelector = React.memo(function PlanSelector({
@@ -67,6 +71,8 @@ const PlanSelector = React.memo(function PlanSelector({
   personalOfferActive = false,
   nextEligibleMonthlyCredits = null,
   selectedPlanCode = null,
+  partnerRecommendedPlanCode = null,
+  partnerRecommendedLabel,
 }: PlanSelectorProps) {
   const { theme } = useTheme();
   const { isLoading: isLoadingPlans } = usePlans();
@@ -145,6 +151,13 @@ const PlanSelector = React.memo(function PlanSelector({
           <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
             <Badge variant="secondary" className="bg-black text-white dark:bg-white dark:text-black border-transparent px-3 py-1">
               {t('badges.current')}
+            </Badge>
+          </div>
+        ) : selectedPlanCode === plan.id.toUpperCase() && partnerRecommendedLabel && partnerRecommendedPlanCode === plan.id.toUpperCase() ? (
+          // Still the plan the partner's link chose: say who recommended it, in the partner gold.
+          <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
+            <Badge variant="secondary" className="whitespace-nowrap border-transparent px-3 py-1 text-[#2a1a00]" style={{ background: 'linear-gradient(135deg, #fde68a, #f2b640 55%, #d99a1e)' }} data-testid="partner-recommended-badge">
+              {partnerRecommendedLabel}
             </Badge>
           </div>
         ) : selectedPlanCode === plan.id.toUpperCase() ? (

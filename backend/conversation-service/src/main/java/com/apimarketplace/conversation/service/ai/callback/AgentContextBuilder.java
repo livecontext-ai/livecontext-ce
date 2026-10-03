@@ -189,7 +189,7 @@ public class AgentContextBuilder {
         // Single DB query: load workflowId + agentId from conversation entity
         ConversationMeta meta = workflowContextProvider.getConversationMeta(conversationId);
         log.info("[ChatConfig] Conversation meta loaded: workflowId={}, agentId={}, chatConfig={}",
-            meta.workflowId(), meta.agentId(), meta.chatConfig());
+            meta.workflowId(), meta.agentId(), com.apimarketplace.common.logging.PayloadLogSafety.describeAny(meta.chatConfig()));
 
         // Resolve agentId: request takes priority, fallback to conversation entity
         String agentId = (request.getAgentId() != null && !request.getAgentId().isBlank())
@@ -818,7 +818,8 @@ public class AgentContextBuilder {
         }
         Integer maxIterations = null;
         if (chatConfig.get("maxIterations") instanceof Number n) {
-            maxIterations = Math.max(1, Math.min(1000, n.intValue()));
+            maxIterations = Math.max(1, Math.min(
+                com.apimarketplace.agent.client.dto.execution.AgentExecutionRequestDto.MAX_ITERATIONS_LIMIT, n.intValue()));
         }
         String systemPrompt = chatConfig.get("systemPrompt") instanceof String s && !s.isBlank()
             ? (s.length() > 10000 ? s.substring(0, 10000) : s) : null;

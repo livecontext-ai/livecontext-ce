@@ -29,4 +29,13 @@ public record BudgetState(
     public boolean isEnabled() {
         return totalBudget != null && totalBudget.signum() > 0;
     }
+
+    /**
+     * Spent in the window, with the credits in-flight sub-agents reserved counted as spent, as the
+     * Java loop's AgentBudgetGuard counts them: the budget a CLI bridge is handed must match.
+     */
+    public BigDecimal consumedIncludingReserved() {
+        BigDecimal consumed = consumedAfterReset != null ? consumedAfterReset : BigDecimal.ZERO;
+        return creditsReserved != null ? consumed.add(creditsReserved) : consumed;
+    }
 }

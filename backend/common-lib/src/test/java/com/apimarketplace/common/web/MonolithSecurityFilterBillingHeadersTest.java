@@ -103,6 +103,8 @@ class MonolithSecurityFilterBillingHeadersTest {
         MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
         MockHttpServletRequest request = withBillingHeaders("127.0.0.1");
         request.addHeader("X-User-ID", "7");
+        // In-process caller: presents this boot's secret (CASA LC-032).
+        request.addHeader(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret());
         AtomicReference<ServletRequest> captured = new AtomicReference<>();
 
         filter.doFilter(request, new MockHttpServletResponse(), capturing(captured));

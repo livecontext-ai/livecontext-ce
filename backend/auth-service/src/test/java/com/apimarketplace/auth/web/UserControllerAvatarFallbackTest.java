@@ -138,6 +138,37 @@ class UserControllerAvatarFallbackTest {
         assertThat(new String(response.getBody(), StandardCharsets.UTF_8)).contains(">MD</text>");
     }
 
+    @Test
+    @DisplayName("LC-020: an uploaded SVG avatar (public GET, app origin) carries nosniff + a sandboxed no-script CSP")
+    void uploadedSvgAvatarIsSandboxed() {
+        StorageEntity entity = new StorageEntity();
+        entity.setDataBinary("<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>"
+                .getBytes(StandardCharsets.UTF_8));
+        entity.setMimeType("image/svg+xml");
+        when(userService.getAvatarEntity(11L)).thenReturn(Optional.of(entity));
+
+        ResponseEntity<byte[]> response = controller.getAvatar(11L, null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+        assertThat(response.getHeaders().getFirst("Content-Security-Policy")).contains("sandbox");
+        assertThat(response.getHeaders().getFirst("Content-Disposition")).isEqualTo("inline");
+    }
+
+    @Test
+    @DisplayName("LC-020: an avatar row whose declared type is text/html is downloaded, not rendered")
+    void htmlDeclaredAvatarDownloads() {
+        StorageEntity entity = new StorageEntity();
+        entity.setDataBinary(new byte[] {1, 2, 3});
+        entity.setMimeType("text/html");
+        when(userService.getAvatarEntity(12L)).thenReturn(Optional.of(entity));
+
+        ResponseEntity<byte[]> response = controller.getAvatar(12L, null);
+
+        assertThat(response.getHeaders().getFirst("Content-Disposition")).isEqualTo("attachment");
+        assertThat(response.getHeaders().getFirst("Content-Security-Policy")).contains("sandbox");
+    }
+
     @Nested
     @DisplayName("Existing-avatar path unchanged")
     class ExistingAvatarPath {

@@ -1,5 +1,6 @@
 package com.apimarketplace.publication.repository;
 
+import com.apimarketplace.common.publication.ShowcaseCaptureContract;
 import com.apimarketplace.publication.domain.WorkflowPublicationEntity;
 import com.apimarketplace.publication.domain.WorkflowPublicationEntity.OwnerType;
 import com.apimarketplace.publication.domain.WorkflowPublicationEntity.PublicationStatus;
@@ -20,6 +21,23 @@ import java.util.UUID;
 
 @Repository
 public interface WorkflowPublicationRepository extends JpaRepository<WorkflowPublicationEntity, UUID> {
+
+    /**
+     * LC-066: publications whose showcase snapshot was stored before the capture checked its
+     * source run for Gmail / Google Drive data (neither {@code restrictionChecked} nor
+     * {@code showcaseWithheld} set). {@code ShowcaseRestrictionGuard} verifies each one once.
+     *
+     * <p>One batch, keyset-paged on the primary key ({@code id > afterId ORDER BY id LIMIT n}):
+     * the sweep walks the table in bounded steps instead of loading every id at once, and an id it
+     * could not verify yet does not come back in the same pass.
+     */
+    @Query(value = "SELECT p.id FROM workflow_publications p WHERE p.showcase_snapshot IS NOT NULL"
+            + " AND p.id > :afterId"
+            + " AND NOT jsonb_exists(p.showcase_snapshot, '" + ShowcaseCaptureContract.RESTRICTION_CHECKED_KEY + "')"
+            + " AND NOT jsonb_exists(p.showcase_snapshot, '" + ShowcaseCaptureContract.WITHHELD_KEY + "')"
+            + " ORDER BY p.id LIMIT :limit",
+            nativeQuery = true)
+    List<UUID> findIdsWithUncheckedShowcaseSnapshot(@Param("afterId") UUID afterId, @Param("limit") int limit);
 
     /**
      * Marketplace browse ordering, JPQL form: most-liked first. Kept identical to

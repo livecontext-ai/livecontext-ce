@@ -5,8 +5,9 @@ import { List as VirtualList, useListRef, type RowComponentProps } from 'react-w
 import { Calendar } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { formatUtcTime, formatUtcDateTime } from '@/lib/utils/dateFormatters';
-import { getRunStatusLabel, getStatusClasses } from '@/lib/utils/runStatusUtils';
+import { formatUtcTime } from '@/lib/utils/dateFormatters';
+import { getRunStatusLabel } from '@/lib/utils/runStatusUtils';
+import { EpochDetailsCard } from './EpochDetailsCard';
 import { EpochStatusIcon } from '@/components/workflow/EpochStatusIcon';
 import {
   formatCompactDuration,
@@ -161,77 +162,13 @@ function EpochRow({ index, style, entries, durations, maxDuration, selectedEpoch
         align="center"
         className="px-3 py-2.5 min-w-[240px]"
       >
-        <div className="flex flex-col gap-2 text-xs">
-          {/* Header: epoch number + status */}
-          <div className="flex items-center justify-between gap-3 border-b border-gray-100 dark:border-gray-700 pb-1.5">
-            <span className="font-semibold text-gray-900 dark:text-gray-100 tabular-nums">
-              {t('workflow.runSteps.epochTooltip.epoch', { epoch: entry.epoch })}
-            </span>
-            {/* The epoch's OWN outcome. This used to read "completed" for any epoch
-                carrying an end timestamp, so a failed epoch announced success - the
-                end timestamp says the epoch was closed, not that it worked. */}
-            <span className="inline-flex items-center gap-1.5">
-              <EpochStatusIcon status={badgeStatus} size="sm" />
-              {/* No status = the payload carries none (an epoch that ran nothing but its
-                  trigger, or a showcase snapshot frozen before the field existed). Render
-                  a dash, never a word: "Pending" would be a confident claim about an
-                  epoch that has long since finished. */}
-              <span className={`font-medium px-1.5 py-0.5 rounded ${
-                badgeStatus ? getStatusClasses(badgeStatus) : 'text-gray-500 dark:text-gray-400'
-              }`}>
-                {statusLabel ?? '-'}
-              </span>
-            </span>
-          </div>
-
-          {/* Started */}
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-gray-500 dark:text-gray-400">
-              {t('workflow.runSteps.epochTooltip.started')}
-            </span>
-            <span className="font-medium text-gray-900 dark:text-gray-100 tabular-nums">
-              {entry.startedAt
-                ? formatUtcDateTime(entry.startedAt, { withSeconds: true })
-                : '-'}
-            </span>
-          </div>
-
-          {/* Ended */}
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-gray-500 dark:text-gray-400">
-              {t('workflow.runSteps.epochTooltip.ended')}
-            </span>
-            <span
-              className={`font-medium tabular-nums ${
-                isRunning
-                  ? 'text-blue-500 dark:text-blue-400'
-                  : 'text-gray-900 dark:text-gray-100'
-              }`}
-            >
-              {entry.endedAt
-                ? formatUtcDateTime(entry.endedAt, { withSeconds: true })
-                : isRunning
-                  ? t('workflow.runSteps.epochTooltip.stillRunning')
-                  : '-'}
-            </span>
-          </div>
-
-          {/* Duration */}
-          <div className="flex items-center justify-between gap-3 border-t border-gray-100 dark:border-gray-700 pt-1.5">
-            <span className="text-gray-500 dark:text-gray-400">
-              {t('workflow.runSteps.epochTooltip.duration')}
-            </span>
-            <span
-              className={`font-medium tabular-nums ${
-                isRunning
-                  ? 'text-blue-500 dark:text-blue-400'
-                  : 'text-gray-900 dark:text-gray-100'
-              }`}
-            >
-              {duration != null ? formatCompactDuration(duration) : '-'}
-            </span>
-          </div>
-        </div>
+        <EpochDetailsCard
+          epoch={entry.epoch}
+          status={badgeStatus}
+          startedAt={entry.startedAt}
+          endedAt={entry.endedAt}
+          durationMs={duration}
+        />
       </TooltipContent>
     </Tooltip>
   );

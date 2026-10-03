@@ -5,6 +5,7 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useLocale, useTranslations } from 'next-intl';
 import { ArrowDownToLine, ArrowUpFromLine, ChevronRight, FileText, Layers, Loader2, PanelLeftClose, PanelLeftOpen, RefreshCw } from 'lucide-react';
 import { orchestratorApi } from '@/lib/api';
+import { isRestrictedDataRefusal } from '@/lib/api/error-utils';
 import type { AggregatedStepTiming } from '@/lib/api/orchestrator/types';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import type { BreadcrumbItem } from '@/components/ui/breadcrumb';
@@ -42,6 +43,7 @@ export function WorkflowLogsExplorer(props: WorkflowLogsExplorerProps) {
 
 function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange, view = 'simple' }: WorkflowLogsExplorerProps) {
   const t = useTranslations('workflow.logs');
+  const tErrors = useTranslations('errors');
   const locale = useLocale();
   const auth = useAuthGuard();
   const enabled = auth.isReady && auth.isAuthenticated;
@@ -276,7 +278,7 @@ function LogsExplorer({ workflowId, runId, initialStepAlias, onBreadcrumbChange,
                   </select>}
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto p-4" data-testid="workflow-logs-simple">
-                  {passage?.errorMessage && <div role="alert" className="mb-4 whitespace-pre-wrap break-words rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-600 dark:text-red-400">{passage.errorMessage}</div>}
+                  {passage?.errorMessage && <div role="alert" className="mb-4 whitespace-pre-wrap break-words rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-600 dark:text-red-400">{isRestrictedDataRefusal(passage.errorMessage) && <p className="mb-2">{tErrors('restrictedDataProvider')}</p>}{passage.errorMessage}</div>}
                   {outputError ? <div role="alert" className="space-y-3 py-8 text-center text-sm text-theme-secondary"><p>{t('loadDataError')}</p><button type="button" onClick={() => void payloadQuery.refetch()} className="rounded-lg border border-theme px-3 py-2 text-theme-primary hover:bg-theme-secondary">{t('retry')}</button></div> : payloadBusy ? <div role="status" className="flex items-center gap-2 py-8 text-sm text-theme-secondary"><Loader2 className="h-4 w-4 animate-spin" />{t('loading')}</div> : !passage || payload == null ? <p className="py-8 text-center text-sm text-theme-secondary">{t('emptyData')}</p> : (
                     <>
                       <div className="mb-3 flex items-center justify-between text-sm text-theme-secondary"><span>{t(direction === 'input' ? 'inputData' : 'outputData')}</span><CopyButton value={payload} title={t('copy')} /></div>

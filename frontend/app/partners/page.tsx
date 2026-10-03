@@ -32,10 +32,13 @@ import { PartnerTierTrack, type TierStop } from '@/components/partner/PartnerTie
 import { PartnerFounderBand } from '@/components/partner/PartnerFounderBand';
 import { PARTNER_EXAMPLE, PartnerBadgeSpotlight, pickNeighbours } from '@/components/partner/PartnerBadgeSpotlight';
 import { PartnerBenefitsBento, type BenefitKey } from '@/components/partner/PartnerBenefitsBento';
+import { PARTNER_DARK, PARTNER_GOLD_BG, PARTNER_GOLD_CTA, PARTNER_GOLD_TEXT, PartnerDarkEyebrow } from '@/components/partner/partnerTheme';
 import { PartnerBadgeIcon } from '@/components/profile/PartnerBadgeIcon';
 import { PartnerApplySection } from '@/components/partner/PartnerApplySection';
 import { IS_CE } from '@/lib/edition';
 import { socialCard } from '@/lib/seo/socialCard';
+import { SITE_URL, homeHref, localizedPathAlternates, localizedPathHref } from '@/lib/seo/siteUrl';
+import JsonLd from '@/components/seo/JsonLd';
 import { CREDIT_TIERS, DEFAULT_MAX_TIER_INDEX } from '@/lib/billing/pricing-constants';
 import { fetchAllPublicPublications } from '@/lib/marketplace/publicPublications';
 import { fetchPartnerTerms } from '@/lib/partners/publicPartnerTerms';
@@ -59,17 +62,12 @@ import {
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import type { PartnerProgramTerms } from '@/lib/api/services/partner-program-api.service';
 
-/** The ground of the dark bands (hero, founders, apply): the same in both themes. */
-const DARK = '#07080c';
-const GOLD_TEXT: React.CSSProperties = {
-  background: 'linear-gradient(90deg, #fde68a, #f2b640 55%, #e0a526)',
-  WebkitBackgroundClip: 'text',
-  backgroundClip: 'text',
-  color: 'transparent',
-};
-const GOLD_CTA = 'inline-flex items-center justify-center gap-2 h-11 px-6 rounded-xl text-sm font-semibold transition-transform active:scale-[0.98] cursor-pointer';
+/** The partner program's shared look (dark bands, gold): the same as the partner dashboard. */
+const DARK = PARTNER_DARK;
+const GOLD_TEXT = PARTNER_GOLD_TEXT;
+const GOLD_CTA = PARTNER_GOLD_CTA;
 const GHOST_CTA = 'inline-flex items-center gap-2 h-11 px-6 rounded-xl text-sm font-medium transition-colors hover:bg-white/10 cursor-pointer';
-const GOLD_BG: React.CSSProperties = { background: 'linear-gradient(135deg, #fde68a, #f2b640 55%, #d99a1e)', color: '#2a1a00' };
+const GOLD_BG = PARTNER_GOLD_BG;
 
 /**
  * The three earnings examples, each on a real plan and credit tier: one large client (Team with
@@ -96,9 +94,10 @@ const STEPS = ['apply', 'link', 'clients', 'earn'] as const;
  * that credit tier (the public /pricing redirects to the landing, which has no credit slider).
  * A tier above the default range (5M credits) is shown there on request (?tiers=full).
  */
-function pricingHref(plan: ClientPlan): string {
+function pricingHref(plan: ClientPlan, locale: string): string {
   const full = plan.creditTier > DEFAULT_MAX_TIER_INDEX ? '&tiers=full' : '';
-  return `/app/settings/pricing?pricingMode=subscription&billingCycle=monthly&creditTierIndex=${plan.creditTier}${full}`;
+  // In the page's language: an unprefixed app link would open the pricing in another one.
+  return `/${locale}/app/settings/pricing?pricingMode=subscription&billingCycle=monthly&creditTierIndex=${plan.creditTier}${full}`;
 }
 
 /** A credit amount the way the locale abbreviates it: "250K", "250 k", "25万". */
@@ -140,29 +139,40 @@ function figures(terms: PartnerProgramTerms, locale: string) {
   };
 }
 
-/** An eyebrow for the dark bands, where the landing eyebrow's muted ink would not read. */
-function DarkEyebrow({ icon: Icon, children }: { icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; children: React.ReactNode }) {
-  return (
-    <span
-      className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wider"
-      style={{ background: 'rgba(242,182,64,0.12)', color: '#f2b640', border: '1px solid rgba(242,182,64,0.3)' }}
-    >
-      <Icon className="h-3.5 w-3.5" aria-hidden />
-      {children}
-    </span>
-  );
+const DarkEyebrow = PartnerDarkEyebrow;
+
+/** The page's path; each language has its own URL (see LOCALIZED_PUBLIC_PATHS). */
+const PARTNERS_PATH = '/partners';
+
+/**
+ * The search snippet: the top rate the program pays when the terms say it, a figure-free sentence
+ * otherwise (the page never quotes a rate the backend did not give).
+ */
+async function metaDescription(locale: string): Promise<string> {
+  const [t, terms] = await Promise.all([
+    getTranslations({ locale, namespace: 'partnersLanding.metadata' }),
+    fetchPartnerTerms(),
+  ]);
+  const top = terms ? maxTierPercent(terms.tiers) ?? terms.commission_percent : null;
+  return top ? t('descriptionRate', { rate: formatPercent(top, locale) }) : t('description');
 }
 
 export async function generateMetadata(): Promise<Metadata> {
+  // The program is a cloud one: a self-hosted build serves no such page, and never indexes it.
+  if (IS_CE) return { robots: { index: false, follow: false } };
   const locale = await resolveRequestLocale();
-  const t = await getTranslations({ locale, namespace: 'partnersLanding.metadata' });
+  const [t, description] = await Promise.all([
+    getTranslations({ locale, namespace: 'partnersLanding.metadata' }),
+    metaDescription(locale),
+  ]);
+  const path = localizedPathHref(PARTNERS_PATH, locale);
   return {
     title: t('title'),
-    description: t('description'),
-    alternates: { canonical: '/partners' },
-    ...socialCard({ title: t('title'), description: t('description'), path: '/partners' }),
-    // The program is a cloud one: a self-hosted build serves no such page, and never indexes it.
-    robots: IS_CE ? { index: false, follow: false } : undefined,
+    description,
+    // One URL per language, each canonical to itself, the cluster in hreflang (x-default: English).
+    alternates: { canonical: path, languages: localizedPathAlternates(PARTNERS_PATH) },
+    ...socialCard({ title: t('title'), description, path, locale }),
+    // No robots key on the cloud: an explicit 'robots: undefined' wiped the root layout's directives.
   };
 }
 
@@ -242,7 +252,7 @@ export default async function PartnersPage() {
         persona: t(`earnings.${key}`),
         clients: t('earnings.clientsOn', { count: clients, plan: planName(plan), credits: compactCredits(plan, locale) }),
         bill: t('earnings.billEach', { bill: money(bill) }),
-        pricingHref: pricingHref(plan),
+        pricingHref: pricingHref(plan, locale),
         perMonth: money(perMonth),
         // From the month as shown, so "$2,025 a month" reads as "$24,300 a year", not $24,294.
         perYear: t('earnings.perYear', { amount: money(Math.round(perMonth) * 12) }),
@@ -289,8 +299,34 @@ export default async function PartnersPage() {
     return t(`faq.${key}.answer`, { ...f, date: f.founderDate });
   };
 
+  const origin = SITE_URL.replace(/\/$/, '');
+  const url = `${origin}${localizedPathHref(PARTNERS_PATH, locale)}`;
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'WebPage',
+        '@id': `${url}#webpage`,
+        url,
+        name: t('metadata.title'),
+        description: await metaDescription(locale),
+        inLanguage: locale,
+        breadcrumb: { '@id': `${url}#breadcrumb` },
+      },
+      {
+        '@type': 'BreadcrumbList',
+        '@id': `${url}#breadcrumb`,
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: 'LiveContext', item: `${origin}${homeHref(locale) || '/'}` },
+          { '@type': 'ListItem', position: 2, name: t('metadata.title'), item: url },
+        ],
+      },
+    ],
+  };
+
   return (
     <LandingThemeProvider respectStored lang={locale} className="min-h-screen">
+      <JsonLd data={jsonLd} />
       <style>{landingChromeStyles + landingStyles}</style>
       <LandingHeader labels={shell} />
       <NextIntlClientProvider locale={locale} messages={clientMessages}>
@@ -523,6 +559,7 @@ export default async function PartnersPage() {
               <div className="lg:col-span-3">
                 <PartnerBadgeSpotlight
                   neighbours={pickNeighbours(marketplace.publications)}
+                  locale={locale}
                   copy={{
                     badge: t('badge.label'),
                     marketplace: t('badge.marketplace'),
@@ -539,6 +576,13 @@ export default async function PartnersPage() {
                       rating: PARTNER_EXAMPLE.rating.toLocaleString(locale, { minimumFractionDigits: 1 }),
                       count: PARTNER_EXAMPLE.reviews,
                     }),
+                    screen: {
+                      running: t('badge.screen.running'),
+                      processed: t('badge.screen.processed'),
+                      booked: t('badge.screen.booked'),
+                      statusBooked: t('badge.screen.statusBooked'),
+                      statusReview: t('badge.screen.statusReview'),
+                    },
                   }}
                 />
                 {/* The partner is fictional: say so, next to it (fake reviews and earnings claims). */}

@@ -188,6 +188,11 @@ public class InternalDataSourceController {
      * file objects, like every other read; a caller that is COPYING the table - the publication
      * snapshot, and the live side of the moderation diff that is compared against an older snapshot -
      * must get exactly what is stored, or an unchanged table reads as changed on every media cell.
+     *
+     * <p>{@code excludeRestricted=true} marks such a copy (publication snapshot, moderation view):
+     * RESTRICTED rows are left out by the query, and {@code afterPriority} + {@code afterId} (the
+     * last row of the previous page) resume it by keyset instead of offset. The cursor is read only
+     * on a copy; every other caller keeps its offset / limit read unchanged.
      */
     @GetMapping("/{id}/items")
     public ResponseEntity<List<DataSourceItem>> getItems(
@@ -196,11 +201,43 @@ public class InternalDataSourceController {
             @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
             @RequestParam(defaultValue = "0") int offset,
             @RequestParam(defaultValue = "50") int limit,
-            @RequestParam(defaultValue = "false") boolean hydrateMedia) {
+            @RequestParam(defaultValue = "false") boolean hydrateMedia,
+            @RequestParam(defaultValue = "false") boolean excludeRestricted,
+            @RequestParam(required = false) Integer afterPriority,
+            @RequestParam(required = false) Long afterId) {
+
+        if (excludeRestricted) {
+            if ((afterPriority == null) != (afterId == null)) {
+                // Half a cursor cannot position a page; guessing would skip or repeat rows.
+                return ResponseEntity.badRequest().build();
+            }
+            DataSourceItemRepository.CopyCursor after = afterId != null
+                    ? new DataSourceItemRepository.CopyCursor(afterPriority, afterId) : null;
+            // CASA LC-066: a publication copy (DataSourceClient.getAllItems) must not carry Gmail /
+            // Drive-derived rows into a marketplace snapshot. Left out by the query itself, before
+            // the page is cut; an unreadable sensitivity is a failed query, which answers an error
+            // without the confirmation header (fails closed).
+            List<DataSourceItem> items = dataSourceService.getDataSourceItemsForCopy(
+                    id.intValue(), tenantId, organizationId, offset, limit, after);
+            // The caller copies nothing without this confirmation: a datasource-service older than
+            // the filter ignores excludeRestricted and must not be mistaken for one that applied it.
+            // No sensitivity header: the query already left every RESTRICTED row out.
+            // And this one: filtered before the cut, cursor honoured. Without it a copy cannot tell
+            // a last page from a page shortened by the filter, nor a repeated first page.
+            return ResponseEntity.ok()
+                    .header(com.apimarketplace.datasource.client.DataSourceClient.RESTRICTED_EXCLUDED_HEADER, "true")
+                    .header(com.apimarketplace.datasource.client.DataSourceClient.COPY_KEYSET_HEADER, "true")
+                    .body(hydrateMedia ? hydrateMediaCells(id, items) : items);
+        }
 
         List<DataSourceItem> items = dataSourceService.getDataSourceItemsByTenantAndDataSourcePaginated(
                 id.intValue(), tenantId, organizationId, offset, limit);
-        return ResponseEntity.ok(hydrateMedia ? hydrateMediaCells(id, items) : items);
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+        // CASA LC-066: a run that loads Gmail-derived rows holds that content, so it is restricted.
+        if (dataSourceService.containsRestrictedItems(id, items)) {
+            response.header(com.apimarketplace.datasource.client.DataSourceClient.DATA_SENSITIVITY_HEADER, "RESTRICTED");
+        }
+        return response.body(hydrateMedia ? hydrateMediaCells(id, items) : items);
     }
 
     /**

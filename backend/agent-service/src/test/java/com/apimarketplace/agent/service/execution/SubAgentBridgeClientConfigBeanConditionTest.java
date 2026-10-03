@@ -7,7 +7,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Gating contract for {@link SubAgentBridgeClientConfig#subAgentBridgeClient(String)}.
+ * Gating contract for {@link SubAgentBridgeClientConfig#subAgentBridgeClient(String, String, boolean)}.
  *
  * <p>The bean is guarded by
  * {@code @ConditionalOnProperty(name = "conversation.bridge.enabled", havingValue = "true")}.

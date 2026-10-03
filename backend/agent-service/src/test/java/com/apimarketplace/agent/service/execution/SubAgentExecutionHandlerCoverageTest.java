@@ -169,7 +169,7 @@ class SubAgentExecutionHandlerCoverageTest {
         assertThat(result.content()).doesNotContain("truncated");
         assertThat(result.content()).doesNotContain("full_response_tool_call_id");
         verify(conversationServiceClient, never())
-            .saveToolResult(any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any());
+            .saveToolResult(any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -178,7 +178,7 @@ class SubAgentExecutionHandlerCoverageTest {
         stubExecutablePath();
         stubLoopResult(successText("x".repeat(MAX_RESPONSE_LENGTH + 1)));
         when(conversationServiceClient.saveToolResult(
-                any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any()))
+                any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any(), any(), any(), any()))
             .thenReturn("result-id");
 
         ToolResult result = handler.execute(executeCall(), TENANT_ID, credsWithConversation());
@@ -186,7 +186,7 @@ class SubAgentExecutionHandlerCoverageTest {
         assertThat(result.content()).contains("truncated");
         assertThat(result.content()).contains("full_response_tool_call_id");
         verify(conversationServiceClient)
-            .saveToolResult(any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any());
+            .saveToolResult(any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -202,7 +202,7 @@ class SubAgentExecutionHandlerCoverageTest {
         // persisted, so the agent only ever sees the truncated form - and gets no recovery hint.
         assertThat(result.content()).doesNotContain("full_response_tool_call_id");
         verify(conversationServiceClient, never())
-            .saveToolResult(any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any());
+            .saveToolResult(any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any(), any(), any(), any());
     }
 
     @Test

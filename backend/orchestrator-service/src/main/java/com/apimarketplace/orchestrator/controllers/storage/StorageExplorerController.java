@@ -815,17 +815,50 @@ public class StorageExplorerController {
         };
     }
 
-    /** Dedup duplicate filenames inside the ZIP: "a.pdf", "a (1).pdf", "a (2).pdf"… */
-    private static String uniqueEntryName(Set<String> used, String fileName) {
-        String base = (fileName == null || fileName.isBlank()) ? "file" : fileName;
-        if (used.add(base)) return base;
+    /**
+     * Dedup duplicate filenames inside the ZIP: "a.pdf", "a (1).pdf", "a (2).pdf"... The name is
+     * reduced by {@link #safeZipEntryName} first, and duplicates are detected case-insensitively
+     * so a case-insensitive filesystem (Windows, macOS) never overwrites one entry with another.
+     */
+    static String uniqueEntryName(Set<String> used, String fileName) {
+        String base = safeZipEntryName(fileName);
+        if (used.add(base.toLowerCase(java.util.Locale.ROOT))) return base;
         int dot = base.lastIndexOf('.');
         String stem = dot > 0 ? base.substring(0, dot) : base;
         String ext = dot > 0 ? base.substring(dot) : "";
         for (int i = 1; ; i++) {
             String candidate = stem + " (" + i + ")" + ext;
-            if (used.add(candidate)) return candidate;
+            if (used.add(candidate.toLowerCase(java.util.Locale.ROOT))) return candidate;
         }
+    }
+
+    /**
+     * Reduces a stored (uploader-supplied) file name to a leaf name safe as a ZIP entry (LC-063).
+     * A ZIP entry name is a PATH: {@code ../../x}, {@code /etc/x} or a backslash path makes a
+     * lenient extractor on the recipient's machine write outside the extraction directory (zip
+     * slip), and the recipient trusts an archive this server generated. Both separators are cut
+     * (a Windows extractor treats a backslash as one), control characters and a drive-letter
+     * colon are replaced, and a name that is empty or only dots falls back to {@code file}.
+     */
+    static String safeZipEntryName(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            return "file";
+        }
+        String leaf = fileName.replace('\\', '/');
+        int lastSlash = leaf.lastIndexOf('/');
+        if (lastSlash >= 0) {
+            leaf = leaf.substring(lastSlash + 1);
+        }
+        StringBuilder clean = new StringBuilder(leaf.length());
+        for (int i = 0; i < leaf.length(); i++) {
+            char c = leaf.charAt(i);
+            clean.append(c < 0x20 || c == 0x7F || c == ':' ? '_' : c);
+        }
+        String name = clean.toString().trim();
+        if (name.isEmpty() || name.chars().allMatch(c -> c == '.')) {
+            return "file";
+        }
+        return name;
     }
 
     /**

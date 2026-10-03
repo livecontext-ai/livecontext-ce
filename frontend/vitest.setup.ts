@@ -1,4 +1,5 @@
 import { configure } from '@testing-library/dom';
+import { afterEach } from 'vitest';
 
 /**
  * Global test setup.
@@ -18,3 +19,14 @@ import { configure } from '@testing-library/dom';
  * slowness from producing FALSE failures; it does not make it acceptable.
  */
 configure({ asyncUtilTimeout: 15_000 });
+
+/**
+ * Every test starts on a clean address.
+ *
+ * View state is mirrored in the query string (`useUrlState`), written through the history API,
+ * and jsdom keeps ONE address for a whole test file. Without this, the tab or filter a test
+ * clicked is still in the address when the next test mounts, and that test starts on it.
+ */
+afterEach(() => {
+  if (typeof window !== 'undefined') window.history.replaceState(null, '', '/');
+});

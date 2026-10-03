@@ -908,6 +908,17 @@ public class WorkflowPublicationController {
 
     /**
      * Get current user's review for a publication.
+     *
+     * <p>CASA LC-037 round-3: unlike the sibling review endpoints ({@code /reviews},
+     * {@code /reviews/comments-count}, {@code /reviews/{id}/replies}), which return PUBLIC data
+     * with no auth check at all, this one answers "what did {@code X-User-ID} write" - and an
+     * APPLICATION share token resolves {@code X-User-ID} to the OWNER's identity. Without this
+     * gate, a share visitor could pass ANY {@code publicationId} in the marketplace and learn
+     * whether/what the OWNER reviewed it, completely unrelated to the one publication actually
+     * shared - the same owner-impersonation-reads-the-whole-workspace class as the rest of
+     * LC-037, just on review authorship instead of a workflow/interface/file. Bound with the
+     * same {@link #isShareTokenForPublication} check {@link #getPublicationById} already uses;
+     * non-share requests are unaffected.
      */
     @GetMapping("/{publicationId}/reviews/mine")
     public ResponseEntity<?> getMyReview(
@@ -1928,6 +1939,9 @@ public class WorkflowPublicationController {
         response.put("showcaseRunId", pub.getShowcaseRunId());
         response.put("showcaseChosenEpoch", pub.getShowcaseChosenEpoch());
         response.put("hasShowcase", pub.hasShowcase());
+        // LC-066: why the showcase is not shown (RESTRICTED_DATA: its run holds Gmail or Google
+        // Drive data), null when it is. The preview page reads it to say so instead of erroring.
+        response.put("showcaseWithheld", showcaseSnapshotReader.withheldReason(pub));
         response.put("isApplication", pub.isApplication());
         response.put("displayMode", pub.getDisplayMode().name());
         // The studio axis. Present here because this is what the edit form READS BACK: without it
@@ -2217,6 +2231,11 @@ public class WorkflowPublicationController {
             return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (PublicationValidationException e) {
+            // Structured refusal (snapshot size budget): 422 with the machine-readable body; the
+            // share modal shows its message (the table and the limit) instead of a server error.
+            logger.warn("Resource publish refused ({}): {}", e.getErrorCode(), e.getMessage());
+            return ResponseEntity.unprocessableEntity().body(e.toBody());
         } catch (PublicationPendingReviewException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
@@ -2575,9 +2594,9 @@ public class WorkflowPublicationController {
         // Strict snapshot-only mode: read ONLY from the publication's frozen
         // JSONB, never the publisher's live workflow / run. Missing snapshot →
         // 503 so an admin can backfill rather than silently leaking live state.
-        if (!showcaseSnapshotReader.hasSnapshot(pub)) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(Map.of("error", "Snapshot not yet captured for this publication"));
+        ResponseEntity<?> unavailable = showcaseUnavailable(pub);
+        if (unavailable != null) {
+            return unavailable;
         }
         Optional<Map<String, Object>> fromSnapshot = showcaseSnapshotReader.readInterfaceRender(
                 pub, effectiveInterfaceId, effectivePage, effectiveSize, epoch);
@@ -2625,9 +2644,9 @@ public class WorkflowPublicationController {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("error", "Publication is not publicly available"));
             }
-            if (!showcaseSnapshotReader.hasSnapshot(pub)) {
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                        .body(Map.of("error", "Snapshot not yet captured for this publication"));
+            ResponseEntity<?> unavailable = showcaseUnavailable(pub);
+            if (unavailable != null) {
+                return unavailable;
             }
             return showcaseSnapshotReader.readEpochState(pub, epoch)
                     .<ResponseEntity<?>>map(ResponseEntity::ok)
@@ -2658,9 +2677,9 @@ public class WorkflowPublicationController {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("error", "Publication is not publicly available"));
             }
-            if (!showcaseSnapshotReader.hasSnapshot(pub)) {
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                        .body(Map.of("error", "Snapshot not yet captured for this publication"));
+            ResponseEntity<?> unavailable = showcaseUnavailable(pub);
+            if (unavailable != null) {
+                return unavailable;
             }
             return showcaseSnapshotReader.readEpochSignals(pub, epoch)
                     .<ResponseEntity<?>>map(ResponseEntity::ok)
@@ -2693,9 +2712,9 @@ public class WorkflowPublicationController {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("error", "Publication is not publicly available"));
             }
-            if (!showcaseSnapshotReader.hasSnapshot(pub)) {
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                        .body(Map.of("error", "Snapshot not yet captured for this publication"));
+            ResponseEntity<?> unavailable = showcaseUnavailable(pub);
+            if (unavailable != null) {
+                return unavailable;
             }
             return showcaseSnapshotReader.readAggregatedSteps(pub, epoch)
                     .<ResponseEntity<?>>map(ResponseEntity::ok)
@@ -2723,9 +2742,9 @@ public class WorkflowPublicationController {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("error", "Publication is not publicly available"));
             }
-            if (!showcaseSnapshotReader.hasSnapshot(pub)) {
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                        .body(Map.of("error", "Snapshot not yet captured for this publication"));
+            ResponseEntity<?> unavailable = showcaseUnavailable(pub);
+            if (unavailable != null) {
+                return unavailable;
             }
             return showcaseSnapshotReader.readRunState(pub)
                     .<ResponseEntity<?>>map(ResponseEntity::ok)
@@ -2766,9 +2785,9 @@ public class WorkflowPublicationController {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("error", "Publication is not publicly available"));
             }
-            if (!showcaseSnapshotReader.hasSnapshot(pub)) {
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                        .body(Map.of("error", "Snapshot not yet captured for this publication"));
+            ResponseEntity<?> unavailable = showcaseUnavailable(pub);
+            if (unavailable != null) {
+                return unavailable;
             }
             return showcaseSnapshotReader.readStepFiles(pub)
                     .<ResponseEntity<?>>map(ResponseEntity::ok)
@@ -2779,6 +2798,28 @@ public class WorkflowPublicationController {
             logger.error("Failed to fetch public step-files for {}", publicationId, e);
             return ResponseEntity.internalServerError().body(Map.of("error", "Failed to fetch step-files"));
         }
+    }
+
+    /** Error code of a showcase read refused under LC-066; the body's {@code reason} says why. */
+    static final String SHOWCASE_WITHHELD = "SHOWCASE_WITHHELD";
+
+    /**
+     * The answer of a showcase read that cannot be served from the frozen snapshot, or null when
+     * it can. LC-066: a showcase that comes from a run holding Gmail or Google Drive data is never
+     * served (404 naming {@link #SHOWCASE_WITHHELD} and the reason, so the preview shows "no
+     * preview" rather than an error); a missing snapshot stays a 503 so an admin can backfill it.
+     */
+    private ResponseEntity<?> showcaseUnavailable(WorkflowPublicationEntity pub) {
+        String withheld = showcaseSnapshotReader.withheldReason(pub);
+        if (withheld != null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", SHOWCASE_WITHHELD, "reason", withheld));
+        }
+        if (!showcaseSnapshotReader.hasSnapshot(pub)) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(Map.of("error", "Snapshot not yet captured for this publication"));
+        }
+        return null;
     }
 
     private static boolean isViewerRole(String organizationRole) {

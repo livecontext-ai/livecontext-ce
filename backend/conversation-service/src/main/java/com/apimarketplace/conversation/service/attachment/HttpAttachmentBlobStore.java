@@ -29,11 +29,12 @@ public class HttpAttachmentBlobStore implements AttachmentBlobStore {
 
     @Autowired
     public HttpAttachmentBlobStore(
-            @Value("${services.storage-url:http://localhost:8082}") String storageServiceUrl) {
+            @Value("${services.storage-url:http://localhost:8082}") String storageServiceUrl,
+            @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
         // Own the StorageClient instead of a shared @Bean: in the monolith an
         // orchestrator StorageClient bean already exists, and a second one would
         // collide. This bean is microservice-only anyway (see the condition above).
-        this(new StorageClient(storageServiceUrl));
+        this(new StorageClient(storageServiceUrl, gatewaySecretKey));
     }
 
     /** Test/explicit-wiring constructor. */

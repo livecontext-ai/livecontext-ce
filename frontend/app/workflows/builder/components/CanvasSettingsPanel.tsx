@@ -23,7 +23,7 @@ import {
 import { useInspectorDockSafe, type InspectorDock } from '@/contexts/InspectorDockContext';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { useInspectorOpenModeSafe, type InspectorOpenMode } from '@/contexts/InspectorOpenModeContext';
-import { applyDagreLayout, layoutConfigForDirection } from '../services/LayoutService';
+import { applyDagreLayout, layoutConfigForDirection, unplaceAttachedNotes } from '../services/LayoutService';
 import type { BuilderNodeData } from '../types';
 
 interface CanvasSettingsPanelProps {
@@ -84,7 +84,8 @@ export function CanvasSettingsPanel({
       if (next === direction) return;
       setWorkflowDirection(next);
       if (onForceNodesUpdate && nodes.length > 0) {
-        onForceNodesUpdate(applyDagreLayout(nodes, edges, layoutConfigForDirection(next)));
+        // Attached notes go beside their node again, on the side the new direction leaves free.
+        onForceNodesUpdate(applyDagreLayout(unplaceAttachedNotes(nodes), edges, layoutConfigForDirection(next)));
       }
     },
     [direction, setWorkflowDirection, onForceNodesUpdate, nodes, edges],

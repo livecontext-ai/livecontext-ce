@@ -17,11 +17,18 @@ vi.mock('@/components/lifecycle/ProfileContextReporter', () => ({
   default: () => <div data-testid="profile-context-reporter" />,
 }));
 
+// The layout also wraps its content in the per-request nonce body (LC-027), an async Server
+// Component jsdom cannot render. It is covered by NonceLocaleLayoutBody.test.tsx and
+// nonceClassAreaLayouts.test.ts; here it is a pass-through so this test reads the reporter only.
+vi.mock('@/components/security/NonceLocaleLayoutBody', () => ({
+  default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 async function renderLayout() {
   vi.resetModules();
   const { default: OnboardingLayout } = await import('../layout');
   render(
-    <OnboardingLayout>
+    <OnboardingLayout params={Promise.resolve({ locale: 'en' })}>
       <p>onboarding page</p>
     </OnboardingLayout>,
   );

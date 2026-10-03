@@ -11,8 +11,11 @@ import com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshErrorBuc
 import com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshErrorClassifier;
 import com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshTerminalException;
 import com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshTransientException;
+import com.apimarketplace.auth.credential.util.OAuth2EndpointGuard;
+import com.apimarketplace.auth.credential.util.OAuth2ReturnPath;
 import com.apimarketplace.common.security.CredentialEncryptionService;
 import com.apimarketplace.common.scope.GrantedScopes;
+import com.apimarketplace.common.web.NoRedirectSimpleClientHttpRequestFactory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -112,6 +115,13 @@ public class OAuth2Service {
             "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
             Long.class);
 
+    // Atomic read-and-delete of an OAuth2 state blob (LC-089): the first callback to present a
+    // state consumes it, so a replayed callback URL can never run the token exchange twice. A
+    // script rather than GETDEL so it works on every Redis version (GETDEL needs 6.2).
+    static final DefaultRedisScript<String> CONSUME_STATE_SCRIPT = new DefaultRedisScript<>(
+            "local v = redis.call('get', KEYS[1]) if v then redis.call('del', KEYS[1]) end return v",
+            String.class);
+
     private final CredentialService credentialService;
     private final PlatformCredentialService platformCredentialService;
     private final WebClient catalogClient;
@@ -124,6 +134,14 @@ public class OAuth2Service {
     private final RefreshErrorClassifier errorClassifier;
     private final RefreshBackoff backoff;
     private final OAuth2RefreshMetrics refreshMetrics;
+
+    /**
+     * Credential-lifecycle audit trail (LC-058). Optional field injection so the many direct
+     * constructions of this service in tests keep compiling; a missing recorder means no event,
+     * never a failed connect.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CredentialAuditRecorder auditRecorder;
 
     @Value("${oauth2.callback-url:http://localhost:8083/api/credentials/oauth2/callback}")
     private String callbackUrl;
@@ -150,16 +168,33 @@ public class OAuth2Service {
             PkceService pkceService,
             RefreshErrorClassifier errorClassifier,
             RefreshBackoff backoff,
-            OAuth2RefreshMetrics refreshMetrics
+            OAuth2RefreshMetrics refreshMetrics,
+            WebClient.Builder webClientBuilder
     ) {
         this.credentialService = credentialService;
         this.platformCredentialService = platformCredentialService;
         this.encryptionService = encryptionService;
         this.redisTemplate = redisTemplate;
-        this.catalogClient = WebClient.builder()
+        // CASA LC-032: in the CE monolith, catalog-url IS this JVM's own loopback port
+        // (application-ce.yml: services.catalog-url=http://localhost:${PORT}), so this is an
+        // in-process call, not an external one. Building the client from a static
+        // WebClient.builder() call (as before) makes an unstamped client: InProcessCallStampingBeanPostProcessor
+        // only reaches WebClient.Builder BEANS (it stamps the builder, and the filter survives
+        // into whatever is later built from it), never a WebClient already built inline. The
+        // injected builder IS such a bean, so cloning it here (never mutate the shared instance)
+        // and setting the base url on the clone carries the in-process secret filter through to
+        // the built client. Cloud is unaffected: catalog-url there is a real remote host, and the
+        // stamping interceptor only ever stamps a request addressed to THIS JVM's own port.
+        this.catalogClient = webClientBuilder.clone()
                 .baseUrl(catalogServiceUrl)
                 .build();
-        this.restTemplate = new RestTemplate();
+        // Token endpoints can be user-supplied (BYOK rows, per-instance host vars), so the client
+        // never follows a redirect: a 3xx from a validated token URL to an internal host would
+        // carry the client secret, the code or the refresh token past the SSRF check (LC-052).
+        NoRedirectSimpleClientHttpRequestFactory tokenRequestFactory = new NoRedirectSimpleClientHttpRequestFactory();
+        tokenRequestFactory.setConnectTimeout(10_000);
+        tokenRequestFactory.setReadTimeout(30_000);
+        this.restTemplate = new RestTemplate(tokenRequestFactory);
         this.objectMapper = objectMapper;
         this.engine = engine;
         this.pkceService = pkceService;
@@ -202,6 +237,21 @@ public class OAuth2Service {
      */
     public OAuth2InitiateResponse initiate(OAuth2InitiateRequest request, String userId,
                                            String organizationId, String uiLocale) {
+        return initiate(request, userId, organizationId, uiLocale, null);
+    }
+
+    /**
+     * Browser-bound initiate (LC-005).
+     *
+     * @param browserBindingHash {@link OAuth2BrowserBinding#hash} of the value the controller
+     *                           hands the initiating browser as a cookie. The callback refuses a
+     *                           flow whose blob carries no hash, so an overload that passes null
+     *                           produces a flow that can never complete through the callback: it
+     *                           exists for callers that never reach one (client_credentials).
+     */
+    public OAuth2InitiateResponse initiate(OAuth2InitiateRequest request, String userId,
+                                           String organizationId, String uiLocale,
+                                           String browserBindingHash) {
         log.info("Initiating OAuth2 flow for user {} with template {}", userId, request.credentialTemplateId());
 
         // Fetch credential template from catalog
@@ -219,6 +269,7 @@ public class OAuth2Service {
         String displayName = template.path("display_name").asText("");
 
         // For custom APIs: template may not have OAuth URLs. Fall back to platform credential.
+        boolean userSuppliedEndpoints = false;
         if (providerConfig == null) {
             String credName = template.path("credential_name").asText(null);
             var rawCred = credName != null
@@ -231,11 +282,16 @@ public class OAuth2Service {
                 var pc = rawCred.get();
                 if (pc.authUrl() != null && !pc.authUrl().isBlank()
                         && pc.tokenUrl() != null && !pc.tokenUrl().isBlank()) {
+                    // User-stored URLs about to receive the client secret and the code: checked
+                    // at use as well as at save, rows saved before the save check exist (LC-052).
+                    OAuth2EndpointGuard.assertSafe(pc.authUrl(), "authUrl");
+                    OAuth2EndpointGuard.assertSafe(pc.tokenUrl(), "tokenUrl");
                     providerConfig = new OAuth2ProviderConfig(
                             pc.authUrl(), pc.tokenUrl(), null,
                             pc.defaultScopes() != null ? List.of(pc.defaultScopes().split("\\s+")) : List.of(),
                             " ", OAuth2ProviderConfig.AuthMethod.POST, false, Map.of(),
                             OAuth2ProviderConfig.RefreshConfig.STANDARD);
+                    userSuppliedEndpoints = true;
                     log.info("Using platform credential URLs for {} (authUrl={}, tokenUrl={})",
                             credName, pc.authUrl(), pc.tokenUrl());
                 }
@@ -340,6 +396,17 @@ public class OAuth2Service {
                     integrationName, unroutable.size(), unroutable);
         }
 
+        // Minimum scope (LC-072): when the caller names the scopes it needs, request only those.
+        // Applied AFTER the BYOK/CE widening so an own-client connect can still pick one of the
+        // byok-only scopes; it can only ever remove scopes, never add one.
+        List<String> requestedSubset = request.scopesOrEmpty();
+        if (!requestedSubset.isEmpty()) {
+            List<String> narrowed = narrowScopes(providerConfig.scopes(), requestedSubset, integrationName);
+            log.info("OAuth2 {}: requesting {} of {} offered scopes",
+                    integrationName, narrowed.size(), providerConfig.scopes().size());
+            providerConfig = providerConfig.withScopes(narrowed);
+        }
+
         // Generate PKCE challenge if the provider requires it.
         PkceService.PkceChallenge pkce = engine.shouldUsePkce(providerConfig)
                 ? pkceService.generate()
@@ -388,25 +455,37 @@ public class OAuth2Service {
                     substituteHostVars(providerConfig.authorizationUrl(), templateVars),
                     substituteHostVars(providerConfig.tokenUrl(), templateVars));
         }
+        // The token URL receives the client secret and the code at the callback. When the row
+        // or the connect input shaped it, check the FINAL URL now, resolving its host (LC-052).
+        if (userSuppliedEndpoints) {
+            OAuth2EndpointGuard.assertSafeForUse(providerConfig.tokenUrl(), "tokenUrl");
+        } else if (!templateVars.isEmpty()) {
+            OAuth2EndpointGuard.assertPublicHostForUse(providerConfig.tokenUrl(), "tokenUrl");
+        }
         // Fail fast if a required host placeholder is still unresolved: a literal {var} left in the
         // host produces a DNS failure at redirect time with no actionable error (the exact bug this
         // feature fixes). Path/query placeholders are a different mechanism and are not checked here.
         assertHostFullyResolved(providerConfig.authorizationUrl(), integrationName);
 
         // Persist state (including PKCE verifier + active workspace) to Redis with TTL.
+        // LC-068: a platform/BYOK client secret is NOT written to the blob, the callback re-reads
+        // it from the row (platformCredentialId). Only an inline, user-typed secret has nowhere
+        // else to live, and it is written encrypted, like the PKCE verifier (saveStateToRedis).
+        boolean secretRereadable = platformRow != null && platformRow.id() != null;
         OAuth2State oAuth2State = new OAuth2State(
                 userId,
                 request.credentialTemplateId(),
                 finalCredentialName,
                 clientId,
-                clientSecret,
+                secretRereadable ? null : clientSecret,
                 providerConfig.authorizationUrl(),
                 providerConfig.tokenUrl(),
                 providerConfig.joinedScopes(),
                 request.environment() != null ? request.environment() : "Production",
                 integrationIdentifier,
                 iconUrl,
-                request.returnUrl(),
+                // LC-023: only a same-origin path ever enters the blob.
+                OAuth2ReturnPath.sanitize(request.returnUrl()),
                 Instant.now(),
                 pkce != null ? pkce.verifier() : null,
                 // PR19: capture-at-initiate so callback can tag the new
@@ -415,7 +494,9 @@ public class OAuth2Service {
                 organizationId,
                 // Captured so the callback can resolve the token URL and persist these into
                 // credential_data for runtime base-URL substitution.
-                templateVars.isEmpty() ? null : templateVars
+                templateVars.isEmpty() ? null : templateVars,
+                browserBindingHash,
+                secretRereadable ? platformRow.id() : null
         );
         saveStateToRedis(state, oAuth2State);
 
@@ -424,7 +505,7 @@ public class OAuth2Service {
         String authorizationUrl = engine.buildAuthorizationUrl(
                 providerConfig, clientId, state, callbackUrl, pkce, uiLocale);
 
-        log.info("Generated authorization URL for state {} (pkce={})", state, pkce != null);
+        log.info("Generated authorization URL for flow {} (pkce={})", OAuth2StateRef.of(state), pkce != null);
         return new OAuth2InitiateResponse(authorizationUrl, state);
     }
 
@@ -462,9 +543,14 @@ public class OAuth2Service {
 
         HttpEntity<?> requestEntity =
                 engine.buildClientCredentialsRequest(providerConfig, clientId, clientSecret);
+        String resolvedTokenUrl = resolveCredentialTemplateUrl(providerConfig.tokenUrl(), credentialData);
+        if (!Objects.equals(resolvedTokenUrl, providerConfig.tokenUrl())) {
+            // Host filled from connect-time input, about to receive the client secret (LC-052).
+            OAuth2EndpointGuard.assertPublicHostForUse(resolvedTokenUrl, "tokenUrl");
+        }
         OAuth2Engine.TokenRequest tokenRequest = engine.materializeTokenRequest(
                 providerConfig,
-                resolveCredentialTemplateUrl(providerConfig.tokenUrl(), credentialData),
+                resolvedTokenUrl,
                 requestEntity);
 
         ResponseEntity<JsonNode> response = restTemplate.postForEntity(
@@ -487,6 +573,7 @@ public class OAuth2Service {
             credentialData.put("scope", grantedScope);
         }
         credentialData.put(TEMPLATE_ID_FIELD, request.credentialTemplateId());
+        rememberRevocationSpec(credentialData, template, resolvedTokenUrl);
         rememberCredentialTemplateReference(credentialData, template);
 
         List<String> scopes = parseGrantedScopes(grantedScope);
@@ -504,16 +591,18 @@ public class OAuth2Service {
                 userId,
                 iconUrl
         );
+        if (auditRecorder != null) {
+            auditRecorder.recordOAuthConnected(userId, credential.id(), integrationIdentifier, scopes);
+        }
 
         return new OAuth2InitiateResponse(
                 buildClientCredentialsReturnUrl(request.returnUrl(), credential.id()),
                 "client_credentials");
     }
 
-    private String buildClientCredentialsReturnUrl(String returnUrl, Long credentialId) {
-        String target = returnUrl != null && !returnUrl.isBlank()
-                ? returnUrl
-                : "/app/settings/credentials";
+    // Package-private for tests. The browser navigates to this relative URL (LC-023).
+    String buildClientCredentialsReturnUrl(String returnUrl, Long credentialId) {
+        String target = OAuth2ReturnPath.sanitize(returnUrl);
         String separator = target.contains("?") ? "&" : "?";
         return target + separator + "success=true&credentialId=" + credentialId;
     }
@@ -541,6 +630,13 @@ public class OAuth2Service {
      */
     public OAuth2InitiateResponse initiateSimple(OAuth2SimpleInitiateRequest request, String userId,
                                                   String organizationId, String uiLocale) {
+        return initiateSimple(request, userId, organizationId, uiLocale, null);
+    }
+
+    /** Browser-bound {@code initiateSimple}; see {@link #initiate(OAuth2InitiateRequest, String, String, String, String)}. */
+    public OAuth2InitiateResponse initiateSimple(OAuth2SimpleInitiateRequest request, String userId,
+                                                  String organizationId, String uiLocale,
+                                                  String browserBindingHash) {
         OAuth2InitiateRequest fullRequest = new OAuth2InitiateRequest(
                 request.credentialTemplateId(),
                 request.credentialName(),
@@ -549,9 +645,10 @@ public class OAuth2Service {
                 request.environment(),
                 request.integration(),
                 null,
-                request.templateVars()
+                request.templateVars(),
+                request.scopes()
         );
-        return initiate(fullRequest, userId, organizationId, uiLocale);
+        return initiate(fullRequest, userId, organizationId, uiLocale, browserBindingHash);
     }
 
     /**
@@ -571,10 +668,12 @@ public class OAuth2Service {
     /**
      * Build redirect URL using returnUrl from state or default to settings page.
      */
-    private String buildRedirectUrl(OAuth2State oAuth2State, Map<String, String> params) {
-        String baseUrl = oAuth2State != null && oAuth2State.returnUrl() != null && !oAuth2State.returnUrl().isBlank()
-                ? frontendUrl + oAuth2State.returnUrl()
-                : frontendUrl + "/app/settings/credentials";
+    // Package-private so the assembled Location is testable, not only the sanitizer (LC-023).
+    String buildRedirectUrl(OAuth2State oAuth2State, Map<String, String> params) {
+        // Re-sanitized on the way out as well as on the way in: a blob written by an older
+        // instance during a rolling deploy still carries the raw value.
+        String returnPath = OAuth2ReturnPath.sanitize(oAuth2State != null ? oAuth2State.returnUrl() : null);
+        String baseUrl = frontendUrl + returnPath;
 
         if (params.isEmpty()) {
             return baseUrl;
@@ -586,19 +685,36 @@ public class OAuth2Service {
                 .reduce((a, b) -> a + "&" + b)
                 .orElse("");
 
-        return baseUrl + "?" + queryString;
+        return baseUrl + (returnPath.indexOf('?') >= 0 ? "&" : "?") + queryString;
     }
 
     /**
-     * Handle OAuth2 callback - exchange code for tokens.
+     * Handle the OAuth2 callback: consume the state, prove the browser, exchange the code.
+     *
+     * @param browserBinding raw value of the flow's binding cookie as presented by the browser.
+     *                       The flow completes only when it hashes to what the state recorded at
+     *                       initiate, which is what stops an attacker from having a VICTIM finish
+     *                       a flow the attacker started (LC-005).
      */
-    public String handleCallback(String code, String state) {
-        log.info("Handling OAuth2 callback with state {}", state);
+    public String handleCallback(String code, String state, String browserBinding) {
+        log.info("Handling OAuth2 callback for flow {}", OAuth2StateRef.of(state));
 
-        OAuth2State oAuth2State = loadStateFromRedis(state);
+        // Consumed atomically BEFORE the provider round-trip (LC-089): single-use even under a
+        // replayed or double-submitted callback URL.
+        OAuth2State oAuth2State = consumeStateFromRedis(state);
         if (oAuth2State == null) {
-            log.error("Invalid or expired state: {}", state);
+            log.warn("Invalid or expired state for flow {}", OAuth2StateRef.of(state));
             return buildRedirectUrl(null, Map.of("error", "invalid_state"));
+        }
+
+        if (!OAuth2BrowserBinding.matches(oAuth2State.browserBindingHash(), browserBinding)) {
+            // Same opaque error as an unknown state. The code is never exchanged, so nothing is
+            // stored under the initiator's tenant.
+            log.warn("OAuth2 callback refused for flow {}: the browser does not hold the binding "
+                            + "this flow was started with (cookie present={}, flow bound={})",
+                    OAuth2StateRef.of(state), browserBinding != null && !browserBinding.isBlank(),
+                    oAuth2State.browserBindingHash() != null);
+            return buildRedirectUrl(oAuth2State, Map.of("error", "invalid_state"));
         }
 
         try {
@@ -631,11 +747,14 @@ public class OAuth2Service {
                 );
             }
 
+            // LC-068: the secret is not in the blob for a platform/BYOK client; re-read it.
+            String clientSecret = resolveClientSecret(oAuth2State);
+
             HttpEntity<?> request = engine.buildTokenExchangeRequest(
                     providerConfig,
                     code,
                     oAuth2State.clientId(),
-                    oAuth2State.clientSecret(),
+                    clientSecret,
                     callbackUrl,
                     oAuth2State.codeVerifier()
             );
@@ -644,6 +763,10 @@ public class OAuth2Service {
             // at initiate (Shopify {shop}, Zendesk {subdomain}, ...). No-op when none were captured
             // (the vast majority of providers), keeping the token URL byte-identical.
             String resolvedTokenUrl = substituteHostVars(providerConfig.tokenUrl(), oAuth2State.templateVarsOrEmpty());
+            if (!Objects.equals(resolvedTokenUrl, providerConfig.tokenUrl())) {
+                // Host filled from connect-time input, about to receive the code (LC-052).
+                OAuth2EndpointGuard.assertPublicHostForUse(resolvedTokenUrl, "tokenUrl");
+            }
 
             log.info("Token exchange request - tokenUrl: {}, authMethod: {}, pkce: {}",
                     resolvedTokenUrl,
@@ -666,7 +789,7 @@ public class OAuth2Service {
             // expires_at. Best-effort: on failure the short-lived token is kept (connect still
             // succeeds, degraded to today's behavior).
             tokens = maybeExchangeLongLived(providerConfig, tokens,
-                    oAuth2State.clientId(), oAuth2State.clientSecret());
+                    oAuth2State.clientId(), clientSecret);
 
             // Persist credential.
             Map<String, Object> credentialData = new HashMap<>();
@@ -676,8 +799,8 @@ public class OAuth2Service {
             oAuth2State.templateVarsOrEmpty().forEach(credentialData::put);
             credentialData.put("client_id", oAuth2State.clientId());
             credentialData.put("oauth_client_id", oAuth2State.clientId());
-            credentialData.put("oauth_client_secret", encryptionService.encrypt(oAuth2State.clientSecret()));
-            credentialData.put("client_secret_masked", maskSecret(oAuth2State.clientSecret()));
+            credentialData.put("oauth_client_secret", encryptionService.encrypt(clientSecret));
+            credentialData.put("client_secret_masked", maskSecret(clientSecret));
             credentialData.put("access_token", encryptionService.encrypt(tokens.accessToken()));
             if (tokens.refreshToken() != null) {
                 credentialData.put("refresh_token", encryptionService.encrypt(tokens.refreshToken()));
@@ -710,6 +833,12 @@ public class OAuth2Service {
                 credentialData.put("scope", grantedScope);
             }
             credentialData.put(TEMPLATE_ID_FIELD, oAuth2State.credentialTemplateId());
+            // Carry the provider RFC 7009 endpoint so a later disconnect can revoke the grant
+            // even when the catalog is unreachable (LC-065).
+            rememberRevocationSpec(credentialData, template, resolvedTokenUrl);
+            // Which provider ACCOUNT these tokens belong to, so a later revoke can tell whether
+            // another credential (any tenant) holds the same grant (LC-065).
+            rememberProviderSubject(credentialData, response.getBody(), template, tokens.accessToken());
             rememberCredentialTemplateReference(credentialData, template);
 
             List<String> scopes = parseGrantedScopes(grantedScope);
@@ -732,7 +861,11 @@ public class OAuth2Service {
                     oAuth2State.iconUrl()
             );
 
-            removeStateFromRedis(state);
+            // LC-058: who connected which provider, and what the provider actually granted.
+            if (auditRecorder != null) {
+                auditRecorder.recordOAuthConnected(oAuth2State.userId(), credential.id(),
+                        oAuth2State.integration(), scopes);
+            }
 
             log.info("Successfully created credential {} for user {}", credential.id(), oAuth2State.userId());
             return buildRedirectUrl(oAuth2State, Map.of(
@@ -749,18 +882,15 @@ public class OAuth2Service {
             // token back in their error payload.
             log.error("Token exchange HTTP error: status={} body={}",
                     e.getStatusCode(), LogSafeBody.scrub(e.getResponseBodyAsString()));
-            removeStateFromRedis(state);
             return buildRedirectUrl(oAuth2State, Map.of("error", "token_exchange_failed"));
         } catch (org.springframework.web.client.RestClientResponseException e) {
             // Any other HTTP status (a 5xx lands here): its message IS the raw provider body,
             // which can echo the submitted code or a token. Scrubbed like the branch above.
             log.error("Token exchange HTTP error: status={} body={}",
                     e.getStatusCode(), LogSafeBody.scrub(e.getResponseBodyAsString()));
-            removeStateFromRedis(state);
             return buildRedirectUrl(oAuth2State, Map.of("error", "token_exchange_failed"));
         } catch (Exception e) {
             log.error("Failed to exchange code for tokens: {}", e.getMessage(), e);
-            removeStateFromRedis(state);
             return buildRedirectUrl(oAuth2State, Map.of("error", "token_exchange_failed"));
         }
     }
@@ -982,6 +1112,7 @@ public class OAuth2Service {
 
         // For custom APIs: template may not have OAuth URLs. Fall back to platform credential.
         // V362: resolve the BYOK client in the workspace the credential belongs to.
+        boolean userSuppliedEndpoints = false;
         if (providerConfig == null) {
             var rawCred = platformCredentialService.getRawCredential(
                     credential.integration(), userId, credential.organizationId());
@@ -989,17 +1120,33 @@ public class OAuth2Service {
                 var pc = rawCred.get();
                 if (pc.authUrl() != null && !pc.authUrl().isBlank()
                         && pc.tokenUrl() != null && !pc.tokenUrl().isBlank()) {
+                    // Same user-stored URLs as the initiate fallback, same check: the refresh
+                    // POST carries the refresh token and the client secret (LC-052).
+                    OAuth2EndpointGuard.assertSafe(pc.authUrl(), "authUrl");
+                    OAuth2EndpointGuard.assertSafe(pc.tokenUrl(), "tokenUrl");
                     providerConfig = new OAuth2ProviderConfig(
                             pc.authUrl(), pc.tokenUrl(), null,
                             pc.defaultScopes() != null ? List.of(pc.defaultScopes().split("\\s+")) : List.of(),
                             " ", OAuth2ProviderConfig.AuthMethod.POST, false, Map.of(),
                             OAuth2ProviderConfig.RefreshConfig.STANDARD);
+                    userSuppliedEndpoints = true;
                     log.info("Using platform credential URLs for refresh of credential {}", credentialId);
                 }
             }
         }
         if (providerConfig == null) {
             throw new IllegalStateException("Cannot load OAuth2 configuration for template " + templateId);
+        }
+
+        // LC-052: the refresh POST carries the refresh token and the client secret. A URL shaped
+        // by a user-stored row or by per-instance vars is checked, resolved, right before use.
+        String rawRefreshUrl = providerConfig.isClientCredentials()
+                ? providerConfig.tokenUrl() : providerConfig.effectiveRefreshUrl();
+        String resolvedRefreshUrl = resolveCredentialTemplateUrl(rawRefreshUrl, data);
+        if (userSuppliedEndpoints) {
+            OAuth2EndpointGuard.assertSafeForUse(resolvedRefreshUrl, "tokenUrl");
+        } else if (!Objects.equals(rawRefreshUrl, resolvedRefreshUrl)) {
+            OAuth2EndpointGuard.assertPublicHostForUse(resolvedRefreshUrl, "tokenUrl");
         }
 
         if (providerConfig.isClientCredentials()) {
@@ -1083,6 +1230,15 @@ public class OAuth2Service {
             // Re-harvest non-RFC-6749 fields - providers that rotate scoping info (Zoho region,
             // Xero tenant_id, Salesforce instance_url) can change them on refresh.
             newData.putAll(engine.extractQuirkFields(response.getBody(), providerConfig));
+            // Backfill the revocation endpoint on credentials connected before it was captured
+            // (LC-065). Google credentials refresh hourly, so the backlog drains on its own.
+            if (template != null && !newData.containsKey(OAuth2RevocationService.TOKEN_HOST_FIELD)) {
+                rememberRevocationSpec(newData, template,
+                        resolveCredentialTemplateUrl(providerConfig.tokenUrl(), newData));
+            }
+            if (template != null && !newData.containsKey(OAuth2RevocationService.SUBJECT_FIELD)) {
+                rememberProviderSubject(newData, response.getBody(), template, tokens.accessToken());
+            }
             // Success erases any prior transient failure state: the next refresh attempt starts
             // fresh, otherwise a single recovery would still count against the 5-attempt budget.
             clearFailureFields(newData);
@@ -1501,12 +1657,24 @@ public class OAuth2Service {
     private void handleRefreshFailure(Credential credential, RuntimeException classified) {
         if (classified instanceof RefreshTerminalException terminal) {
             releaseTerminal(credential, terminal);
+            auditRefreshFailure(credential, terminal.bucket(), terminal.httpStatus(), true);
         } else if (classified instanceof RefreshTransientException transient_) {
             releaseTransient(credential, transient_);
+            auditRefreshFailure(credential, transient_.bucket(), transient_.httpStatus(), false);
         }
         // If classified is something else (shouldn't happen - classifier always returns one of
         // the two), we deliberately leave the credential untouched. Throwing the exception up
         // still surfaces the failure; absent a bucket we can't decide between scrub vs cooldown.
+    }
+
+    /** LC-058: a refresh failure is a credential-lifecycle event (bounded labels only). */
+    private void auditRefreshFailure(Credential credential, RefreshErrorBucket bucket,
+                                     Integer httpStatus, boolean terminal) {
+        if (auditRecorder == null || credential == null) {
+            return;
+        }
+        auditRecorder.recordRefreshFailed(credential.tenantId(), credential.id(), credential.integration(),
+                bucket != null ? bucket.name().toLowerCase(Locale.ROOT) : "unknown", httpStatus, terminal);
     }
 
     private Credential withCredentialData(Credential credential, Map<String, Object> latestCredentialData) {
@@ -2021,9 +2189,15 @@ public class OAuth2Service {
     // Redis state store
     // ============================================================================
 
+    /**
+     * LC-068: the two secret-bearing fields of the blob (an inline client secret, the PKCE
+     * verifier) are written encrypted with the same {@link CredentialEncryptionService} that
+     * protects them at rest in the credential row, so a Redis read, dump or backup does not yield
+     * them. A platform/BYOK client secret is not in the blob at all (see {@link #initiate}).
+     */
     private void saveStateToRedis(String state, OAuth2State oAuth2State) {
         try {
-            String json = objectMapper.writeValueAsString(oAuth2State);
+            String json = objectMapper.writeValueAsString(withSecrets(oAuth2State, true));
             redisTemplate.opsForValue().set(
                     REDIS_STATE_PREFIX + state,
                     json,
@@ -2035,24 +2209,173 @@ public class OAuth2Service {
         }
     }
 
-    private OAuth2State loadStateFromRedis(String state) {
+    /**
+     * Read AND delete the state in one atomic step (LC-089), then decrypt its secret-bearing
+     * fields. Null when the state is unknown, expired or already consumed.
+     */
+    private OAuth2State consumeStateFromRedis(String state) {
+        if (state == null || state.isBlank()) {
+            return null;
+        }
         try {
-            String json = redisTemplate.opsForValue().get(REDIS_STATE_PREFIX + state);
+            String json = redisTemplate.execute(CONSUME_STATE_SCRIPT, List.of(REDIS_STATE_PREFIX + state));
             if (json == null) {
                 return null;
             }
-            return objectMapper.readValue(json, OAuth2State.class);
+            return withSecrets(objectMapper.readValue(json, OAuth2State.class), false);
         } catch (Exception e) {
-            log.error("Failed to load OAuth2 state from Redis: {}", e.getMessage(), e);
+            log.error("Failed to consume OAuth2 state for flow {}: {}", OAuth2StateRef.of(state), e.getMessage());
             return null;
         }
     }
 
-    private void removeStateFromRedis(String state) {
-        try {
-            redisTemplate.delete(REDIS_STATE_PREFIX + state);
-        } catch (Exception e) {
-            log.warn("Failed to remove OAuth2 state from Redis: {}", e.getMessage());
+    private OAuth2State withSecrets(OAuth2State s, boolean encrypt) {
+        return new OAuth2State(
+                s.userId(), s.credentialTemplateId(), s.credentialName(), s.clientId(),
+                protect(s.clientSecret(), encrypt), s.authUrl(), s.accessTokenUrl(), s.scope(),
+                s.environment(), s.integration(), s.iconUrl(), s.returnUrl(), s.createdAt(),
+                protect(s.codeVerifier(), encrypt), s.organizationId(), s.templateVars(),
+                s.browserBindingHash(), s.platformCredentialId());
+    }
+
+    private String protect(String value, boolean encrypt) {
+        if (value == null || value.isBlank()) {
+            return value;
         }
+        return encrypt ? encryptionService.encrypt(value) : encryptionService.decrypt(value);
+    }
+
+    /**
+     * The OAuth client secret for the callback's token exchange (LC-068). A flow started with a
+     * platform/BYOK client row re-reads the secret from that row, and only if the row still
+     * holds the SAME client id and still belongs to the flow's user, workspace or the platform;
+     * otherwise the inline secret the blob carried (already decrypted by the consume step).
+     *
+     * @throws IllegalStateException when the client row is gone or changed since initiate
+     */
+    String resolveClientSecret(OAuth2State s) {
+        if (s.platformCredentialId() == null) {
+            return s.clientSecret();
+        }
+        PlatformCredentialModels.PlatformCredential row = platformCredentialService
+                .getRawCredentialById(s.platformCredentialId())
+                .filter(PlatformCredentialModels.PlatformCredential::isEnabled)
+                .filter(pc -> Objects.equals(pc.clientId(), s.clientId()))
+                .filter(pc -> pc.tenantId() == null
+                        || pc.tenantId().equals(s.userId())
+                        || (pc.organizationId() != null && pc.organizationId().equals(s.organizationId())))
+                .orElseThrow(() -> new IllegalStateException(
+                        "The OAuth client this connection was started with is no longer available"));
+        return row.clientSecret();
+    }
+
+    /**
+     * Copy the template's revocation spec (endpoint, method, client auth style) and the host that
+     * actually minted this credential's tokens into {@code credential_data} (LC-065). Not a
+     * secret. The token host is what lets a disconnect refuse to send a self-hosted provider's
+     * token to the SaaS revoke endpoint. A spec that fails {@link OAuth2EndpointGuard} is dropped
+     * rather than failing the connect; the revocation then reads the template at delete time.
+     */
+    /**
+     * Records the provider account behind these tokens as {@link OAuth2RevocationService#SUBJECT_FIELD}
+     * (SHA-256, base64url: compared only, never displayed). Sources, in order:
+     * <ol>
+     *   <li>the {@code sub} claim of an {@code id_token} in the token response (OpenID providers
+     *       and any connect that requested {@code openid}). Read without signature verification:
+     *       it came straight from the token endpoint over TLS, and it is only used as an equality
+     *       key, never to authenticate anyone;</li>
+     *   <li>the template's {@code oauth2Config.subjectUrl} (Google: tokeninfo), POSTed the access
+     *       token as {@code access_token} and read at {@code subjectField} (default {@code sub}).</li>
+     * </ol>
+     * Best effort: no subject means a later disconnect will not revoke while another credential of
+     * the same client exists (SHARED_GRANT_UNKNOWN_SUBJECT), never that a connect fails.
+     */
+    void rememberProviderSubject(Map<String, Object> data, JsonNode tokenBody, JsonNode template, String accessToken) {
+        try {
+            String subject = subjectFromIdToken(tokenBody);
+            if (subject == null) {
+                subject = subjectFromEndpoint(template, accessToken);
+            }
+            if (subject != null) {
+                data.put(OAuth2RevocationService.SUBJECT_FIELD, java.util.Base64.getUrlEncoder().withoutPadding()
+                        .encodeToString(java.security.MessageDigest.getInstance("SHA-256")
+                                .digest(subject.getBytes(StandardCharsets.UTF_8))));
+            }
+        } catch (Exception e) {
+            log.warn("Could not determine the provider account of a credential: {}", e.getClass().getSimpleName());
+        }
+    }
+
+    private String subjectFromIdToken(JsonNode tokenBody) throws Exception {
+        String idToken = tokenBody == null ? null : tokenBody.path("id_token").asText(null);
+        if (idToken == null || idToken.isBlank()) {
+            return null;
+        }
+        String[] parts = idToken.split("\\.");
+        if (parts.length < 2) {
+            return null;
+        }
+        JsonNode claims = objectMapper.readTree(java.util.Base64.getUrlDecoder().decode(parts[1]));
+        String sub = claims.path("sub").asText(null);
+        return sub == null || sub.isBlank() ? null : sub;
+    }
+
+    private String subjectFromEndpoint(JsonNode template, String accessToken) {
+        JsonNode config = OAuth2RevocationService.oauth2Config(template, objectMapper);
+        String url = config == null ? null : config.path("subjectUrl").asText(null);
+        if (url == null || url.isBlank() || accessToken == null) {
+            return null;
+        }
+        OAuth2EndpointGuard.assertSafeForUse(url, "subjectUrl");
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.setContentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED);
+        org.springframework.util.LinkedMultiValueMap<String, String> body = new org.springframework.util.LinkedMultiValueMap<>();
+        body.add("access_token", accessToken);
+        ResponseEntity<JsonNode> response = restTemplate.postForEntity(url, new HttpEntity<>(body, headers), JsonNode.class);
+        if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+            return null;
+        }
+        String field = config.path("subjectField").asText("sub");
+        String sub = response.getBody().path(field).asText(null);
+        return sub == null || sub.isBlank() ? null : sub;
+    }
+
+    private void rememberRevocationSpec(Map<String, Object> data, JsonNode template, String resolvedTokenUrl) {
+        OAuth2RevocationService.RevocationSpec spec =
+                OAuth2RevocationService.specOf(template, resolvedTokenUrl, objectMapper);
+        if (spec == null) {
+            return;
+        }
+        try {
+            OAuth2EndpointGuard.assertSafe(spec.revokeUrl(), "revokeUrl");
+            spec.writeTo(data);
+        } catch (IllegalArgumentException unsafe) {
+            log.warn("Not storing the declared revocation endpoint: {}", unsafe.getMessage());
+        }
+    }
+
+    /**
+     * Reduce the scope set to the subset the caller asked for (LC-072), refusing anything the
+     * integration does not already offer: the request can only ever ask for LESS. Order follows
+     * the template so the authorize URL is stable. An empty result is refused rather than
+     * silently widened back to the full list.
+     */
+    static List<String> narrowScopes(List<String> allowed, List<String> requested, String integrationName) {
+        Set<String> allowedSet = new LinkedHashSet<>(allowed);
+        List<String> rejected = requested.stream()
+                .filter(s -> s != null && !s.isBlank())
+                .filter(s -> !allowedSet.contains(s))
+                .toList();
+        if (!rejected.isEmpty()) {
+            throw new IllegalArgumentException("Requested scopes are not offered by the "
+                    + integrationName + " integration: " + String.join(", ", rejected));
+        }
+        Set<String> requestedSet = new LinkedHashSet<>(requested);
+        List<String> narrowed = allowed.stream().filter(requestedSet::contains).distinct().toList();
+        if (narrowed.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "No usable scopes requested for the " + integrationName + " integration");
+        }
+        return narrowed;
     }
 }

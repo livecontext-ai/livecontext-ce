@@ -77,6 +77,71 @@ class InterfacePublishModuleTest {
             assertThat(sent).doesNotContainKey("interfaceId"); // critical: would be rejected by publication-service
         }
 
+        @Test
+        @DisplayName("regression (budget): an embedded table over the row limit is an INVALID_PARAMETER_VALUE with the trim actions")
+        void tooLargeSnapshotIsAnActionableRefusal() {
+            String reason = "Table 'Orders' has 6000 rows (max 5000 rows per published table).";
+            when(publicationClient.publishResource(any(), eq(TENANT), isNull())).thenThrow(
+                    new com.apimarketplace.publication.client.PublicationValidationException(
+                            "PUBLICATION_SNAPSHOT_TOO_LARGE",
+                            reason + " Delete rows from that table, or detach it from the interface, then publish again.",
+                            Map.of("reason", reason, "maxTableRows", 5000, "breakdown", java.util.List.of(
+                                    Map.of("type", "datasource", "id", "77", "name", "Orders", "items", 6000))),
+                            null));
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", INTERFACE_ID.toString());
+            params.put("title", "My Interface");
+
+            ToolExecutionResult result = module.execute("publish", params, TENANT, ctx()).orElseThrow();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.errorCode()).isEqualTo(com.apimarketplace.agent.tools.ToolErrorCode.INVALID_PARAMETER_VALUE);
+            // The REAL id of the table the interface reads (77), one reason, one fix, no "Heaviest".
+            assertThat(result.error()).isEqualTo("Publish refused: " + reason + " Fix: delete rows with "
+                    + "table(action='delete_rows', table_id=77, where={...}), then call publish again.");
+        }
+
+        @Test
+        @DisplayName("a size refusal lists the heaviest resources and points at both tools")
+        void sizeRefusalListsHeaviest() {
+            String reason = "Publication snapshot is 16.0 MB (max 15.0 MB).";
+            when(publicationClient.publishResource(any(), eq(TENANT), isNull())).thenThrow(
+                    new com.apimarketplace.publication.client.PublicationValidationException(
+                            "PUBLICATION_SNAPSHOT_TOO_LARGE", reason + " Reduce the content of the interface and its "
+                                    + "table, then publish again.",
+                            Map.of("reason", reason, "sizeBytes", 16_777_216L, "maxBytes", 15_728_640L,
+                                    "breakdown", java.util.List.of(Map.of("type", "datasource", "name", "Orders",
+                                            "items", 4000, "approxBytes", 16_000_000L))),
+                            null));
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", INTERFACE_ID.toString());
+            params.put("title", "My Interface");
+
+            ToolExecutionResult result = module.execute("publish", params, TENANT, ctx()).orElseThrow();
+
+            // No table id known for a size refusal: the fix names the table instead.
+            assertThat(result.error()).isEqualTo("Publish refused: " + reason
+                    + " Heaviest: datasource \"Orders\" (4000 rows). Fix: delete rows from table 'Orders' with "
+                    + "table(action='delete_rows') (table(action='list') gives its table_id), or slim the page with "
+                    + "interface(action='update'), then call publish again.");
+        }
+
+        @Test
+        @DisplayName("a size refusal naming no table falls back to the interface's table")
+        void sizeRefusalWithoutATableName() {
+            String reason = "Publication snapshot is 16.0 MB (max 15.0 MB).";
+            when(publicationClient.publishResource(any(), eq(TENANT), isNull())).thenThrow(
+                    new com.apimarketplace.publication.client.PublicationValidationException(
+                            "PUBLICATION_SNAPSHOT_TOO_LARGE", reason, Map.of("reason", reason), null));
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", INTERFACE_ID.toString());
+            params.put("title", "My Interface");
+
+            ToolExecutionResult result = module.execute("publish", params, TENANT, ctx()).orElseThrow();
+
+            assertThat(result.error()).contains("Fix: delete rows from the interface's table with table(action='delete_rows')");
+        }
+
         @Test @DisplayName("Returns failure when interface_id is missing")
         void publishMissingInterfaceId() {
             ToolExecutionResult result = module.execute("publish",
@@ -128,6 +193,44 @@ class InterfacePublishModuleTest {
             assertThat(result.success()).isFalse();
             assertThat(result.error()).contains("Resource not published");
             verify(publicationClient, never()).unpublishResource(any(), any(), any(), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("restricted calling context (LC-066)")
+    class RestrictedContextTests {
+
+        private ToolExecutionContext restrictedCtx() {
+            return new ToolExecutionContext(TENANT, Map.of(
+                    com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY,
+                    com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name()),
+                    Map.of(), java.util.Set.of(), null, null, null, null);
+        }
+
+        @Test
+        @DisplayName("regression: publish from a conversation that read Gmail / Drive is refused before publication-service")
+        void restrictedPublishIsRefused() {
+            ToolExecutionResult result = module.execute("publish",
+                    Map.of("interface_id", INTERFACE_ID.toString(), "title", "My Interface"), TENANT,
+                    restrictedCtx()).orElseThrow();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error())
+                    .startsWith(com.apimarketplace.common.classification.RestrictedDataPolicy.REFUSAL_CODE)
+                    .contains("no interface can be published");
+            verifyNoInteractions(publicationClient);
+        }
+
+        @Test
+        @DisplayName("unpublish still works from a restricted conversation")
+        void restrictedUnpublishStillWorks() {
+            when(publicationClient.isResourcePublished("INTERFACE", INTERFACE_ID.toString())).thenReturn(true);
+
+            ToolExecutionResult result = module.execute("unpublish",
+                    Map.of("interface_id", INTERFACE_ID.toString()), TENANT, restrictedCtx()).orElseThrow();
+
+            assertThat(result.success()).isTrue();
+            verify(publicationClient).unpublishResource(eq("INTERFACE"), eq(INTERFACE_ID.toString()), eq(TENANT), isNull());
         }
     }
 

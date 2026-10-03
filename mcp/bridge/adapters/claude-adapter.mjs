@@ -10,6 +10,7 @@ import { resolve } from 'path';
 import { applyResultMapping } from '../lib/stopReasonMapper.js';
 import { AgentStopReason } from '../lib/agentStopReason.js';
 import { recordCallUsage, dispatchToolCall, dispatchToolResult, incrementTurn } from '../lib/adapterHelpers.mjs';
+import { buildBaseChildEnv } from '../lib/childEnv.mjs';
 import { claudeReasoningEnv } from '../lib/reasoningEffort.mjs';
 
 // ─── Anthropic protocol constants ─────────────────────────────────────────
@@ -73,6 +74,16 @@ export function isExtendedThinkingContinuation(prevCall, currentInput, prevStopR
   return prevStopReason === STOP_REASON_PAUSE_TURN
       && prevCall != null
       && prevCall.promptTokens === currentInput;
+}
+
+/**
+ * Claude Code permission-rule path for an absolute directory, recursive:
+ * `Read(//abs/dir/**)` (a leading `//` marks an absolute filesystem path). Windows paths are
+ * converted to forward slashes.
+ */
+export function claudeAbsolutePathRule(dir) {
+  const posix = String(dir).replace(/\\/g, '/').replace(/\/+$/, '');
+  return `/${posix.startsWith('/') ? posix : `/${posix}`}/**`;
 }
 
 export class ClaudeAdapter {
@@ -165,7 +176,7 @@ export class ClaudeAdapter {
    *   multi-line text are safe.
    */
   buildArgs(config) {
-    const { prompt, systemPrompt, model, maxTurns, mcpConfigPath, restrictedToolset, mcpServerName } = config;
+    const { prompt, systemPrompt, model, maxTurns, mcpConfigPath, restrictedToolset, mcpServerName, attachmentDir } = config;
 
     // NOTE: the prompt is NOT placed here - it goes to stdin (see the return value).
     // `-p` is the print-mode flag; with no positional query claude reads stdin.
@@ -176,12 +187,9 @@ export class ClaudeAdapter {
       '--verbose',
       '--strict-mcp-config',
       '--mcp-config', mcpConfigPath,
-      // Auto-approve the AVAILABLE tools (so a headless `-p` run never hangs on a
-      // permission prompt). This does NOT re-enable tools removed via --disallowedTools:
-      // a disallowed tool is gone from the tool set entirely, not merely un-approved
-      // (the 5 interactive tools below are proof - they stay blocked under skip-permissions).
-      // In restricted mode the available set is the platform MCP tools only.
-      '--dangerously-skip-permissions',
+      // NOTE: --dangerously-skip-permissions is added on the UNRESTRICTED branch only (LC-022).
+      // Restricted runs approve exactly what they may use with --allowedTools instead; in `-p`
+      // mode anything else is denied, never prompted, so a headless run cannot hang.
       '--no-session-persistence',
     ];
 
@@ -225,10 +233,18 @@ export class ClaudeAdapter {
       // and an empty cwd. A bare-name deny rule did not actually remove the tool from the set
       // here. We KEEP the explicit --disallowedTools list below as defence-in-depth, but
       // --tools "" is the load-bearing fix. (The run also uses an empty cwd, see server.mjs.)
-      args.push('--tools', '');
+      //
+      // ATTACHMENTS (images, PDFs, large text) are written to the per-run attachment dir and the
+      // prompt tells the agent to Read them. With Read removed they were unreadable in restricted
+      // mode. When this run has attachments, the built-in set is exactly [Read] and the only
+      // approved Read rule is scoped to that directory (`Read(//<abs dir>/**)`); without
+      // --dangerously-skip-permissions a Read anywhere else is denied in `-p` mode.
+      const readScope = attachmentDir ? claudeAbsolutePathRule(attachmentDir) : null;
+      args.push('--tools', readScope ? 'Read' : '');
+      args.push('--allowedTools', `mcp__${mcpServerName || 'agent-cli'}`, ...(readScope ? [`Read(${readScope})`] : []));
       const nativeTools = [
         'Bash', 'BashOutput', 'KillShell', 'KillBash',
-        'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit',
+        ...(readScope ? [] : ['Read']), 'Write', 'Edit', 'MultiEdit', 'NotebookEdit',
         'Glob', 'Grep', 'WebFetch', 'WebSearch',
         'TodoWrite', 'Task', 'SlashCommand', 'SendUserMessage',
         'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'EnterWorktree', 'ExitWorktree',
@@ -237,6 +253,8 @@ export class ClaudeAdapter {
     } else {
       // Full-freedom (default direct claude-code): all native tools on; only block the
       // interactive/session tools that cannot work headless.
+      // Reached only for a body-bound signature made with UNRESTRICTED_PROVIDER_ID (LC-022).
+      args.push('--dangerously-skip-permissions');
       const disallowedTools = [
         'AskUserQuestion',
         'EnterPlanMode', 'ExitPlanMode',
@@ -317,19 +335,13 @@ export class ClaudeAdapter {
    */
   buildChildEnv(_tmpDir, reasoningEffort) {
     // Dropped from the child's environment:
-    //   CLAUDECODE / CLAUDE_CODE_ENTRYPOINT - let claude spawn from within a session.
-    //   REDIS_URL - carries the bridge's Redis PASSWORD and the child never needs it
-    //     (the MCP subprocess gets its own explicit env dict; claude + agent-cli talk
-    //     HTTP, not Redis). With native Read/Bash enabled the agent could otherwise
-    //     echo it from /proc/self/environ; stripping it keeps the bridge's OWN infra
-    //     secret out of the agent context. This is hygiene on the bridge's internal
-    //     secret, NOT a capability limit - provider keys the agent legitimately needs
-    //     are left in place, and creds the operator provisions for deploy/ssh live in
-    //     files (gh config, ~/.ssh, kubeconfig), not in this stripped var.
-    const STRIP = new Set(['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'REDIS_URL']);
-    const base = Object.fromEntries(
-      Object.entries(process.env).filter(([k]) => !STRIP.has(k))
-    );
+    //   CLAUDECODE / CLAUDE_CODE_ENTRYPOINT - claude-specific: left set, the CLI refuses to
+    //     spawn from within an existing session.
+    //   The platform secrets (GATEWAY_SECRET_KEY, REDIS_URL, BRIDGE_META_NONCE, any other
+    //     secret-shaped name) are stripped centrally by buildBaseChildEnv (lib/childEnv.mjs,
+    //     LC-053). Provider keys the CLI authenticates with are kept; creds an operator
+    //     provisions for deploy/ssh live in files (gh config, ~/.ssh, kubeconfig).
+    const base = buildBaseChildEnv(['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT']);
     return {
       ...base,
       // Pin EVERY tool (native + platform MCP) loaded directly - never deferred

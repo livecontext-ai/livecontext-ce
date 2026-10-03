@@ -54,6 +54,7 @@ export default function NestedTablePage({ params }: Props) {
         dataSourceId={tableId}
         jsonPath={jsonPath}
         readOnly={!canMutate}
+        urlState
       />
     </div>
   );

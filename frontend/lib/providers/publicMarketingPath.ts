@@ -36,7 +36,9 @@ import { isDocsHost } from '@/lib/docs/docsHostRewrite';
 // the spinner at the top of the body.
 // `/partners` is the partner program page: it is written to be found by the agencies it
 // recruits, so it must server-render its content, not the spinner.
-const PUBLIC_MARKETING_PREFIXES = ['/compare', '/about', '/contact', '/legal', '/changelog', '/docs', '/marketplace', '/u', '/status', '/integrations', '/models', '/videos', '/for', '/partners'];
+// `/security` is the vulnerability disclosure policy (security.txt points at it): researchers and
+// scanners read it without JavaScript, so it must server-render its content too.
+const PUBLIC_MARKETING_PREFIXES = ['/compare', '/about', '/contact', '/legal', '/changelog', '/docs', '/marketplace', '/u', '/status', '/integrations', '/models', '/videos', '/for', '/partners', '/security'];
 
 // `host`: the documentation subdomain serves its pages at CLEAN paths (`/glossary`),
 // rewritten onto the `/docs/*` routes. The server renders those pages under their

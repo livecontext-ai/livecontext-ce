@@ -22,7 +22,8 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping("/api/auth/api-keys")
-@CrossOrigin(origins = "*")
+// No @CrossOrigin (LC-033): CORS is decided centrally (gateway CorsConfig). A per-controller
+// wildcard would widen the origin set for any request reaching this service directly.
 public class ApiKeyController {
 
     private static final Logger log = LoggerFactory.getLogger(ApiKeyController.class);
@@ -82,7 +83,8 @@ public class ApiKeyController {
                                        @RequestBody CreateApiKeyRequest request) {
         log.info("POST /api/auth/api-keys for userId: {}", userId);
         try {
-            CreateApiKeyResponse response = apiKeyService.createKey(userId, request.getName(), request.getScopes());
+            CreateApiKeyResponse response = apiKeyService.createKey(userId, request.getName(), request.getScopes(),
+                    request.getExpiresInDays());
             return ResponseEntity.ok(response);
         } catch (ApiKeyValidationException e) {
             log.warn("API key creation rejected for userId {}: {}", userId, e.getMessage());

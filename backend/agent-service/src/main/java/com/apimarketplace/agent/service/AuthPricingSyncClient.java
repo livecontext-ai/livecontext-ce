@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.service;
 
+import com.apimarketplace.common.web.InternalGatewaySigner;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -39,14 +40,26 @@ public class AuthPricingSyncClient {
 
     private final RestTemplate restTemplate;
     private final String authServiceUrl;
+    private final String gatewaySecretKey;
+
+    /** Provider id the sync is signed with (the endpoint sits under auth-service's HMAC-gatable prefix). */
+    static final String INTERNAL_PROVIDER_ID = "internal-pricing-sync-client";
 
     /** Ceiling of {@code auth.model_pricing.input_rate/output_rate} (NUMERIC(10,6)). */
     private static final BigDecimal MAX_RATE = new BigDecimal("9999.999999");
 
+    @org.springframework.beans.factory.annotation.Autowired
     public AuthPricingSyncClient(RestTemplate restTemplate,
-                                 @Value("${services.auth-service.url:http://localhost:8083}") String authServiceUrl) {
+                                 @Value("${services.auth-service.url:http://localhost:8083}") String authServiceUrl,
+                                 @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
         this.restTemplate = restTemplate;
         this.authServiceUrl = authServiceUrl;
+        this.gatewaySecretKey = gatewaySecretKey;
+    }
+
+    /** Unsigned: tests and deployments whose auth-service verifies nothing. */
+    public AuthPricingSyncClient(RestTemplate restTemplate, String authServiceUrl) {
+        this(restTemplate, authServiceUrl, null);
     }
 
     public boolean sync(String provider, String modelId, BigDecimal priceInput, BigDecimal priceOutput,
@@ -113,10 +126,16 @@ public class AuthPricingSyncClient {
                 body.put("freeTier", freeTierEnabled);
             }
 
+            String url = authServiceUrl + "/api/internal/auth/model-pricing/sync";
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+            // Signed (v1, then v2 over the final method and URI): the shared RestTemplate bean
+            // carries no signing interceptor, and auth-service can HMAC-gate this prefix.
+            InternalGatewaySigner.stamp(headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
+            InternalGatewaySigner.stampV2(headers, "POST", java.net.URI.create(url), gatewaySecretKey);
             @SuppressWarnings("rawtypes")
             org.springframework.http.ResponseEntity<java.util.Map> response = restTemplate.postForEntity(
-                    authServiceUrl + "/api/internal/auth/model-pricing/sync",
-                    body, java.util.Map.class);
+                    url, new org.springframework.http.HttpEntity<>(body, headers), java.util.Map.class);
             if (freeTierEnabled != null && !mirrorEchoed(response.getBody(), freeTierEnabled)) {
                 // A 200 is not proof for the ACCESS flag. An auth-service pod that predates
                 // the column ignores the key and answers 200 all the same, which during a

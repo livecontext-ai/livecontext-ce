@@ -72,7 +72,8 @@ class WorkflowRunQueryControllerPageSizeCapTest {
                 storageService,
                 objectMapper,
                 workflowEpochRepository,
-                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.ApplicationRunVersionBatchService.class)
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.ApplicationRunVersionBatchService.class),
+                org.mockito.Mockito.mock(com.apimarketplace.auth.client.access.OrgAccessGuard.class)
         );
         WorkflowRunEntity run = new WorkflowRunEntity();
         run.setTenantId(TENANT_ID);
@@ -91,7 +92,7 @@ class WorkflowRunQueryControllerPageSizeCapTest {
             .thenReturn(emptyPage());
 
         ResponseEntity<?> response = controller.listStepsPaged(
-                RUN_ID, STEP_ALIAS, 0, 500, null, null, TENANT_ID, null);
+                RUN_ID, STEP_ALIAS, 0, 500, null, null, TENANT_ID, null, null);
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
@@ -110,7 +111,7 @@ class WorkflowRunQueryControllerPageSizeCapTest {
             .thenReturn(emptyPage());
 
         ResponseEntity<?> response = controller.listStepsPaged(
-                RUN_ID, STEP_ALIAS, 0, 10_000, null, null, TENANT_ID, null);
+                RUN_ID, STEP_ALIAS, 0, 10_000, null, null, TENANT_ID, null, null);
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
@@ -129,7 +130,7 @@ class WorkflowRunQueryControllerPageSizeCapTest {
             .thenReturn(emptyPage());
 
         ResponseEntity<?> response = controller.listStepsPaged(
-                RUN_ID, STEP_ALIAS, 0, 0, null, null, TENANT_ID, null);
+                RUN_ID, STEP_ALIAS, 0, 0, null, null, TENANT_ID, null, null);
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);

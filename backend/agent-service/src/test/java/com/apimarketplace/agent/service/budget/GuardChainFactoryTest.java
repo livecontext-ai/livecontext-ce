@@ -170,4 +170,114 @@ class GuardChainFactoryTest {
             verify(pricingSnapshotClient, never()).getRates(any(), any());
         }
     }
+
+    @Nested
+    @DisplayName("bridgeBudget() - LC-056, the budget a CLI bridge run enforces itself")
+    class BridgeBudgetTests {
+
+        private final String agentId = UUID.randomUUID().toString();
+
+        @Test
+        @DisplayName("the tenant balance on the BILLED model and the agent budget window")
+        void balanceAndAgentWindow() {
+            when(creditConsumptionClient.fetchLlmSpendableBalance("tenant-1", "anthropic", "claude-sonnet-4-6"))
+                .thenReturn(new BigDecimal("70.5"));
+            when(budgetResolver.resolveAndPersistForAgent(eq(UUID.fromString(agentId)), any(), any()))
+                .thenReturn(new BudgetState(new BigDecimal("500"), new BigDecimal("120"), BigDecimal.ZERO, false));
+
+            GuardChainFactory.BridgeBudget budget =
+                factory.bridgeBudget("tenant-1", agentId, "anthropic", "claude-sonnet-4-6");
+
+            assertThat(budget.tenantBalance()).isEqualTo(70.5);
+            assertThat(budget.maxCreditBudget()).isEqualTo(500.0);
+            assertThat(budget.creditsConsumedSoFar()).isEqualTo(120.0);
+        }
+
+        @Test
+        @DisplayName("an agent with no budget configured, or no agent, sends no agent budget")
+        void noAgentBudget() {
+            when(creditConsumptionClient.fetchLlmSpendableBalance(any(), any(), any())).thenReturn(BigDecimal.TEN);
+            when(budgetResolver.resolveAndPersistForAgent(any(), any(), any())).thenReturn(BudgetState.disabled());
+
+            assertThat(factory.bridgeBudget("tenant-1", agentId, "p", "m").maxCreditBudget()).isNull();
+            assertThat(factory.bridgeBudget("tenant-1", null, "p", "m").maxCreditBudget()).isNull();
+            assertThat(factory.bridgeBudget("tenant-1", "not-a-uuid", "p", "m").maxCreditBudget()).isNull();
+        }
+
+        @Test
+        @DisplayName("without a credit client or a tenant there is no platform balance (null, never 0)")
+        void noClientNoBalance() {
+            GuardChainFactory noCredit = new GuardChainFactory(null, budgetResolver, pricingSnapshotClient);
+
+            assertThat(noCredit.bridgeBudget("tenant-1", null, "p", "m").tenantBalance()).isNull();
+            assertThat(factory.bridgeBudget(null, null, "p", "m").tenantBalance()).isNull();
+        }
+
+        @Test
+        @DisplayName("credits reserved by in-flight sub-agents count as consumed, as in the Java loop's agent guard")
+        void reservedCreditsCountAsConsumed() {
+            when(budgetResolver.resolveAndPersistForAgent(eq(UUID.fromString(agentId)), any(), any()))
+                .thenReturn(new BudgetState(new BigDecimal("500"), new BigDecimal("120"), new BigDecimal("80"), false));
+
+            assertThat(factory.bridgeBudget("tenant-1", agentId, "p", "m").creditsConsumedSoFar()).isEqualTo(200.0);
+        }
+
+        @Test
+        @DisplayName("a failing agent-budget lookup sends no agent budget, and keeps the balance, rather than failing the run")
+        void failingAgentBudgetLookupKeepsTheBalance() {
+            when(creditConsumptionClient.fetchLlmSpendableBalance(any(), any(), any())).thenReturn(BigDecimal.TEN);
+            when(budgetResolver.resolveAndPersistForAgent(any(), any(), any()))
+                .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("db down"));
+
+            GuardChainFactory.BridgeBudget budget = factory.bridgeBudget("tenant-1", agentId, "p", "m");
+
+            assertThat(budget.maxCreditBudget()).isNull();
+            assertThat(budget.tenantBalance()).isEqualTo(10.0);
+        }
+    }
+
+    @Nested
+    @DisplayName("BridgeBudget.exhaustedScope() - what a bridge run cannot start under")
+    class ExhaustedScopeTests {
+
+        private String scope(Double balance, Double budget, Double consumed) {
+            return new GuardChainFactory.BridgeBudget(balance, budget, consumed).exhaustedScope();
+        }
+
+        @Test
+        @DisplayName("regression: an agent budget of 0 is 'no budget', never a spent one")
+        void zeroAgentBudgetIsNoBudget() {
+            // AgentContextBuilder forwards a creditBudget of 0 as-is; everywhere else 0 means off.
+            assertThat(scope(50.0, 0.0, 0.0)).isNull();
+            assertThat(scope(50.0, -5.0, 3.0)).isNull();
+        }
+
+        @Test
+        @DisplayName("an agent budget is spent exactly at its limit, not before")
+        void agentBudgetBoundary() {
+            assertThat(scope(50.0, 100.0, 99.99)).isNull();
+            assertThat(scope(50.0, 100.0, 100.0)).isEqualTo("agent");
+        }
+
+        @Test
+        @DisplayName("a balance at or below 0 is refused; an unknown balance or budget refuses nothing")
+        void balanceAndUnknownSides() {
+            assertThat(scope(0.0, null, null)).isEqualTo("tenant");
+            assertThat(scope(-1.0, 100.0, 0.0)).isEqualTo("tenant");
+            assertThat(scope(null, null, null)).isNull();
+            assertThat(scope(null, 100.0, null)).isNull();
+            assertThat(scope(null, null, 100.0)).isNull();
+        }
+
+        @Test
+        @DisplayName("the refusal names the scope it refuses")
+        void refusalMessageNamesTheScope() {
+            assertThat(new GuardChainFactory.BridgeBudget(10.0, 100.0, 100.0).refusalMessage("p", "m"))
+                .startsWith("Agent credit budget exhausted");
+            assertThat(new GuardChainFactory.BridgeBudget(0.0, null, null).refusalMessage("anthropic", "x"))
+                .startsWith("Insufficient credits").contains("anthropic/x")
+                // A balance the auth service could not answer arrives as 0: the message says so.
+                .contains("could not be read counts as 0");
+        }
+    }
 }

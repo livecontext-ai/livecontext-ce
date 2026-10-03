@@ -96,7 +96,7 @@ class SkippedNodePersistenceServiceTest {
             when(execution.getPlan()).thenReturn(plan);
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(false);
 
             boolean result = service.recordSkippedNode(
@@ -120,7 +120,7 @@ class SkippedNodePersistenceServiceTest {
             when(execution.getPlan()).thenReturn(plan);
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(null);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(null);
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
 
             boolean result = service.recordSkippedNode(
@@ -149,7 +149,7 @@ class SkippedNodePersistenceServiceTest {
             when(execution.getPlan()).thenReturn(plan);
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt()))
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any()))
                     .thenReturn(UUID.randomUUID());
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
 
@@ -175,7 +175,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             // nativeRepository.insertIgnoringDuplicate already set to return true
 
@@ -201,7 +201,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             // nativeRepository.insertIgnoringDuplicate already set to return true
 
@@ -234,7 +234,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             service.recordSkippedNode(
                     execution, "core:apply_ops", "apply_ops", "Not routed to this branch",
@@ -271,7 +271,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             service.recordSkippedNode(
                     execution, "table:record_tech", "record_tech", "Predecessor agent:classify was skipped",
@@ -302,7 +302,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             TenantResolver.runWithOrgScope("org-async", () ->
                     service.recordSkippedNode(
@@ -329,7 +329,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             // nativeRepository.insertIgnoringDuplicate already set to return true
 
@@ -358,7 +358,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             // nativeRepository.insertIgnoringDuplicate already set to return true
 
@@ -386,7 +386,7 @@ class SkippedNodePersistenceServiceTest {
             when(execution.getPlan()).thenReturn(plan);
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
             when(nativeRepository.insertIgnoringDuplicate(any())).thenThrow(new RuntimeException("DB error"));
 
             boolean result = service.recordSkippedNode(
@@ -411,7 +411,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
 
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt()))
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any()))
                     .thenReturn(storageId);
 
             service.recordSkippedNode(
@@ -420,7 +420,10 @@ class SkippedNodePersistenceServiceTest {
             );
 
             ArgumentCaptor<Map> payloadCaptor = ArgumentCaptor.forClass(Map.class);
-            verify(stepPayloadService).persistSkippedNodePayload(eq("tenant-1"), payloadCaptor.capture(), eq(0));
+            // LC-066/CASA re-audit item 4: the execution's runId must reach
+            // StepPayloadService.persistSkippedNodePayload so it can consult isRunRestricted -
+            // pinned here with the exact runId, not any().
+            verify(stepPayloadService).persistSkippedNodePayload(eq("tenant-1"), payloadCaptor.capture(), eq(0), eq("run-123"));
 
             @SuppressWarnings("unchecked")
             Map<String, Object> payload = payloadCaptor.getValue();
@@ -449,7 +452,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             // nativeRepository.insertIgnoringDuplicate already set to return true
 
@@ -486,7 +489,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             ArgumentCaptor<WorkflowStepDataEntity> entityCaptor =
                     ArgumentCaptor.forClass(WorkflowStepDataEntity.class);
@@ -518,7 +521,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getId()).thenReturn("workflow-1");
             when(plan.getCores()).thenReturn(List.of(transformCore));
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             ArgumentCaptor<WorkflowStepDataEntity> entityCaptor =
                     ArgumentCaptor.forClass(WorkflowStepDataEntity.class);
@@ -547,7 +550,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             ArgumentCaptor<WorkflowStepDataEntity> entityCaptor =
                     ArgumentCaptor.forClass(WorkflowStepDataEntity.class);
@@ -573,7 +576,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             service.recordSkippedNode(
                     execution,
@@ -608,7 +611,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             service.recordSkippedNode(
                     execution,
@@ -621,7 +624,7 @@ class SkippedNodePersistenceServiceTest {
                     realTriggerId);
 
             ArgumentCaptor<Map> payloadCaptor = ArgumentCaptor.forClass(Map.class);
-            verify(stepPayloadService).persistSkippedNodePayload(eq("tenant-1"), payloadCaptor.capture(), eq(1));
+            verify(stepPayloadService).persistSkippedNodePayload(eq("tenant-1"), payloadCaptor.capture(), eq(1), any());
 
             @SuppressWarnings("unchecked")
             Map<String, Object> output = (Map<String, Object>) payloadCaptor.getValue().get("output");
@@ -650,7 +653,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             // nativeRepository.insertIgnoringDuplicate already set to return true
 
@@ -679,7 +682,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             // nativeRepository.insertIgnoringDuplicate already set to return true
 
@@ -716,7 +719,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             ArgumentCaptor<WorkflowStepDataEntity> entityCaptor =
                     ArgumentCaptor.forClass(WorkflowStepDataEntity.class);
@@ -744,7 +747,7 @@ class SkippedNodePersistenceServiceTest {
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(plan.getId()).thenReturn("workflow-1");
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
-            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt(), any())).thenReturn(storageId);
 
             // nativeRepository.insertIgnoringDuplicate already set to return true
 

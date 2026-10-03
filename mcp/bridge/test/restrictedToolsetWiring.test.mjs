@@ -14,8 +14,10 @@ import { dirname, resolve } from 'path';
 
 const server = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../server.mjs'), 'utf8');
 
-test('server derives restrictedToolset from the credentials map (not a top-level DTO field)', () => {
-  assert.match(server, /const\s+restrictedToolset\s*=\s*!!\(credentials\s*&&\s*credentials\.__restrictedToolset__\s*===\s*true\)/);
+test('server derives restrictedToolset from the verified gateway channel + the credentials map (LC-022: restricted by default)', () => {
+  // The body claim still lives in the credentials map (not a top-level DTO field), but it can
+  // only tighten; widening needs a verified signature (see bridgeGatewayAuth.test.mjs).
+  assert.match(server, /const\s+restrictedToolset\s*=\s*resolveRestrictedToolset\(req\.gatewayAuth,\s*credentials\)/);
 });
 
 test('server forwards restrictedToolset into executeViaCli', () => {

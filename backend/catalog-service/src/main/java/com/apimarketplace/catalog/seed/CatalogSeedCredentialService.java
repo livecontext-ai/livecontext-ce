@@ -144,6 +144,28 @@ public class CatalogSeedCredentialService {
     public void linkCredentials(UUID apiId, String credentialName, String authType, String iconSlug,
                                 String iconUrl, ApiKeyConfig apiKeyConfig,
                                 com.fasterxml.jackson.databind.JsonNode oauth2Config) {
+        linkCredentials(apiId, credentialName, authType, iconSlug, iconUrl, apiKeyConfig, oauth2Config,
+                null, false);
+    }
+
+    /** Metadata key recording which user's custom API created a template (LC-057). */
+    public static final String CUSTOM_API_OWNER_KEY = "customApiOwner";
+
+    /**
+     * The custom-API variant (LC-002 / LC-057, CASA readiness).
+     *
+     * @param customOwner          the {@code created_by} of the custom API. The template is stamped
+     *                             with it, and an EXISTING template is updated only when it is this
+     *                             owner's (custom-written, same or no stamp); a native, seeded,
+     *                             imported or another owner's template is never modified.
+     * @param reuseForeignTemplate when the existing template is not the owner's: {@code true} links
+     *                             the tools to it untouched (only for an update of an API that
+     *                             already held that key), {@code false} refuses the registration.
+     */
+    public void linkCredentials(UUID apiId, String credentialName, String authType, String iconSlug,
+                                String iconUrl, ApiKeyConfig apiKeyConfig,
+                                com.fasterxml.jackson.databind.JsonNode oauth2Config,
+                                String customOwner, boolean reuseForeignTemplate) {
         if (credentialName == null || credentialName.isBlank()) {
             log.debug("No credential name for API {}, skipping credential linking", apiId);
             return;
@@ -167,11 +189,13 @@ public class CatalogSeedCredentialService {
 
         String properties = buildPropertiesJson(authType, apiKeyConfig);
         String displayName = buildDisplayName(credentialName);
-        String metadata = buildCredentialMetadata(oauth2Config, apiKeyConfig);
+        String metadata = buildCredentialMetadata(oauth2Config, apiKeyConfig, customOwner);
 
         // Upsert credential schema
-        UUID credentialId = upsertCredential(credentialName, displayName, authType, properties, iconSlug,
-                iconUrl, metadata);
+        UUID credentialId = customOwner == null
+                ? upsertCredential(credentialName, displayName, authType, properties, iconSlug, iconUrl, metadata)
+                : upsertOwnedCredential(credentialName, displayName, authType, properties, iconSlug, iconUrl,
+                        metadata, customOwner, reuseForeignTemplate);
 
         // Link all tools for this API
         List<ApiToolEntity> tools = apiToolRepository.findByApiId(apiId);
@@ -211,6 +235,52 @@ public class CatalogSeedCredentialService {
                 credentialName, displayName, authType, properties, iconSlug, iconUrl, metadata);
     }
 
+    /**
+     * Upsert that can only ever touch the owner's own template. The ON CONFLICT update carries a
+     * WHERE: a conflicting row that is native/seeded/imported (credential_type set, or a
+     * provider/category/source marker) or stamped by another owner is left exactly as it is, the
+     * statement returns no id, and the caller either reuses it untouched or is refused.
+     */
+    private UUID upsertOwnedCredential(String credentialName, String displayName, String authType,
+                                       String properties, String iconSlug, String iconUrl, String metadata,
+                                       String owner, boolean reuseForeignTemplate) {
+        String sql = """
+                INSERT INTO catalog.credentials (credential_name, variant, display_name, auth_type, properties, icon_slug, icon_url, metadata, created_at, updated_at)
+                VALUES (?, 'primary', ?, ?, ?::jsonb, ?, ?, ?::jsonb, EXTRACT(EPOCH FROM NOW()) * 1000, EXTRACT(EPOCH FROM NOW()) * 1000)
+                ON CONFLICT (credential_name, variant) DO UPDATE
+                SET display_name = EXCLUDED.display_name,
+                    auth_type = EXCLUDED.auth_type,
+                    properties = EXCLUDED.properties,
+                    icon_slug = EXCLUDED.icon_slug,
+                    icon_url = EXCLUDED.icon_url,
+                    metadata = catalog.credentials.metadata || EXCLUDED.metadata,
+                    updated_at = EXTRACT(EPOCH FROM NOW()) * 1000
+                WHERE catalog.credentials.credential_type IS NULL
+                  AND catalog.credentials.metadata ->> 'provider' IS NULL
+                  AND catalog.credentials.metadata ->> 'category' IS NULL
+                  AND catalog.credentials.metadata ->> 'source' IS NULL
+                  AND COALESCE(catalog.credentials.metadata ->> 'customApiOwner', ?) = ?
+                RETURNING id
+                """;
+        List<UUID> ids = jdbcTemplate.queryForList(sql, UUID.class,
+                credentialName, displayName, authType, properties, iconSlug, iconUrl, metadata, owner, owner);
+        if (!ids.isEmpty()) {
+            return ids.get(0);
+        }
+        if (reuseForeignTemplate) {
+            List<UUID> existing = jdbcTemplate.queryForList(
+                    "SELECT id FROM catalog.credentials WHERE credential_name = ? ORDER BY created_at LIMIT 1",
+                    UUID.class, credentialName);
+            if (!existing.isEmpty()) {
+                log.warn("Credential template '{}' is not owned by {}: tools linked to it untouched", credentialName, owner);
+                return existing.get(0);
+            }
+        }
+        throw new IllegalArgumentException("The credential key '" + credentialName + "' is already in use on this "
+                + "installation, and registering over it would change the credential of whatever holds it. "
+                + "Choose a different apiName, or set iconSlug to a distinct value.");
+    }
+
     private void linkToolCredential(UUID toolId, UUID credentialId, String credentialName, String authType,
                                     ApiKeyConfig apiKeyConfig) {
         String metadata = buildInjectionMetadata(authType, apiKeyConfig);
@@ -232,24 +302,41 @@ public class CatalogSeedCredentialService {
     }
 
     /**
-     * Delete the credential template and associated tool_credentials by name.
-     * tool_credentials.credential_id FK is ON DELETE SET NULL, so deleting
-     * the credentials row would leave orphaned tool_credentials rows. We
-     * explicitly delete them first by credential_name.
+     * Delete ONE API's credential links, and the credential template only once nothing links it
+     * any more.
+     *
+     * <p>LC-057 (CASA readiness): this used to be {@code DELETE ... WHERE credential_name = ?} on
+     * both tables, with no API scoping, driven by a key a tenant can choose. A custom API sharing
+     * a key with another integration therefore removed that integration's tool links for EVERY
+     * tenant on the installation when it was deleted or updated. The links are now addressed
+     * through this API's own tools, and the template (which has no tenant or API column) is only
+     * removed when no link of any API still references it.
+     *
+     * <p>No variant filter, deliberately: ownership, not variant, is the question, and the caller
+     * answers it before calling. Must run BEFORE the API's tools are deleted (their links cascade
+     * with them, and this method finds them through the tools).
      */
-    public void deleteCredentialByName(String credentialName) {
-        if (credentialName == null || credentialName.isBlank()) return;
-        // No variant filter, deliberately. Filtering on 'primary' looks protective and is not:
-        // the native templates actually at risk (imap, smtp) are THEMSELVES 'primary', so it
-        // guarded nothing, while it stopped removing a custom API's own credential when that row
-        // predates V103 and therefore sits under its auth type rather than 'primary'. Ownership,
-        // not variant, is the question, and the caller answers it before calling.
+    public void deleteCredentialsForApi(UUID apiId, String credentialName) {
+        if (apiId == null || credentialName == null || credentialName.isBlank()) return;
         int toolCredDeleted = jdbcTemplate.update(
-                "DELETE FROM catalog.tool_credentials WHERE credential_name = ?", credentialName);
+                "DELETE FROM catalog.tool_credentials WHERE credential_name = ? "
+                        + "AND api_tool_id IN (SELECT t.id FROM catalog.api_tools t WHERE t.api_id = ?)",
+                credentialName, apiId);
+        // Defence in depth on top of the caller's ownership check: a native, seeded, imported or
+        // bundle-applied template (credential_type set, or a provider/category/source marker) is
+        // never deleted from here, whatever the caller concluded.
         int deleted = jdbcTemplate.update(
-                "DELETE FROM catalog.credentials WHERE credential_name = ?", credentialName);
+                "DELETE FROM catalog.credentials c WHERE c.credential_name = ? "
+                        + "AND c.credential_type IS NULL "
+                        + "AND c.metadata ->> 'provider' IS NULL "
+                        + "AND c.metadata ->> 'category' IS NULL "
+                        + "AND c.metadata ->> 'source' IS NULL "
+                        + "AND NOT EXISTS (SELECT 1 FROM catalog.tool_credentials tc "
+                        + "WHERE tc.credential_name = c.credential_name)",
+                credentialName);
         if (deleted > 0 || toolCredDeleted > 0) {
-            log.info("Deleted credential template '{}' ({} tool_credentials removed)", credentialName, toolCredDeleted);
+            log.info("Deleted credential links of API {} for '{}' ({} tool_credentials, {} template)",
+                    apiId, credentialName, toolCredDeleted, deleted);
         }
     }
 
@@ -396,8 +483,11 @@ public class CatalogSeedCredentialService {
      * 176 catalogue APIs that authenticate the same way.
      */
     private String buildCredentialMetadata(com.fasterxml.jackson.databind.JsonNode oauth2Config,
-                                          ApiKeyConfig apiKeyConfig) {
+                                          ApiKeyConfig apiKeyConfig, String customOwner) {
         ObjectNode metadata = JSON.createObjectNode();
+        if (customOwner != null && !customOwner.isBlank()) {
+            metadata.put(CUSTOM_API_OWNER_KEY, customOwner);
+        }
         if (oauth2Config != null && oauth2Config.isObject() && !oauth2Config.isEmpty()) {
             metadata.set("oauth2Config", oauth2Config.deepCopy());
         }

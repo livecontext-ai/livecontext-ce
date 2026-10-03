@@ -182,10 +182,12 @@ class CatalogSeedCredentialServiceTest {
         // protected nothing, while it stopped removing a custom API's own row when that row
         // predates V103 and sits under its auth type. Ownership is the right question and the
         // CALLER answers it before calling, so this stays a plain delete by name.
-        service.deleteCredentialByName("myapi");
+        UUID apiId = UUID.randomUUID();
+        service.deleteCredentialsForApi(apiId, "myapi");
 
         ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
-        verify(jdbcTemplate, times(2)).update(sqlCaptor.capture(), eq("myapi"));
+        verify(jdbcTemplate).update(sqlCaptor.capture(), eq("myapi"), eq(apiId));
+        verify(jdbcTemplate).update(sqlCaptor.capture(), eq("myapi"));
         for (String sql : sqlCaptor.getAllValues()) {
             assertFalse(sql.contains("variant"),
                     "a variant filter here guards nothing and orphans pre-V103 rows: " + sql);
@@ -546,25 +548,46 @@ class CatalogSeedCredentialServiceTest {
     }
 
     @Test
-    @DisplayName("should delete tool_credentials and credential by name")
-    void shouldDeleteCredentialByName() {
-        when(jdbcTemplate.update(contains("DELETE FROM catalog.tool_credentials"), eq("myapi")))
+    @DisplayName("deletes this API's links first, then the template only if unreferenced")
+    void shouldDeleteCredentialsForApi() {
+        UUID apiId = UUID.randomUUID();
+        when(jdbcTemplate.update(contains("DELETE FROM catalog.tool_credentials"), eq("myapi"), eq(apiId)))
                 .thenReturn(3);
         when(jdbcTemplate.update(contains("DELETE FROM catalog.credentials"), eq("myapi")))
                 .thenReturn(1);
 
-        service.deleteCredentialByName("myapi");
+        service.deleteCredentialsForApi(apiId, "myapi");
 
-        // Verify tool_credentials deleted first, then credentials template
         var inOrder = inOrder(jdbcTemplate);
-        inOrder.verify(jdbcTemplate).update(contains("DELETE FROM catalog.tool_credentials"), eq("myapi"));
+        inOrder.verify(jdbcTemplate).update(contains("DELETE FROM catalog.tool_credentials"), eq("myapi"), eq(apiId));
         inOrder.verify(jdbcTemplate).update(contains("DELETE FROM catalog.credentials"), eq("myapi"));
     }
 
     @Test
-    @DisplayName("should skip delete when credential name is null")
+    @DisplayName("regression LC-057: neither delete is global by credential name")
+    void deletesAreScopedToTheApi() {
+        // Pre-fix: DELETE FROM catalog.tool_credentials WHERE credential_name = ? and the same on
+        // catalog.credentials, so a custom API sharing the 'gmail' key removed the real Gmail
+        // integration's links for every tenant.
+        UUID apiId = UUID.randomUUID();
+        service.deleteCredentialsForApi(apiId, "gmail");
+
+        ArgumentCaptor<String> linkSql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).update(linkSql.capture(), eq("gmail"), eq(apiId));
+        assertTrue(linkSql.getValue().contains("api_tool_id IN (SELECT t.id FROM catalog.api_tools t WHERE t.api_id = ?)"),
+                "link delete must be scoped to this API's tools: " + linkSql.getValue());
+
+        ArgumentCaptor<String> templateSql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).update(templateSql.capture(), eq("gmail"));
+        assertTrue(templateSql.getValue().contains("NOT EXISTS"),
+                "the shared template must survive while another API still links it: " + templateSql.getValue());
+    }
+
+    @Test
+    @DisplayName("should skip delete when credential name or api id is null")
     void shouldSkipDeleteWhenNull() {
-        service.deleteCredentialByName(null);
+        service.deleteCredentialsForApi(UUID.randomUUID(), null);
+        service.deleteCredentialsForApi(null, "myapi");
         verifyNoInteractions(jdbcTemplate);
     }
 

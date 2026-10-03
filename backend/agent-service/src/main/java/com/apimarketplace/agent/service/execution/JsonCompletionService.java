@@ -132,6 +132,7 @@ public class JsonCompletionService {
         // A blank pair is not linkable and not dispatchable: hand it to the invoker, which
         // rejects it with its own explicit error, as this endpoint always has.
         if (isBlank(billedProvider) || isBlank(billedModel)) {
+            RestrictedDataRouting.apply(request.dataSensitivity(), billedProvider, null);
             // Unbillable by construction: with no (provider, model) there is no price to
             // apply. The invoker rejects it with its own explicit error, as it always has.
             return extract(jsonInvoker.invoke(billedProvider, billedModel,
@@ -143,6 +144,9 @@ public class JsonCompletionService {
         // into null, i.e. the billed pair on its own provider.
         ModelExecutionLinkService.ExecutionRoute route =
             executionLinkRouter.runnableRoute(billedProvider, billedModel, null);
+        // LC-004: a summary of a conversation holding Gmail / Drive content only runs on an
+        // allow-listed provider, judged on the one the link would actually send it to.
+        route = RestrictedDataRouting.apply(request.dataSensitivity(), billedProvider, route);
         String execProvider = route != null ? route.executionProvider() : billedProvider;
         String execModel = route != null ? route.executionModel() : billedModel;
 

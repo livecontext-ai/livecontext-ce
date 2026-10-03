@@ -5,7 +5,7 @@ import { getClientLocale } from '@/lib/utils/locale';
 import { displayZoneFor, parseUtcAware } from '@/lib/utils/dateFormatters';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { CalendarDays, LayoutGrid, MessageCircle, Sparkles } from 'lucide-react';
+import { CalendarDays, LayoutGrid, MessageCircle } from 'lucide-react';
 import { unifiedApiService } from '@/lib/api/unified-api-service';
 import { orchestratorApi } from '@/lib/api';
 import { dmApi } from '@/lib/api/dm-api';
@@ -191,7 +191,7 @@ export default function ProfileContent({ handle }: ProfileContentProps) {
             {profile.joinedAt &&
               (isFounderMember(profile.joinedAt) ? (
                 <span className="inline-flex items-center gap-1 font-medium text-theme-primary">
-                  <Sparkles className="h-3 w-3 text-[var(--accent-primary)]" aria-hidden="true" />
+                  <CalendarDays className="h-3 w-3" />
                   {t('founderMemberSince')} {formatJoined(profile.joinedAt)}
                 </span>
               ) : (

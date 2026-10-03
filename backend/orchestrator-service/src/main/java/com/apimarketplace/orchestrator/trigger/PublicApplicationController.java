@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.trigger;
 
 import com.apimarketplace.common.web.ContentDispositions;
+import com.apimarketplace.common.web.SafeFileServeHeaders;
 import com.apimarketplace.orchestrator.services.InterfaceRenderService.InterfaceRenderResult;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -195,9 +196,12 @@ public class PublicApplicationController {
             // Extract filename from key (last segment after /)
             String fileName = key.contains("/") ? key.substring(key.lastIndexOf('/') + 1) : key;
 
-            return ResponseEntity.ok()
+            // Anonymous share-token route serving user/AI supplied files: active types download,
+            // nosniff + sandboxed (LC-016 sibling).
+            return SafeFileServeHeaders.applyTo(ResponseEntity.ok(), mimeType)
                     .header(HttpHeaders.CONTENT_TYPE, mimeType)
-                    .header(HttpHeaders.CONTENT_DISPOSITION, ContentDispositions.inline(fileName))
+                    .header(HttpHeaders.CONTENT_DISPOSITION, ContentDispositions.of(
+                            SafeFileServeHeaders.dispositionType(mimeType, true), fileName))
                     .header(HttpHeaders.CACHE_CONTROL, "public, max-age=3600")
                     .body(content);
         } catch (IllegalArgumentException e) {

@@ -154,7 +154,7 @@ describe('the selected run', () => {
     const f = fake({ argv: ['--shard=2/2'], selected: ['components/a/__tests__/A.test.tsx'] });
     expect(await run(f.deps)).toBe(0);
     expect(f.calls.spawn).toEqual([]);
-    expect(f.logs.join()).toContain('the other shard runs the whole selection');
+    expect(f.logs.join()).toContain('the other shards run the whole selection');
   });
 
   it('a failed file fails the shard, even if vitest exited 0', async () => {

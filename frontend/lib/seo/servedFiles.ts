@@ -25,11 +25,12 @@
  * disk and fails when the two disagree, which is what keeps the rot a CI
  * failure instead of a file that silently 404s.
  *
- * <p><strong>`/.well-known/*` is refused, which includes `acme-challenge`.</strong>
- * This deployment serves nothing there: TLS terminates upstream on both the
- * cloud ingress and the edge, so no HTTP-01 challenge ever reaches Next, and CE
- * disallows the whole site to crawlers anyway. A self-hoster who put Next
- * directly in front of an HTTP-01 issuer would need an entry here.
+ * <p><strong>`/.well-known/*` is refused, which includes `acme-challenge`,
+ * except the files named in PUBLIC_WELL_KNOWN_FILES</strong> (security.txt,
+ * RFC 9116). TLS terminates upstream on both the cloud ingress and the edge, so
+ * no HTTP-01 challenge ever reaches Next, and CE disallows the whole site to
+ * crawlers anyway. A self-hoster who put Next directly in front of an HTTP-01
+ * issuer would need an entry here.
  */
 import { SITEMAP_PATHS } from './sitemaps';
 
@@ -69,6 +70,15 @@ export const PUBLIC_ROOT_FILES = [
   '4ad6f065a0c6c00ee09d73874348013f.txt',
   'og-image.jpg',
   'widget-demo.html',
+] as const;
+
+/**
+ * Files under `public/.well-known/`, matched WHOLE (never the directory as a
+ * prefix: that would wave every ACME and devtools probe through again).
+ */
+export const PUBLIC_WELL_KNOWN_FILES = [
+  // RFC 9116 security contact; its Policy points at the /security page.
+  '/.well-known/security.txt',
 ] as const;
 
 /**
@@ -113,6 +123,7 @@ function isFrameworkPath(pathname: string): boolean {
 export function isServedFilePath(pathname: string): boolean {
   if (isFrameworkPath(pathname)) return true;
   if (METADATA_ROUTES.includes(pathname)) return true;
+  if ((PUBLIC_WELL_KNOWN_FILES as readonly string[]).includes(pathname)) return true;
 
   const segments = pathname.split('/').filter(Boolean);
   if (segments.length === 0) return false;

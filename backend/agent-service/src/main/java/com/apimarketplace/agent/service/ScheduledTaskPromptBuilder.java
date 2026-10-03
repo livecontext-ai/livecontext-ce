@@ -3,6 +3,7 @@ package com.apimarketplace.agent.service;
 import com.apimarketplace.agent.domain.AgentTaskEntity;
 import com.apimarketplace.agent.repository.AgentRepository;
 import com.apimarketplace.agent.repository.AgentTaskRepository;
+import com.apimarketplace.agent.tools.agent.AgentDelegationModule;
 import com.apimarketplace.common.web.TenantResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -105,10 +107,7 @@ public class ScheduledTaskPromptBuilder {
             sb.append("## Tasks assigned to you (").append(inbox.size())
               .append(") - YOUR ROLE: assignee (do the work)\n");
             for (AgentTaskEntity t : inbox) {
-                sb.append("- [").append(t.getPriority()).append("] ")
-                  .append(t.getTitle())
-                  .append(" (id=").append(t.getId())
-                  .append(", status=").append(t.getStatus()).append(")\n");
+                appendTaskLine(sb, t, true, OPEN_INBOX_TASK);
             }
             sb.append('\n');
         }
@@ -117,9 +116,7 @@ public class ScheduledTaskPromptBuilder {
             sb.append("## Tasks awaiting your review (").append(reviewInbox.size())
               .append(") - YOUR ROLE: reviewer (judge someone else's work - do NOT call task_complete)\n");
             for (AgentTaskEntity t : reviewInbox) {
-                sb.append("- [").append(t.getPriority()).append("] ")
-                  .append(t.getTitle())
-                  .append(" (id=").append(t.getId()).append(")\n");
+                appendTaskLine(sb, t, false, OPEN_REVIEW_TASK);
             }
             sb.append('\n');
         }
@@ -127,9 +124,7 @@ public class ScheduledTaskPromptBuilder {
         if (!backlog.isEmpty()) {
             sb.append("## Backlog (").append(backlog.size()).append(" unassigned, any agent may claim)\n");
             for (AgentTaskEntity t : backlog) {
-                sb.append("- [").append(t.getPriority()).append("] ")
-                  .append(t.getTitle())
-                  .append(" (id=").append(t.getId()).append(")\n");
+                appendTaskLine(sb, t, false, OPEN_BACKLOG_TASK);
             }
             sb.append('\n');
         }
@@ -158,5 +153,38 @@ public class ScheduledTaskPromptBuilder {
                 agentId, inbox.size(), reviewInbox.size(), backlog.size(),
                 fallback == null ? 0 : fallback.length());
         return sb.toString();
+    }
+
+    /** The single-task reads that open one task of each section (the same calls the tool listings name). */
+    static final String OPEN_INBOX_TASK = "agent(action='inbox', task_id='<id>')";
+    static final String OPEN_REVIEW_TASK = "agent(action='task_get_context', task_id='<id>')";
+    static final String OPEN_BACKLOG_TASK = "agent(action='claim', task_id='<id>')";
+
+    /**
+     * One task line of the wake-up prompt. LC-066: this prompt is an untagged turn of the agent's
+     * own conversation, on whatever provider the agent runs, so a RESTRICTED task (its title may
+     * quote an email) is rendered exactly as the tool listings render it
+     * ({@link AgentDelegationModule#withheldListingEntry}): id, priority, the restricted marker and
+     * the call that opens it, never its title.
+     */
+    private static void appendTaskLine(StringBuilder sb, AgentTaskEntity t, boolean withStatus, String openWith) {
+        if (t.holdsRestrictedData()) {
+            Map<String, Object> entry = AgentDelegationModule.withheldListingEntry(t, openWith);
+            sb.append("- [").append(entry.get("priority")).append("] (title withheld)")
+              .append(" (id=").append(entry.get("id"));
+            if (withStatus) {
+                sb.append(", status=").append(entry.get("status"));
+            }
+            sb.append(", restricted=").append(entry.get("restricted")).append(") ")
+              .append(entry.get("note")).append('\n');
+            return;
+        }
+        sb.append("- [").append(t.getPriority()).append("] ")
+          .append(t.getTitle())
+          .append(" (id=").append(t.getId());
+        if (withStatus) {
+            sb.append(", status=").append(t.getStatus());
+        }
+        sb.append(")\n");
     }
 }

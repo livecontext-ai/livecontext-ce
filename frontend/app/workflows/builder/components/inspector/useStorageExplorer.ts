@@ -7,6 +7,25 @@ import {
   type ExplorerSortKey,
   type ExplorerSortDirection,
 } from '@/lib/api/storage-api';
+import { FILE_TYPE_CATEGORIES } from '@/lib/files/fileTypes';
+import { useEffectOnChange } from '@/hooks/useEffectOnChange';
+import {
+  urlEnum,
+  urlInt,
+  urlPageIndex,
+  useUrlState,
+  type UrlStateCodec,
+} from '@/hooks/useUrlState';
+
+const SORT_KEYS: readonly ExplorerSortKey[] = ['date', 'name', 'size', 'type'];
+const SORT_DIRECTIONS: readonly ExplorerSortDirection[] = ['asc', 'desc'];
+const FILE_TYPE_VALUES: readonly string[] = ['_all', ...FILE_TYPE_CATEGORIES];
+
+/** A source / storage type as the server names them (`STEP_OUTPUT`): the address is user input. */
+const urlTypeToken: UrlStateCodec<string> = {
+  parse: (raw) => (/^[A-Z][A-Z0-9_]*$/.test(raw) ? raw : undefined),
+  serialize: (value) => value,
+};
 
 interface UseStorageExplorerReturn {
   entries: StorageExplorerEntry[];
@@ -72,6 +91,11 @@ interface UseStorageExplorerReturn {
  * `options.virtualWorkflowFolders` (Phase 2b) additionally opts into the computed
  * VIRTUAL workflow folder tree (workflow → epoch → spawn → iteration) - the same
  * {@code parentFolderId} channel carries the virtual {@code "wf:…"} navigation keys.
+ * `options.urlState` mirrors the listing's view in the page's query string (`page`, `size`,
+ * `source`, `storage`, `type`, `sort`, `dir`) so a reload reopens it as it was. Only the
+ * full-page Files browser turns it on: the inspector and the pickers are embedded in someone
+ * else's page and must not own its address. The seeds then act as the defaults, spelled by
+ * absence. Search and the date range stay with the caller, which holds the form they are typed in.
  */
 export function useStorageExplorer(
   workflowId?: string,
@@ -90,30 +114,57 @@ export function useStorageExplorer(
     /** Ordering to start with - the Files page seeds it from the URL / the saved preference. */
     initialSort?: ExplorerSortKey;
     initialDirection?: ExplorerSortDirection;
+    /** ISO instants to start the date range with (the caller restoring it from the URL). */
+    initialDateFrom?: string;
+    initialDateTo?: string;
+    /** True to keep the view in the page's query string. See the hook's doc. */
+    urlState?: boolean;
   },
 ): UseStorageExplorerReturn {
   const filesOnly = options?.filesOnly ?? false;
   const s3Only = options?.s3Only ?? false;
   const folderAware = options?.folderAware ?? false;
   const virtualWorkflowFolders = options?.virtualWorkflowFolders ?? false;
+  const urlState = options?.urlState ?? false;
   const [entries, setEntries] = useState<StorageExplorerEntry[]>([]);
   const [totalElements, setTotalElements] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
-  const [currentPage, setCurrentPage] = useState(options?.initialPage ?? 0);
-  const [pageSize, setPageSize] = useState(options?.pageSize ?? 20);
+  const [currentPage, setCurrentPage] = useUrlState('page', options?.initialPage ?? 0, {
+    codec: urlPageIndex,
+    enabled: urlState,
+  });
+  const [pageSize, setPageSize] = useUrlState('size', options?.pageSize ?? 20, {
+    codec: urlInt(1, 100),
+    enabled: urlState,
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState(options?.initialSearch ?? '');
-  const [sourceTypeFilter, setSourceTypeFilter] = useState(sourceTypeDefault ?? '');
-  const [storageTypeFilter, setStorageTypeFilter] = useState(storageTypeDefault ?? '');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [fileType, setFileType] = useState('_all');
+  const [sourceTypeFilter, setSourceTypeFilter] = useUrlState('source', sourceTypeDefault ?? '', {
+    codec: urlTypeToken,
+    enabled: urlState,
+  });
+  const [storageTypeFilter, setStorageTypeFilter] = useUrlState('storage', storageTypeDefault ?? '', {
+    codec: urlTypeToken,
+    enabled: urlState,
+  });
+  const [dateFrom, setDateFrom] = useState(options?.initialDateFrom ?? '');
+  const [dateTo, setDateTo] = useState(options?.initialDateTo ?? '');
+  const [fileType, setFileType] = useUrlState<string>('type', '_all', {
+    codec: urlEnum(FILE_TYPE_VALUES),
+    enabled: urlState,
+  });
   // V313: null = root, UUID = a folder. Undefined when not folder-aware (the
   // legacy flat listing - never send the param). Seeded to root in folder mode.
   const [parentFolderId, setParentFolderId] = useState<string | null>(options?.initialFolderId ?? null);
-  const [sort, setSortKey] = useState<ExplorerSortKey>(options?.initialSort ?? 'date');
-  const [direction, setDirection] = useState<ExplorerSortDirection>(options?.initialDirection ?? 'desc');
+  const [sort, setSortKey] = useUrlState<ExplorerSortKey>('sort', options?.initialSort ?? 'date', {
+    codec: urlEnum(SORT_KEYS),
+    enabled: urlState,
+  });
+  const [direction, setDirection] = useUrlState<ExplorerSortDirection>('dir', options?.initialDirection ?? 'desc', {
+    codec: urlEnum(SORT_DIRECTIONS),
+    enabled: urlState,
+  });
   const abortRef = useRef<AbortController | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -155,13 +206,18 @@ export function useStorageExplorer(
       setEntries(Array.isArray(result.content) ? result.content : []);
       setTotalElements(result.totalElements ?? 0);
       setTotalPages(result.totalPages ?? 0);
+      // A page past the end (a link kept from before files were deleted, the last file of the
+      // last page removed) comes back empty: step back to the last page that exists. Decided on
+      // the answer, never on the counts held in state, which are 0 until the first one arrives.
+      const lastPage = (result.totalPages ?? 0) - 1;
+      if (lastPage >= 0 && currentPage > lastPage) setCurrentPage(lastPage);
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Failed to load storage data');
     } finally {
       setLoading(false);
     }
-  }, [currentPage, pageSize, search, sourceTypeFilter, storageTypeFilter, workflowId, dateFrom, dateTo, fileType, filesOnly, s3Only, folderAware, virtualWorkflowFolders, parentFolderId, sort, direction]);
+  }, [currentPage, pageSize, search, sourceTypeFilter, storageTypeFilter, workflowId, dateFrom, dateTo, fileType, filesOnly, s3Only, folderAware, virtualWorkflowFolders, parentFolderId, sort, direction, setCurrentPage]);
 
   useEffect(() => {
     fetchData();
@@ -175,13 +231,15 @@ export function useStorageExplorer(
   // Reset page when filters or page size change - search/sort/type all re-query
   // the full DB set and re-paginate (never narrow the already-loaded page).
   // Entering/leaving a folder (parentFolderId) likewise re-paginates from page 0.
-  useEffect(() => {
+  // Not for the values the hook mounted with: that would wipe the page it was seeded with
+  // (`initialPage`, or the one the address asked for).
+  useEffectOnChange(() => {
     setCurrentPage(0);
   }, [search, sourceTypeFilter, storageTypeFilter, workflowId, dateFrom, dateTo, fileType, pageSize, parentFolderId, sort, direction]);
 
   const setPage = useCallback((page: number) => {
     setCurrentPage(page);
-  }, []);
+  }, [setCurrentPage]);
 
   // V313: enter a folder (or return to root). No-op effect on the param when the
   // caller isn't folder-aware (it just won't be sent), but we still track state so
@@ -196,7 +254,7 @@ export function useStorageExplorer(
   const setSort = useCallback((key: ExplorerSortKey, dir: ExplorerSortDirection) => {
     setSortKey(key);
     setDirection(dir);
-  }, []);
+  }, [setSortKey, setDirection]);
 
   return {
     entries,

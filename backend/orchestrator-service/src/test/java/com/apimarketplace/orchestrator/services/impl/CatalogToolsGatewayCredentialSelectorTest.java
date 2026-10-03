@@ -201,14 +201,17 @@ class CatalogToolsGatewayCredentialSelectorTest {
 
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getErrorMessage()).contains("table operation");
+        // Both overloads: the gateway calls the 4-argument one (it forwards the run markers).
         verify(crudToolExecutor, never()).execute(anyString(), anyMap(), anyString());
+        verify(crudToolExecutor, never()).execute(anyString(), anyMap(), anyString(), any());
     }
 
     @Test
     @DisplayName("an ordinary table operation is untouched by any of this")
     void ordinaryCrudStillRuns() {
         // The no-regression half: every table step today takes this branch.
-        when(crudToolExecutor.execute(anyString(), anyMap(), anyString()))
+        // The gateway forwards the run markers, so the table step goes through the 4-argument overload.
+        when(crudToolExecutor.execute(anyString(), anyMap(), anyString(), any()))
                 .thenReturn(new com.apimarketplace.orchestrator.services.interfaces.ExecutionResult(
                         true, Map.of("rows", List.of()), List.of(), List.of()));
 

@@ -267,7 +267,7 @@ export function renderCliHealthMetrics({ clis, state, managed, probeAgeSeconds =
   }
 
   // 0 unless PROVEN true: a CLI we could not prove current is treated as behind.
-  lines.push('# HELP lc_cli_update_up_to_date Installed version equals the latest published version (1=proven current, 0=behind or unknown)');
+  lines.push('# HELP lc_cli_update_up_to_date Installed version equals the version pinned in agent-cli-versions.txt (1=on the pin, 0=off the pin or unknown)');
   lines.push('# TYPE lc_cli_update_up_to_date gauge');
   for (const cli of managed) {
     lines.push(`lc_cli_update_up_to_date{cli="${escapeLabelValue(cli)}"} ${boolGauge(state.update?.[cli]?.upToDate)}`);

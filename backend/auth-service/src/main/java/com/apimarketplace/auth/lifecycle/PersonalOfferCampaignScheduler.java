@@ -204,7 +204,8 @@ public class PersonalOfferCampaignScheduler {
         LifecycleEmailService.Dispatch dispatch = email.submitPersonalOffer(userId, event, locale -> Map.of(
                 "code", issued.code(),
                 "expires_at", PersonalOfferEmailContent.expiry(issued.expiresAt(), locale),
-                "terms", PersonalOfferEmailContent.terms(policy, matrix, locale)),
+                "terms", PersonalOfferEmailContent.terms(policy, matrix, locale),
+                "headline", PersonalOfferEmailContent.headline(matrix, locale)),
                 () -> {
                     Instant at = clock.instant().truncatedTo(ChronoUnit.MICROS);
                     if (!at.isBefore(latest) || !eligibleForEmail(userId, issued, at)) return false;

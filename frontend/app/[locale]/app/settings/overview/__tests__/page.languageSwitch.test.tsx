@@ -21,8 +21,12 @@ vi.mock('@/i18n/navigation', () => ({
   useRouter: () => ({ push, replace: vi.fn(), refresh: vi.fn() }),
   usePathname: () => '/app/settings/overview',
 }));
+// One stable object, as Next hands out. The tab is read from it through useUrlState, which
+// also needs the pathname.
+const searchParams = vi.hoisted(() => new URLSearchParams('tab=preferences'));
 vi.mock('next/navigation', () => ({
-  useSearchParams: () => new URLSearchParams('tab=preferences'),
+  useSearchParams: () => searchParams,
+  usePathname: () => '/en/app/settings/overview',
 }));
 vi.mock('next-intl', () => ({
   useLocale: () => 'en',

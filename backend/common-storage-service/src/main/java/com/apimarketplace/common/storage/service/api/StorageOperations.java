@@ -60,6 +60,23 @@ public interface StorageOperations {
     }
 
     /**
+     * Saves JSON data with full context and a sensitivity tag. A RESTRICTED payload always gets a
+     * bounded expiry (LC-011). No default body: an implementation that ignored the tag would
+     * silently store restricted data forever.
+     */
+    UUID saveJsonWithContext(String tenantId, Object data, String contentType, Instant expiresAt,
+                             UUID toolId, String runId, String stepKey, Integer itemIndex, int epoch,
+                             int spawn, String workflowId, String sourceType,
+                             com.apimarketplace.common.classification.DataSensitivity sensitivity);
+
+    /**
+     * Tags existing rows RESTRICTED and bounds their expiry (only ever earlier).
+     *
+     * @return rows tagged
+     */
+    int markRestricted(String tenantId, Collection<UUID> ids, Instant expiresAt);
+
+    /**
      * Sauvegarde des donnees binaires.
      */
     UUID saveBinary(String tenantId, byte[] data, String fileName, String mimeType, Instant expiresAt);

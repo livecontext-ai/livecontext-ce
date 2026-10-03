@@ -16,7 +16,8 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/auth/email")
-@CrossOrigin(origins = "*")
+// No @CrossOrigin (LC-033): CORS is decided centrally (gateway CorsConfig). A per-controller
+// wildcard would widen the origin set for any request reaching this service directly.
 public class EmailVerificationController {
 
     private static final Logger logger = LoggerFactory.getLogger(EmailVerificationController.class);

@@ -246,6 +246,25 @@ public class NotificationIncidentStore {
                 Timestamp.from(now), Timestamp.from(lastFailureBefore));
     }
 
+    /**
+     * Closes, WITHOUT a message, every open incident of a workflow its owner just stopped
+     * (a schedule paused or deleted, the production run paused or cancelled, the workflow
+     * unpinned or deleted). Nothing recovered, so nothing is announced; but a "still failing"
+     * reminder about something its owner switched off is a claim nobody measured either.
+     *
+     * <p>The flap stamps are cleared with it. Left in place, a failure after the stop would be
+     * read as a flap of THIS incident and reopen it silently (step 1 of {@link #recordFailure}),
+     * which puts the reminder straight back. Cleared, that failure opens a fresh incident and is
+     * sent, while one that happened BEFORE the stop is still recognised as stale (step 0 reads
+     * {@code resolved_at} only).
+     */
+    public int closeStopped(UUID workflowId, Instant now) {
+        return jdbc.update("UPDATE orchestrator.notification_incidents "
+                        + "SET resolved_at = ?, recovered_notified_at = NULL, reopen_announced_at = NULL "
+                        + "WHERE workflow_id = ? AND resolved_at IS NULL",
+                Timestamp.from(now), workflowId);
+    }
+
     /** Housekeeping: closed incidents are history nobody reads after a month. */
     public int purgeResolvedBefore(Instant cutoff) {
         return jdbc.update("DELETE FROM orchestrator.notification_incidents "

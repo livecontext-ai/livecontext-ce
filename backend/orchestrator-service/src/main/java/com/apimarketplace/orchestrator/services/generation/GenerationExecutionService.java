@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.services.generation;
 
+import com.apimarketplace.common.web.InternalGatewaySigner;
 import com.apimarketplace.common.web.OrgContextHeaderForwarder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -111,6 +112,17 @@ public class GenerationExecutionService {
     private final RestTemplate readRestTemplate;
     private final String catalogBaseUrl;
 
+    /**
+     * Signs the model listing. {@code /api/generation/models} is NOT among catalog-service's
+     * gateway public paths (only {@code /api/internal/} is, which is why the generation call
+     * itself needs no signature), so an unsigned read is refused 401 before it reaches the
+     * controller, and that 401 was folded into "served, but no models".
+     */
+    private final String gatewaySecretKey;
+
+    static final String MODELS_PATH = "/api/generation/models";
+    static final String MODELS_PROVIDER_ID = "internal-orchestrator-generation-models";
+
     public GenerationExecutionService(
             @Qualifier("generationRestTemplate") RestTemplate restTemplate,
             // NAMED, because there are four RestTemplate beans and none is
@@ -120,10 +132,12 @@ public class GenerationExecutionService {
             // fails to start. Unit tests build this class by hand and cannot
             // see it; the context test can.
             @Qualifier("restTemplate") RestTemplate readRestTemplate,
-            @Value("${orchestrator.catalog.base-url:http://localhost:8081}") String catalogBaseUrl) {
+            @Value("${orchestrator.catalog.base-url:http://localhost:8081}") String catalogBaseUrl,
+            @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
         this.restTemplate = restTemplate;
         this.readRestTemplate = readRestTemplate;
         this.catalogBaseUrl = catalogBaseUrl;
+        this.gatewaySecretKey = gatewaySecretKey;
     }
 
     /**
@@ -174,9 +188,15 @@ public class GenerationExecutionService {
     @SuppressWarnings("unchecked")
     public ModelCatalogue readModels() {
         try {
+            String url = catalogBaseUrl + MODELS_PATH;
+            // v1 then v2 (CASA LC-035), signed here because the shared read template carries no
+            // v2 interceptor. The URL is fixed, so the URI signed is the URI sent. A blank secret
+            // (verification off) leaves the call unsigned, as before.
+            HttpHeaders headers = new HttpHeaders();
+            InternalGatewaySigner.stamp(headers, MODELS_PROVIDER_ID, gatewaySecretKey);
+            InternalGatewaySigner.stampV2(headers, HttpMethod.GET.name(), java.net.URI.create(url), gatewaySecretKey);
             ResponseEntity<Map> response = readRestTemplate.exchange(
-                    catalogBaseUrl + "/api/generation/models", HttpMethod.GET,
-                    new HttpEntity<>(new HttpHeaders()), Map.class);
+                    url, HttpMethod.GET, new HttpEntity<>(headers), Map.class);
             Map<String, Object> payload = response.getBody();
             if (payload == null || !(payload.get("models") instanceof List<?> models)) {
                 return new ModelCatalogue(List.of(), Boolean.TRUE);
@@ -283,7 +303,7 @@ public class GenerationExecutionService {
                 return GenerationResult.failed(GENERATION_UNAVAILABLE_MESSAGE);
             }
             logger.error("Generation call failed: status={}, body={}", e.getStatusCode(),
-                    e.getResponseBodyAsString());
+                    com.apimarketplace.common.logging.PayloadLogSafety.describeText(e.getResponseBodyAsString(), 300));
             // The upstream sentence is kept, not replaced by the status code.
             // Every refusal this path can carry names its own cause and its own
             // remedy (add a size, use your own key, the plan excludes this), and

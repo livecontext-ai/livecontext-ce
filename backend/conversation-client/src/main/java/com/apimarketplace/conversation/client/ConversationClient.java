@@ -133,6 +133,59 @@ public class ConversationClient {
     }
 
     /**
+     * CASA LC-066: find or create the conversation a RESTRICTED delegated task's turns run in for
+     * this agent (the task's assignee or reviewer), keyed by (agent, task), so the agent's main
+     * conversation never stores them.
+     *
+     * @return the conversation id, or null when it could not be obtained, including from a
+     *         conversation-service that predates the endpoint (404 during a rolling update): the
+     *         caller then refuses the task, it must never fall back to the agent's conversation
+     */
+    @SuppressWarnings("unchecked")
+    public String findOrCreateTaskConversation(String agentId, String taskId, String tenantId,
+                                               String title, String organizationId) {
+        String url = taskConversationUrl(agentId, taskId);
+        try {
+            Map<String, String> body = new HashMap<>();
+            if (title != null) body.put("title", title);
+            ResponseEntity<Map> resp = restTemplate.exchange(
+                    url, HttpMethod.POST, createEntity(body, tenantId, organizationId), Map.class);
+            if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null
+                    && resp.getBody().get("id") instanceof String id && !id.isBlank()) {
+                return id;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to open the conversation of task {} for agent {}: {}", taskId, agentId, e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * CASA LC-066: the conversation of a RESTRICTED task for this agent (read-only), or null when
+     * there is none (or it could not be read).
+     */
+    @SuppressWarnings("unchecked")
+    public String findTaskConversation(String agentId, String taskId, String tenantId, String organizationId) {
+        try {
+            ResponseEntity<Map> resp = restTemplate.exchange(taskConversationUrl(agentId, taskId),
+                    HttpMethod.GET, createEntity(null, tenantId, organizationId), Map.class);
+            if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null
+                    && resp.getBody().get("id") instanceof String id && !id.isBlank()) {
+                return id;
+            }
+        } catch (HttpClientErrorException.NotFound e) {
+            log.debug("No conversation for task {} and agent {}", taskId, agentId);
+        } catch (Exception e) {
+            log.warn("Error finding the conversation of task {} for agent {}: {}", taskId, agentId, e.getMessage());
+        }
+        return null;
+    }
+
+    private String taskConversationUrl(String agentId, String taskId) {
+        return baseUrl + "/api/internal/conversations/agent/" + agentId + "/task/" + taskId;
+    }
+
+    /**
      * Create a standalone conversation (not linked to agent's main conversation).
      * Used by webhook (memory=off) and schedule (withMemory=false).
      */
@@ -276,6 +329,22 @@ public class ConversationClient {
                                              String agentId, String model, String provider,
                                              String source, String taskId, String organizationId,
                                              String reviewerExecutionId, String executionId) {
+        return sendChatSync(tenantId, conversationId, message, agentId, model, provider, source, taskId,
+                organizationId, reviewerExecutionId, executionId, null);
+    }
+
+    /**
+     * Same, for a message that carries Gmail / Drive content (CASA LC-066): a delegated task
+     * written from a restricted execution. {@code dataSensitivity = RESTRICTED} makes
+     * conversation-service store the message restricted, which tags the turn and applies the
+     * provider allow-list to it. Only RESTRICTED is sent; null or NORMAL sends nothing.
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> sendChatSync(String tenantId, String conversationId, String message,
+                                             String agentId, String model, String provider,
+                                             String source, String taskId, String organizationId,
+                                             String reviewerExecutionId, String executionId,
+                                             com.apimarketplace.common.classification.DataSensitivity dataSensitivity) {
         String url = baseUrl + "/api/internal/chat/sync";
         try {
             Map<String, Object> body = new HashMap<>();
@@ -288,6 +357,9 @@ public class ConversationClient {
             if (taskId != null) body.put("taskId", taskId);
             if (reviewerExecutionId != null) body.put("reviewerExecutionId", reviewerExecutionId);
             if (executionId != null) body.put("executionId", executionId);
+            if (dataSensitivity != null && dataSensitivity.isRestricted()) {
+                body.put(com.apimarketplace.common.classification.DataSensitivity.REQUEST_FIELD, dataSensitivity.name());
+            }
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -579,6 +651,19 @@ public class ConversationClient {
                                  String toolCallId, boolean success, Long durationMs,
                                  String content, String error, String executionId,
                                  String organizationId) {
+        return saveToolResult(conversationId, tenantId, toolName, toolCallId, success, durationMs,
+            content, error, executionId, organizationId, null);
+    }
+
+    /**
+     * Same, with tool-result metadata. conversation-service classifies the stored result from it
+     * (e.g. {@code __dataSensitivity__: RESTRICTED} for Gmail / Drive derived content).
+     */
+    @SuppressWarnings("unchecked")
+    public String saveToolResult(String conversationId, String tenantId, String toolName,
+                                 String toolCallId, boolean success, Long durationMs,
+                                 String content, String error, String executionId,
+                                 String organizationId, Map<String, Object> metadata) {
         // Internal endpoint: the public POST /api/tool-results scope-checks the conversation
         // against the caller's workspace header, which this async agent-loop call may not carry.
         String url = baseUrl + TOOL_RESULTS_INTERNAL_PATH;
@@ -592,6 +677,7 @@ public class ConversationClient {
             if (content != null) body.put("content", content);
             if (error != null) body.put("error", error);
             if (executionId != null) body.put("executionId", executionId);
+            if (metadata != null && !metadata.isEmpty()) body.put("metadata", metadata);
 
             ResponseEntity<Map> resp;
             try {

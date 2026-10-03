@@ -12,7 +12,7 @@
 # The JS client and the image's Chromium binaries MUST match, otherwise
 # "Executable doesn't exist at /ms-playwright/...". package.json pins 1.60.0
 # (not ^) so a future npm cannot drift past this image.
-FROM mcr.microsoft.com/playwright:v1.60.0-jammy
+FROM mcr.microsoft.com/playwright:v1.60.0-jammy@sha256:e1529a04087193966ea15d4a1617345bdaa0791690a24ab2c42b65f9ce5b2cdc
 
 # CJK + emoji fonts so PDF/screenshot renders of non-latin interfaces (zh and friends) are not
 # boxes-of-tofu. The base playwright image ships latin fonts only. ffmpeg backs the

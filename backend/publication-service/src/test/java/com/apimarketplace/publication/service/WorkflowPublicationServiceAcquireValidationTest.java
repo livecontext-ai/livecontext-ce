@@ -129,6 +129,21 @@ class WorkflowPublicationServiceAcquireValidationTest {
         verify(receiptRepository, never()).save(any());
     }
 
+    @Test
+    @DisplayName("Acquiring one's own publication is rejected (\"Cannot acquire your own publication\"), no receipt saved")
+    void ownPublicationRejected() {
+        WorkflowPublicationEntity publication = publication(BUYER, PublicationStatus.ACTIVE, PublicationVisibility.PUBLIC);
+        when(publicationRepository.findById(PUBLICATION_ID)).thenReturn(Optional.of(publication));
+
+        // The wording is read by auth-service's partner offer delivery (PartnerOfferAppsClient), like
+        // "already acquired" and "organizationId required" above: it means "already theirs", an
+        // install that must be recorded as done, not failed. Reword all three only together with it.
+        assertThatThrownBy(() -> service.acquirePublication(PUBLICATION_ID, BUYER, BUYER_ORG))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Cannot acquire your own publication");
+        verify(receiptRepository, never()).save(any());
+    }
+
     private WorkflowPublicationEntity publication(String publisherId,
                                                   PublicationStatus status,
                                                   PublicationVisibility visibility) {

@@ -1,8 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { useSearchParams, useRouter, usePathname } from 'next/navigation';
+import { urlEnum, urlNullable, useUrlState } from '@/hooks/useUrlState';
 import { useTranslations } from 'next-intl';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { samePageUrl, showSamePageUrl } from '@/lib/navigation/showSamePageUrl';
 import { ClipboardList, AppWindow, Workflow as WorkflowIcon } from 'lucide-react';
 import { AuthenticatedView } from './AuthenticatedView';
 import { TaskBoardPage } from '@/components/task-board/TaskBoardPage';
@@ -18,10 +20,19 @@ import { WorkflowKanbanBoard } from '@/components/workflow-board/WorkflowKanbanB
  *
  * Selection is driven by the URL (?resource=...) so the old list routes can deep-link the
  * right tab; it falls back to the last-used choice (localStorage), else 'task'.
+ *
+ * Each board keeps its own view (search, sort, filters, open task) in the address too. Those
+ * parameters describe the board being left, so switching resource drops them.
  */
 type BoardResource = 'task' | 'application' | 'workflow';
 
 const STORAGE_KEY = 'lc.boardResource';
+const RESOURCES = ['task', 'application', 'workflow'] as const;
+
+/** Every parameter a board under the toggle writes: the task board's and the two kanbans'. */
+const BOARD_VIEW_URL_KEYS = [
+  'q', 'sort', 'agent', 'task', 'label', 'mine', 'blocked', 'modified', 'trigger', 'visibility',
+];
 
 function isResource(v: string | null | undefined): v is BoardResource {
   return v === 'task' || v === 'application' || v === 'workflow';
@@ -35,35 +46,45 @@ const TABS: { key: BoardResource; icon: typeof ClipboardList }[] = [
 
 export function BoardView() {
   const t = useTranslations('board');
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const pathname = usePathname();
+  // The active resource. URL ?resource= wins (so the redirected old routes land on the right
+  // tab); with no or an invalid param it is the last-used choice, else 'task'. A switch is a
+  // step Back should undo, and it drops the parameters of the board being left.
+  const [urlResource, setUrlResource] = useUrlState<BoardResource | null>('resource', null, {
+    codec: urlNullable(urlEnum(RESOURCES)),
+    history: 'push',
+    clears: BOARD_VIEW_URL_KEYS,
+  });
 
-  const [resource, setResource] = useState<BoardResource>('task');
-
-  // Resolve the active resource. URL ?resource= wins (so the redirected old routes land on the
-  // right tab); otherwise fall back to the last-used choice, else 'task'. When no/invalid param
-  // is present, normalize the URL once so refresh/share preserves the selection.
+  // Read after mount rather than in the initial state: the server has no localStorage, and a
+  // first render that differed from its markup would be a hydration mismatch.
+  const [lastUsed, setLastUsed] = useState<BoardResource | null>(null);
   useEffect(() => {
-    const fromUrl = searchParams.get('resource');
-    if (isResource(fromUrl)) {
-      setResource(fromUrl);
-      return;
-    }
     let stored: string | null = null;
     try { stored = localStorage.getItem(STORAGE_KEY); } catch { /* localStorage unavailable */ }
-    const initial: BoardResource = isResource(stored) ? stored : 'task';
-    setResource(initial);
-    router.replace(`${pathname}?resource=${initial}`);
-    // Only react to URL changes; pathname/router are stable for this route.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+    setLastUsed(isResource(stored) ? stored : 'task');
+  }, []);
+
+  const resource: BoardResource = urlResource ?? lastUsed ?? 'task';
+
+  // An address that does not name its board gets it written in, so the link says what it
+  // shows: copied as it stands, a bare address would open whatever board its reader used last.
+  // `replace`: it corrects the address the user arrived on, it is not a step to come Back to.
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    if (urlResource !== null || lastUsed === null || !pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('resource', lastUsed);
+    showSamePageUrl(`${pathname}?${params.toString()}`, samePageUrl(pathname, searchParams), 'replace');
+  }, [urlResource, lastUsed, pathname, searchParams]);
 
   const handleSelect = useCallback((next: BoardResource) => {
-    setResource(next);
+    // The board already on screen: writing its name would only drop its own filters.
+    if (next === resource) return;
+    setLastUsed(next);
     try { localStorage.setItem(STORAGE_KEY, next); } catch { /* localStorage unavailable */ }
-    router.replace(`${pathname}?resource=${next}`);
-  }, [router, pathname]);
+    setUrlResource(next);
+  }, [resource, setUrlResource]);
 
   return (
     <AuthenticatedView overflow>

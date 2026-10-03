@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * What a person chooses a delivery for. Four groups, not one switch per bell
+ * What a person chooses a delivery for. A few groups, not one switch per bell
  * category: nobody tunes twelve rows, and the categories inside a group always
  * deserve the same treatment.
  *
@@ -34,7 +34,22 @@ public enum NotificationTopic {
      * channel is shared, and "a task was assigned to you" is nobody else's business.
      */
     TASKS(List.of("AGENT_TASK_ASSIGNED", "AGENT_TASK_MENTION", "AGENT_TASK_AWAITING_REVIEW"),
-            true, DeliveryMode.EMAIL);
+            true, DeliveryMode.EMAIL),
+    /**
+     * A creator this person follows put a new app on the marketplace. In the daily summary,
+     * never alone: one approval fans out to EVERY follower at once, and sending each of those
+     * on its own would pile hundreds of messages onto the delivery pool that failure and credit
+     * alerts share, and spend each follower's per-person daily cap.
+     * PERSON-scoped and on every plan: following is between people, and the row always lands in
+     * the follower's personal workspace (publication-service stamps it there).
+     */
+    FOLLOWING(List.of("CREATOR_PUBLISHED"), true, DeliveryMode.EMAIL),
+    /**
+     * Someone subscribed to this person. In the daily summary, never alone: a creator who gains
+     * many subscribers in a day must not spend the per-person daily cap that failure alerts
+     * share. PERSON-scoped and on every plan, like {@link #FOLLOWING}.
+     */
+    AUDIENCE(List.of("CREATOR_FOLLOWED"), true, DeliveryMode.EMAIL);
 
     private final List<String> categories;
     private final boolean digest;
@@ -65,7 +80,16 @@ public enum NotificationTopic {
      * workspace governs the alert that actually lands in the personal one.
      */
     public boolean isPersonScoped() {
-        return this == CREDITS;
+        return this == CREDITS || this == FOLLOWING || this == AUDIENCE;
+    }
+
+    /**
+     * True when email is sent on every plan, not only on the plans that include email alerts:
+     * the wallet alerts (nobody should run out of credits unwarned) and the creator topics
+     * (people asked to hear about a creator, which is not an operational alert to upsell).
+     */
+    public boolean emailOnEveryPlan() {
+        return this == CREDITS || this == FOLLOWING || this == AUDIENCE;
     }
 
     public static Optional<NotificationTopic> ofCategory(String category) {

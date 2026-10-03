@@ -115,6 +115,10 @@ public class User implements UserDetails {
     @Column(name = "api_key_created_at")
     private LocalDateTime apiKeyCreatedAt;
 
+    /** When the legacy single key stops resolving (CASA LC-054, V531). Null = never. */
+    @Column(name = "api_key_expires_at")
+    private LocalDateTime apiKeyExpiresAt;
+
     // Password hash for local email+password auth (CE embedded mode)
     @Column(name = "password_hash")
     private String passwordHash;
@@ -406,6 +410,14 @@ public class User implements UserDetails {
 
     public LocalDateTime getApiKeyCreatedAt() {
         return apiKeyCreatedAt;
+    }
+
+    public LocalDateTime getApiKeyExpiresAt() {
+        return apiKeyExpiresAt;
+    }
+
+    public void setApiKeyExpiresAt(LocalDateTime apiKeyExpiresAt) {
+        this.apiKeyExpiresAt = apiKeyExpiresAt;
     }
 
     public void setApiKeyCreatedAt(LocalDateTime apiKeyCreatedAt) {

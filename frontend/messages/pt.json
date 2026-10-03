@@ -1,7 +1,7 @@
 {
   "partnerDashboard": {
     "title": "Programa de parceiros",
-    "subtitle": "Ganhe uma parte de cada fatura paga pelos seus clientes e exiba o selo de parceiro oficial.",
+    "subtitle": "Recomende a LiveContext às empresas para as quais você cria e exiba o selo de parceiro oficial no seu perfil e nos seus templates.",
     "learnMore": "Como o programa funciona",
     "error": "Não foi possível carregar seu programa de parceiros. Tente de novo em instantes.",
     "selfHosted": {
@@ -32,12 +32,22 @@
     "pending": {
       "title": "Candidatura recebida",
       "body": "Estamos analisando a candidatura de {company}. Você receberá um e-mail assim que houver uma decisão, e esta página virará o seu painel de parceiro.",
-      "submittedOn": "Enviada em {date}"
+      "submittedOn": "Enviada em {date}",
+      "steps": {
+        "sent": "Candidatura enviada",
+        "review": "Em análise",
+        "reply": "Resposta por e-mail"
+      }
     },
     "rejected": {
       "title": "Sua candidatura anterior não foi aceita",
       "note": "Nossa observação: {note}",
-      "again": "Você pode se candidatar de novo abaixo."
+      "again": "Você pode se candidatar de novo quando quiser: conte o que mudou desde então."
+    },
+    "join": {
+      "title": "Ganhe até <rate>{percent}%</rate> de cada fatura paga pelos seus clientes",
+      "apply": "Candidatar-se",
+      "reapply": "Candidatar-se de novo"
     },
     "errors": {
       "already_pending": "Você já tem uma candidatura em análise.",
@@ -52,13 +62,21 @@
       "not_partner": "Somente parceiros e candidatos têm termos a aceitar."
     },
     "toasts": {
-      "applied": "Candidatura enviada",
-      "appliedBody": "Responderemos por e-mail.",
       "copied": "Copiado",
       "copyFailed": "Não foi possível copiar"
     },
     "dashboard": {
       "inactive": "Seu código de parceiro está inativo, então novos cadastros não são atribuídos a você. Fale conosco se isso não for esperado.",
+      "hero": {
+        "thisMonth": "Ganho neste mês",
+        "payable": "Disponível para receber: {amount}"
+      },
+      "earnings": {
+        "title": "Seus últimos 12 meses",
+        "total": "{amount} em 12 meses",
+        "chartLabel": "Sua comissão a cada mês, de {from} a {to}",
+        "empty": "Sua curva começa com o seu primeiro cliente pagante."
+      },
       "linkTitle": "Seu link de parceiro",
       "linkHint": "Compartilhe este link. Novas contas criadas com ele recebem {credits} créditos grátis e são atribuídas a você.",
       "copyLink": "Copiar link",
@@ -70,12 +88,76 @@
       "badgeTitle": "Parceiro oficial",
       "badgeBody": "Seu selo dourado aparece ao lado do seu nome, no seu perfil e nos templates que você publica.",
       "badgeInactive": "Seu selo volta a aparecer assim que seu código de parceiro estiver ativo.",
+      "conditions": {
+        "title": "Suas condições"
+      },
+      "builder": {
+        "title": "Criar um link para um cliente",
+        "intro": "Recomende um plano: seu cliente recebe uma página própria, com esse plano em destaque, o preço e o seu código incluído.",
+        "plan": "Plano",
+        "from": "A partir de {price} por mês",
+        "credits": "Créditos por mês",
+        "creditsOption": "{credits} créditos",
+        "cycle": "Cobrança",
+        "monthly": "Mensal",
+        "yearly": "Anual",
+        "clientSees": "O que seu cliente verá",
+        "planLine": "{plan} com {credits} créditos por mês",
+        "price": "{price} por mês",
+        "priceYearly": "{price} por mês, cobrado anualmente",
+        "offer": "Além disso, {credits} créditos grátis com o seu código {code}",
+        "forYou": "Para você",
+        "commission": "Cerca de {amount} de comissão por mês com este cliente",
+        "commissionYearly": "Cerca de {amount} de comissão sobre uma fatura anual",
+        "commissionDetail": "{percent}% de cada fatura paga, durante {months} meses",
+        "copy": "Copiar link",
+        "labelField": "Cliente (opcional)",
+        "labelPlaceholder": "Por exemplo: Acme",
+        "create": "Criar o link",
+        "creating": "Criando...",
+        "created": "Link pronto:",
+        "offersTitle": "Seus links de clientes",
+        "offersEmpty": "Nenhum link ainda: crie um acima.",
+        "unnamed": "Cliente sem nome",
+        "offerLine": "{plan}, {credits} créditos por mês, {cycle, select, yearly {anual} other {mensal}}",
+        "deactivate": "Desativar",
+        "errors": {
+          "not_partner": "Somente um parceiro pode criar um link.",
+          "code_inactive": "Seu código de parceiro está inativo: o link não levaria a lugar nenhum.",
+          "too_many_offers": "Você tem links ativos demais: desative alguns primeiro.",
+          "too_long": "O nome do cliente é longo demais.",
+          "generic": "Não foi possível criar o link. Tente novamente.",
+          "invalid_apps": "Um dos aplicativos escolhidos não pode mais ser oferecido (tornado privado, retirado ou que não é seu). Verifique a lista e tente novamente.",
+          "too_many_apps": "No máximo 10 aplicativos por link.",
+          "apps_unavailable": "Não foi possível verificar seus aplicativos agora. Tente novamente em instantes.",
+          "apps_need_higher_plan": "Um dos aplicativos escolhidos usa a busca vetorial, que este plano não inclui. Recomende um plano superior ou remova esse aplicativo.",
+          "apps_exceed_plan": "Estes aplicativos precisam de mais interfaces ou vagas de aplicativos do que este plano inclui. Recomende um plano superior ou escolha menos aplicativos."
+        },
+        "offersLoading": "Carregando seus links...",
+        "offersError": "Não foi possível carregar seus links. Recarregue a página para tentar novamente.",
+        "deactivateConfirm": "Desativar este link? Seu cliente não poderá mais abri-lo.",
+        "deactivateYes": "Sim, desativar",
+        "cancel": "Cancelar",
+        "deactivateError": "Não foi possível desativar o link. Tente novamente.",
+        "apps": {
+          "title": "Aplicativos incluídos",
+          "hint": "Seu cliente recebe esses aplicativos instalados no espaço de trabalho assim que pagar. Só é possível oferecer seus aplicativos públicos ou não listados.",
+          "count": "{count}/{max}",
+          "loading": "Carregando seus aplicativos...",
+          "error": "Não foi possível carregar seus aplicativos. O link ainda pode ser criado sem eles.",
+          "empty": "Você ainda não publicou nenhum aplicativo. Publique um a partir dos seus workflows para oferecê-lo aqui.",
+          "private": "Privado: torne-o não listado para oferecê-lo",
+          "full": "No máximo {max} aplicativos por link."
+        },
+        "appsLine": "{count, plural, one {# aplicativo instalado no espaço dele após o pagamento} other {# aplicativos instalados no espaço dele após o pagamento}}",
+        "appsCount": "{count, plural, one {# aplicativo} other {# aplicativos}}"
+      },
       "stats": {
         "signups": "Cadastros",
         "paying": "Clientes pagantes",
         "onHold": "Retido",
         "onHoldHint": "Dentro do prazo de reembolso de {days} dias",
-        "payable": "Pronto para pagar",
+        "payable": "Disponível para receber",
         "paid": "Pago a você"
       },
       "lines": {
@@ -86,7 +168,7 @@
         "commission": "Sua comissão",
         "status": "Situação",
         "statusOnHold": "Retida até {date}",
-        "statusPayable": "Pronta para pagar",
+        "statusPayable": "Disponível para receber",
         "statusPaid": "Paga em {date}",
         "statusVoid": "Anulada (reembolso ou disputa)"
       },
@@ -101,8 +183,13 @@
         },
         "founder": "Parceiro fundador",
         "rate": "{percent}% sobre cada fatura paga",
+        "rateShort": "{percent}%",
         "progressLabel": "Progresso até {tier}",
         "progress": "{revenue} de {threshold} para chegar a {tier}",
+        "start": "Desde o primeiro dia",
+        "from": "A partir de {amount} em receita de clientes",
+        "fromShort": "A partir de {amount}",
+        "here": "Você está aqui",
         "top": "Você está no nível mais alto.",
         "topFounder": "Parceiro fundador: Platinum durante toda a sua participação, conforme os termos do programa de parceiros (cláusula 7.5).",
         "hint": "Uma fatura conta para o seu nível quando tem {days} dias e não foi reembolsada. O volume nunca faz o seu nível descer.",
@@ -119,10 +206,119 @@
       "accepted": "Você aceitou os <link>termos do programa de parceiros</link> (versão {version}) em {date}."
     }
   },
+  "partnerOffer": {
+    "eyebrow": "Oferta de parceiro",
+    "officialPartner": "Parceiro oficial da LiveContext",
+    "title": "{partner} recomenda <gold>{plan}</gold> para você",
+    "titleGeneric": "Seu parceiro recomenda <gold>{plan}</gold> para você",
+    "lead": "O plano escolhido para você: {credits} créditos por mês{cycle, select, yearly {, cobrado anualmente} other {}}.",
+    "gift": "Além disso, {credits} créditos grátis com o código {code}",
+    "cycleLabel": "Cobrança",
+    "creditsLabel": "Créditos por mês",
+    "creditsOption": "{credits} créditos",
+    "reset": "Voltar à escolha de {partner}",
+    "resetGeneric": "Voltar à escolha do seu parceiro",
+    "badge": "Recomendado por {partner}",
+    "badgeGeneric": "Recomendado pelo seu parceiro",
+    "starterCap": "O Starter vai até {credits} créditos por mês",
+    "choose": "Escolher {plan}",
+    "summaryTitle": "Sua escolha",
+    "summaryPlan": "{plan} com {credits} créditos por mês",
+    "pricePeriod": "por mês{cycle, select, yearly {, cobrado anualmente} other {}}",
+    "continue": "Continuar com {plan}",
+    "opening": "Abrindo o pagamento...",
+    "checkoutError": "Não foi possível abrir a página de pagamento. Tente novamente.",
+    "alreadySubscribed": "Você já tem uma assinatura: altere-a na sua página de preços.",
+    "alreadySubscribedLink": "Abrir minha página de preços",
+    "allPlans": "Ver todos os planos",
+    "unavailableTitle": "Esta oferta não está mais disponível",
+    "unavailableBody": "Seu parceiro pode ter substituído este link. Nossos planos estão a um clique.",
+    "unavailableCta": "Ver os planos",
+    "accountError": "Não foi possível ler sua conta, então o pagamento ainda não pode ser aberto.",
+    "retry": "Tentar novamente",
+    "metaTitle": "{partner} recomenda {plan} para você",
+    "metaTitleGeneric": "Seu parceiro recomenda {plan} para você",
+    "metaDescription": "Um plano LiveContext escolhido para você, com o preço e os créditos grátis do código de parceiro.",
+    "loadErrorTitle": "Não foi possível carregar esta oferta",
+    "loadErrorBody": "O link provavelmente está certo: nossos servidores não responderam a tempo. Tente novamente em instantes.",
+    "appsTitle": "Os aplicativos que {partner} oferece a você",
+    "appsTitleGeneric": "Os aplicativos incluídos nesta oferta",
+    "appsIncluded": "{count, plural, one {+ # aplicativo incluído} other {+ # aplicativos incluídos}}",
+    "appsNeedPlan": "Os aplicativos desta oferta exigem o {plan} ou superior.",
+    "planTooLow": "Os aplicativos desta oferta exigem um plano superior. Escolha outro plano para continuar.",
+    "appsNotForSubscribers": "Estes aplicativos vêm com uma primeira assinatura feita por este link. Sua conta já tem uma assinatura, então eles não estão incluídos.",
+    "welcome": {
+      "title": "Boas-vindas ao {plan}",
+      "activating": "Ativando sua assinatura...",
+      "activatingHint": "Seu pagamento foi concluído. Isso leva alguns segundos.",
+      "planActive": "Seu plano está ativo e seus créditos estão prontos.",
+      "slowPayment": "Seu pagamento ainda está sendo confirmado. Você pode fechar esta janela: seu plano e seus aplicativos chegam assim que ele for confirmado.",
+      "appsTitle": "Seus aplicativos de {partner}",
+      "appsTitleGeneric": "Seus aplicativos do seu parceiro",
+      "appFallback": "Aplicativo",
+      "installing": "Instalando...",
+      "open": "Abrir",
+      "failed": "Não foi possível instalar",
+      "arrivingLater": "Seus aplicativos ainda estão a caminho: você os encontrará em Aplicativos em alguns minutos.",
+      "unreadable": "Esta janela não conseguiu carregar tudo. Sua compra não foi afetada: os aplicativos da sua oferta são instalados em segundo plano após o pagamento e aparecem em Aplicativos quando estiverem prontos.",
+      "partnerLine": "{partner} é seu parceiro: pergunte o que quiser sobre seus aplicativos.",
+      "partnerLineGeneric": "Seu parceiro está aqui para ajudar com seus aplicativos.",
+      "write": "Escrever para {partner}",
+      "writeGeneric": "Escrever para seu parceiro",
+      "writeError": "Não foi possível abrir a conversa. Tente novamente em Mensagens.",
+      "start": "Começar"
+    }
+  },
+  "personalOfferPage": {
+    "metaTitle": "Sua oferta pessoal",
+    "loading": "Carregando sua oferta...",
+    "eyebrow": "Oferta pessoal",
+    "signInTitle": "Sua oferta pessoal está esperando por você",
+    "signInLead": "Entre para ver seu preço, os créditos que ela adiciona e o tempo restante.",
+    "signIn": "Entrar",
+    "signInError": "Não foi possível abrir a página de login. Tente novamente.",
+    "seePlans": "Ver os planos",
+    "backToApp": "Voltar para o LiveContext",
+    "retry": "Tentar novamente",
+    "noOffer": "Esta conta não tem nenhuma oferta pessoal no momento.",
+    "title": "Sua primeira assinatura, com <accent>{credits} créditos</accent> de presente",
+    "titleNoBonus": "Sua oferta pessoal",
+    "titleUpTo": "Até <accent>{credits} créditos</accent> de presente com sua primeira assinatura",
+    "tiersTitle": "Seu bônus cresce com os créditos que você escolhe",
+    "tierFrom": "A partir de {credits} créditos por mês",
+    "tierBonus": "+{credits} créditos",
+    "lead": "Os créditos de presente são adicionados assim que seu primeiro pagamento for confirmado. O preço do plano não muda.",
+    "until": "Oferta válida até {date}",
+    "summaryTitle": "Sua escolha",
+    "summaryPlan": "{plan} com {credits} créditos por mês",
+    "pricePeriod": "por mês{cycle, select, yearly {, cobrado anualmente} other {}}",
+    "bonus": "+{credits} créditos de presente (valor {value})",
+    "continue": "Continuar com {plan}",
+    "opening": "Abrindo o pagamento...",
+    "afterPayment": "Pagamento seguro pela Stripe. O bônus é adicionado após o primeiro pagamento.",
+    "allPlans": "Ver todos os planos",
+    "cycleLabel": "Cobrança",
+    "creditsLabel": "Créditos por mês",
+    "creditsOption": "{credits} créditos",
+    "cardBonus": "+{credits} créditos de presente",
+    "cardNoBonus": "Sem bônus com este pacote",
+    "starterCap": "O Starter vai até {credits} créditos por mês",
+    "choose": "Escolher {plan}",
+    "checkoutError": "Não foi possível abrir a página de pagamento. Tente novamente.",
+    "countdown": {
+      "endsIn": "Termina em",
+      "days": "dias",
+      "hours": "horas",
+      "minutes": "min",
+      "seconds": "s",
+      "ended": "Esta oferta terminou."
+    }
+  },
   "partnersLanding": {
     "metadata": {
       "title": "Programa de parceiros para agências e consultores",
-      "description": "Traga seus clientes para a LiveContext e ganhe uma parte recorrente de cada fatura que eles pagam, que cresce com o seu nível de parceiro. Um selo de parceiro oficial e o direito de hospedar a LiveContext para seus clientes."
+      "description": "Traga seus clientes para a LiveContext e ganhe uma parte recorrente de cada fatura, que cresce com o seu nível. Grátis, com selo de parceiro oficial.",
+      "descriptionRate": "Ganhe até {rate}% de cada fatura que seus clientes pagam na LiveContext. Programa gratuito para agências e consultores, com selo oficial."
     },
     "hero": {
       "eyebrow": "Programa de parceiros",
@@ -272,7 +468,14 @@
       "search": "Buscar apps, workflows, agentes",
       "profile": "Seu perfil",
       "profileApps": "{count, plural, one {# app publicado} other {# apps publicados}}",
-      "profileRating": "{rating} ({count, plural, one {# avaliação} other {# avaliações}})"
+      "profileRating": "{rating} ({count, plural, one {# avaliação} other {# avaliações}})",
+      "screen": {
+        "running": "Ativo",
+        "processed": "Faturas este mês",
+        "booked": "Lançado no QuickBooks",
+        "statusBooked": "Lançada",
+        "statusReview": "A revisar"
+      }
     },
     "how": {
       "eyebrow": "Como funciona",
@@ -305,7 +508,7 @@
       },
       "hosting": {
         "title": "Hospede para seus clientes",
-        "body": "A licença da LiveContext permite instalar e operar a plataforma para cada cliente, nos servidores dele ou nos seus, e cobrar por esse trabalho."
+        "body": "A licença da LiveContext permite instalar e operar a plataforma para cada cliente, nos servidores dele ou nos seus, como parte dos serviços que você presta, e cobrar por esse trabalho."
       },
       "apps": {
         "title": "Entregue apps, não só workflows",
@@ -360,7 +563,7 @@
       },
       "hosting": {
         "question": "Posso instalar a LiveContext para meus clientes?",
-        "answer": "Sim. A licença da LiveContext permite que um prestador de serviços a instale, hospede e mantenha para cada cliente, uma instalação por cliente. Operá-la como sua própria plataforma multicliente exige uma licença comercial: escreva para nós."
+        "answer": "Sim. A licença da LiveContext permite que um prestador de serviços a instale, hospede e mantenha para seus clientes, cada instalação atendendo a um único cliente, como parte dos serviços que presta. Vender hospedagem da LiveContext como produto, ou operá-la como sua própria plataforma multicliente, exige uma licença comercial: escreva para nós."
       },
       "credits": {
         "question": "O que meus clientes recebem?",
@@ -596,9 +799,10 @@
         "notRedeemable": "Este código não está disponível no momento.",
         "alreadyRedeemed": "Você já resgatou um código.",
         "exhausted": "Este código atingiu o limite de resgates.",
-        "selfReferral": "Você não pode resgatar seu próprio código de indicação.",
+        "selfReferral": "Você não pode resgatar seu próprio código.",
         "alreadyPaid": "Este código é apenas para novas assinaturas.",
         "alreadyAttributed": "Sua conta já usa um código de parceiro.",
+        "partnerAccount": "Um parceiro não pode usar o código de outro parceiro.",
         "emailNotVerified": "Verifique seu e-mail para usar este código.",
         "notNewAccount": "Este código é para contas novas.",
         "nothingToGrant": "Sua conta já tem este plano ou um superior.",
@@ -705,6 +909,7 @@
     "acceptError": "Não foi possível aceitar o convite. O link pode ter expirado ou já foi usado.",
     "emailNotVerified": "Verifique seu endereço de e-mail antes de aceitar ou recusar um convite.",
     "declineError": "Não foi possível recusar o convite. Ele pode ter expirado ou já ter sido usado.",
+    "requiresLink": "Este convite foi enviado antes de sua conta existir. Abra-o pelo link no e-mail de convite ou peça a um administrador para convidá-lo novamente.",
     "signInRequired": "Faça login para ver seus convites pendentes.",
     "emptyState": "Você não tem convites pendentes.",
     "invitedToJoin": "{inviter} convidou você",
@@ -745,7 +950,7 @@
     "lastName": "Sobrenome",
     "password": "Senha",
     "confirmPassword": "Confirmar senha",
-    "passwordTooShort": "A senha deve ter pelo menos 8 caracteres",
+    "passwordTooShort": "A senha deve ter pelo menos 12 caracteres",
     "passwordMismatch": "As senhas não coincidem",
     "invalidTitle": "Convite indisponível",
     "invalidBody": "Este link de convite é inválido, expirou ou já foi usado.",
@@ -939,9 +1144,20 @@
     "download": "Download",
     "noFile": "No file",
     "removeFile": "Remover arquivo",
-    "file": "File",
+    "file": "Arquivo",
     "noOptions": "Sem opções",
-    "selectPlaceholder": "Select...",
+    "selectPlaceholder": "Selecionar...",
+    "noTags": "Sem etiquetas",
+    "saveErrorTitle": "Erro ao salvar",
+    "saveErrorMessage": "Não foi possível salvar as alterações",
+    "rowAddedTitle": "Linha adicionada",
+    "rowAddedMessage": "Nova linha adicionada com prioridade {priority}",
+    "addRowErrorTitle": "Erro ao adicionar a linha",
+    "addRowErrorMessage": "Não foi possível adicionar a linha",
+    "rowsDeletedTitle": "Linhas excluídas",
+    "rowsDeletedMessage": "{count} linha(s) excluída(s)",
+    "deleteRowsErrorTitle": "Erro ao excluir as linhas",
+    "deleteRowsErrorMessage": "Não foi possível excluir as linhas selecionadas",
     "nameLabel": "Nome *",
     "descriptionLabel": "Descrição",
     "rowsPerPage": "Linhas por página:",
@@ -1007,8 +1223,8 @@
       "lastNamePlaceholder": "Silva",
       "password": "Senha",
       "passwordMismatch": "As senhas não coincidem",
-      "passwordPlaceholder": "Pelo menos 8 caracteres",
-      "passwordTooShort": "A senha deve ter pelo menos 8 caracteres",
+      "passwordPlaceholder": "Pelo menos 12 caracteres",
+      "passwordTooShort": "A senha deve ter pelo menos 12 caracteres",
       "signIn": "Entrar",
       "submit": "Criar conta",
       "subtitle": "Comece com o LiveContext em menos de um minuto.",
@@ -1194,6 +1410,7 @@
     },
     "scheduledAgent": "Agente agendado",
     "webhookAgent": "Agente webhook",
+    "taskConversation": "Conversa de tarefa",
     "more": {
       "title": "Mais",
       "back": "Voltar"
@@ -1368,6 +1585,7 @@
           "ORG_INVITATION_PENDING": "{count, plural, one {# convite de organização} other {# convites de organização}}",
           "BADGE_UNLOCKED": "{count, plural, one {# novo troféu} other {# novos troféus}}",
           "CREATOR_PUBLISHED": "{count, plural, one {Novo app de um criador que você segue} other {# novos apps de criadores que você segue}}",
+          "CREATOR_FOLLOWED": "{count, plural, one {Novo inscrito} other {# novos inscritos}}",
           "BUDGET_REACHED": "{count, plural, one {# fluxo parado pelo limite de gasto} other {# fluxos parados pelo limite de gasto}}",
           "CREDIT_LOW": "{count, plural, one {Créditos acabando} other {Créditos acabando (#)}}",
           "CREDIT_EXHAUSTED": "{count, plural, one {Sem créditos} other {Sem créditos (#)}}",
@@ -2017,6 +2235,7 @@
   },
   "errors": {
     "retry": "Tentar Novamente",
+    "signInUnreachable": "Não foi possível acessar o serviço de login. Verifique sua conexão e tente novamente.",
     "dismiss": "Dispensar",
     "debugInfo": "Info de Debug",
     "pleaseWait": "Por favor, aguarde {seconds} segundos antes de tentar novamente.",
@@ -2026,7 +2245,8 @@
     "notFound": "Nao Encontrado",
     "server": "Erro do Servidor",
     "maintenance": "Manutencao",
-    "unknown": "Erro"
+    "unknown": "Erro",
+    "restrictedDataProvider": "Esta conversa ou fluxo de trabalho contém dados do Gmail ou do Google Drive, que só podem ser processados por provedores de IA aprovados. Mude para um modelo da Anthropic ou da OpenAI e tente novamente."
   },
   "runs": {
     "never": "Nunca",
@@ -2463,6 +2683,7 @@
     "own": "Sua publicação",
     "pendingReview": "Revisão pendente",
     "previewUnavailable": "Prévia não disponível",
+    "previewWithheldRestrictedData": "Sem prévia: a execução de exemplo deste aplicativo contém dados do Gmail ou do Google Drive, que nunca são exibidos publicamente.",
     "rejected": "Rejeitado",
     "rejectionReasonTitle": "Motivo da rejeição",
     "resourceType": {
@@ -2699,6 +2920,10 @@
       "gotIt": "Entendi",
       "technicalDetails": "Detalhes técnicos",
       "kinds": {
+        "restrictedData": {
+          "title": "Estes dados não podem ser enviados para este provedor de IA",
+          "description": "Esta conversa ou fluxo de trabalho contém dados do Gmail ou do Google Drive, que só podem ser processados por provedores de IA aprovados. Mude para um modelo da Anthropic ou da OpenAI e tente novamente."
+        },
         "interrupted": {
           "title": "A resposta foi interrompida",
           "description": "O serviço reiniciou enquanto o assistente respondia. A resposta parcial foi salva. Envie sua mensagem novamente para continuar."
@@ -4219,6 +4444,10 @@
         "browser_agent": {
           "label": "Agente de navegador",
           "hint": "Modelos disponíveis para o Browser Agent. A classificação define a ordem padrão; desativar remove o modelo das execuções do Browser Agent."
+        },
+        "free_tier": {
+          "label": "Plano gratuito",
+          "hint": "Modelos abertos ao plano gratuito, na ordem em que uma conta Free os vê. O primeiro é o modelo em que uma conta Free começa. Esta classificação é independente da de Chat / Agente."
         }
       },
       "allProviders": "Todos os provedores",
@@ -4274,10 +4503,10 @@
       "stateOff": "Inativos",
       "stateUnlisted": "Não listado",
       "listing": {
-        "unlist": "Deixar de listar: o modelo continua disponível, mas deixa de ser oferecido nos seletores",
+        "unlist": "Deixar de listar: o modelo continua disponível, os seletores só o mostram em Modelos ocultos",
         "list": "Listar novamente",
-        "unlistFromOff": "Torná-lo disponível novamente, sem listá-lo: o que o usa roda nele, os seletores não o oferecem",
-        "unlistedTooltip": "Não listado: continua disponível, então os agentes, fluxos de trabalho e conversas que o usam continuam rodando nele. Não é oferecido nos seletores (o editor de mensagens o mostra nos modelos ocultos) e nunca é o padrão. Seu substituto está pausado."
+        "unlistFromOff": "Torná-lo disponível novamente, sem listá-lo: o que o usa roda nele, e os seletores só o mostram em Modelos ocultos",
+        "unlistedTooltip": "Não listado: continua disponível, então os agentes, fluxos de trabalho e conversas que o usam continuam rodando nele. Os seletores de modelo e o editor de mensagens só o mostram em Modelos ocultos, e ele nunca é o padrão. Seu substituto está pausado."
       },
       "replacementPaused": "(pausado)",
       "replacementPausedTooltip": "Não é aplicado enquanto o modelo não estiver listado: o que o usa continua rodando nele. Volta a valer se você desativar o modelo.",
@@ -5284,6 +5513,8 @@
       "scopedAccess": "Acesso limitado",
       "scopedAccessHint": "Apenas as ferramentas que você escolher",
       "createdAt": "Criada em {date}",
+      "expiresAt": "Expira em {date}",
+      "expired": "Expirou em {date}",
       "revoke": "Revogar",
       "revokeConfirm": "Revogar chave",
       "revokedTitle": "Chave revogada",
@@ -6208,6 +6439,12 @@
         "foundingUntilKept": "Preço fundador garantido até <b>{date}</b> e, depois, mantido enquanto você continuar assinante",
         "foundingUntil": "Preço fundador garantido até <b>{date}</b>"
       }
+    },
+    "partnerRecommendation": {
+      "title": "Recomendado pelo seu parceiro",
+      "body": "{plan} com {credits} créditos por mês{cycle, select, yearly {, cobrado anualmente} other {}}: o plano que seu parceiro escolheu para você.",
+      "offer": "Com o código {code}, sua nova conta recebe {credits} créditos grátis.",
+      "badge": "Recomendado pelo seu parceiro"
     }
   },
   "storage": {
@@ -6838,7 +7075,7 @@
       "updatePassword": "Atualizar Senha",
       "changing": "Atualizando...",
       "passwordMismatch": "As novas senhas não coincidem.",
-      "passwordTooShort": "Sua nova senha deve ter pelo menos 8 caracteres.",
+      "passwordTooShort": "Sua nova senha deve ter pelo menos 12 caracteres.",
       "currentPasswordIncorrect": "Sua senha atual está incorreta.",
       "passwordChangeSuccess": "Senha atualizada. Entre novamente com sua nova senha.",
       "passwordChangeError": "Não foi possível atualizar sua senha. Tente novamente.",
@@ -6937,6 +7174,14 @@
         "tasks": {
           "title": "Tarefas",
           "description": "Uma tarefa foi atribuída a você, menciona você ou aguarda sua revisão. Enviado no resumo diário."
+        },
+        "following": {
+          "title": "Criadores que você segue",
+          "description": "Um criador em que você se inscreveu publicou um novo app. Enviado no resumo diário."
+        },
+        "audience": {
+          "title": "Novos inscritos",
+          "description": "Alguém se inscreveu em você. Enviado no resumo diário."
         }
       },
       "delivery": {
@@ -6949,7 +7194,8 @@
     "advanced": {
       "deleteTitle": "Excluir Conta",
       "deleteWarning": "A sua conta é desativada de imediato e eliminada definitivamente após um período de tolerância. A partir daí, os seus dados, subscrições e configurações são perdidos.",
-      "deleteButton": "Excluir Minha Conta"
+      "deleteButton": "Excluir Minha Conta",
+      "description": "Ações sobre a própria conta, algumas das quais não podem ser desfeitas."
     },
     "deleteDialog": {
       "title": "Excluir Conta?",
@@ -8840,7 +9086,11 @@
       "note": {
         "text": "Texto da nota",
         "placeholder": "Digite o texto da sua nota...",
-        "color": "Color"
+        "color": "Color",
+        "attachedTo": "Anexada a",
+        "attachedToNone": "Nenhum nó (nota livre)",
+        "attachedToHint": "A nota fica ao lado deste nó, aparece quando ele está em foco e é excluída com ele.",
+        "emptyText": "Clique duas vezes para editar..."
       },
       "choices": {
         "title": "Choices",
@@ -11415,7 +11665,28 @@
     "resolveApprovalTitle": "Resolver esta aprovação?",
     "resumeContinue": "Autorizei essa ação - por favor, continue.",
     "resumeInstalled": "Instalei a aplicação eu mesmo - ela já está no meu espaço de trabalho. Continue sem adquiri-la novamente.",
-    "runSubtitle": "O agente quer executar uma ação sensível",
+    "runSubtitle": "O agente quer usar uma ferramenta que pode gastar créditos ou alterar coisas fora deste chat, por isso aguarda a sua autorização.",
+    "detailsToggle": "Ver detalhes",
+    "workflowExecuteTitle": "Executar este workflow?",
+    "workflowExecuteTitleNamed": "Executar “{name}”?",
+    "workflowExecuteSubtitle": "As etapas são executadas agora: isso consome créditos e pode agir nas suas contas conectadas (enviar mensagens, gravar dados).",
+    "restartFromNodeTitle": "Executar novamente parte desta execução?",
+    "restartFromNodeSubtitle": "Uma etapa e todas as seguintes são executadas de novo, com os mesmos créditos e efeitos de uma nova execução.",
+    "restartFromNodeSubtitleNamed": "“{node}” e todas as etapas seguintes são executadas de novo, com os mesmos créditos e efeitos de uma nova execução.",
+    "runNodeTitle": "Executar esta etapa agora?",
+    "runNodeSubtitle": "Uma única etapa é executada imediatamente com as suas contas conectadas, fora de qualquer workflow.",
+    "runNodeSubtitleNamed": "Uma etapa “{nodeType}” é executada imediatamente com as suas contas conectadas, fora de qualquer workflow.",
+    "applicationExecuteTitle": "Executar esta aplicação?",
+    "applicationExecuteSubtitle": "Ela é executada agora: isso consome créditos e pode agir nas suas contas conectadas.",
+    "agentExecuteTitle": "Iniciar outro agente?",
+    "agentExecuteTitleNamed": "Iniciar “{name}”?",
+    "agentExecuteSubtitle": "O agente quer passar uma tarefa a este agente. Ele consome créditos de IA enquanto trabalha e pode usar as próprias ferramentas.",
+    "catalogExecuteTitle": "Chamar um serviço externo?",
+    "catalogExecuteSubtitle": "O agente quer chamar uma API de terceiros com a sua conta conectada. A chamada pode alterar dados nesse serviço.",
+    "disarmTitle": "Deixar este agente agir sem lhe perguntar?",
+    "disarmTitleNamed": "Deixar “{name}” agir sem lhe perguntar?",
+    "disarmSubtitle": "O agente quer desativar este pedido de autorização para esse agente. Ele passaria a executar ações pagas ou externas sem lhe perguntar.",
+    "mailboxSendSubtitleTo": "O agente quer enviar uma mensagem para {to} da caixa conectada. Ela chega ao destinatário de imediato e não pode ser recolhida.",
     "runTitle": "Executar esta ação?",
     "mailboxSendTitle": "Enviar este e-mail?",
     "mailboxSendSubtitle": "O agente quer enviar uma mensagem da caixa conectada. Ela chega ao destinatário de imediato e não pode ser recolhida.",
@@ -11647,7 +11918,8 @@
     "otherConversations": "Outras conversas",
     "deleteConversation": "Excluir conversa",
     "deleteConversationMessage": "Excluir a conversa com {name}? Ela some apenas da SUA caixa - uma nova mensagem a traz de volta.",
-    "searchPlaceholder": "Pesquisar uma conversa"
+    "searchPlaceholder": "Pesquisar uma conversa",
+    "yourPartner": "Seu parceiro"
   },
   "version": {
     "title": "Versão",
@@ -11680,9 +11952,15 @@
     "dismiss": "Entendi",
     "learnMore": "Ver todas as atualizações",
     "latest": {
-      "title": "Percorra uma execução época a época, no seu próprio fuso horário",
-      "body": "No canvas, a pílula da execução agora abre uma linha do tempo com todas as épocas: avance entre elas, salte para a próxima falha, e o canvas, a aba Análise e os Logs acompanham a época escolhida. A Análise compara duas épocas quaisquer lado a lado. O fuso horário e o idioma definidos nas configurações da sua conta agora valem para todas as datas do app e todos os e-mails que você recebe, incluindo as páginas de login. E a varinha de layout agora equilibra os ramos dos dois lados de uma bifurcação.",
-      "mediaAlt": "Dois ícones lado a lado: uma fileira de barras de alturas diferentes, com a legenda percorrer uma execução época a época no canvas, na Análise e nos Logs, e um relógio, com a legenda seu fuso horário e idioma aplicados em todo lugar"
+      "title": "Notas dos seus agentes e páginas que sobrevivem a um recarregamento",
+      "body": "Os agentes agora anexam notas ao nó que explicam: o canvas coloca cada nota ao lado do seu nó e a destaca quando você seleciona esse nó, no editor ou em uma execução. Buscas, filtros, ordenações, abas e números de página ficam no endereço, então um recarregamento ou um link compartilhado reabre a página como você a deixou.\n\nTambém novo:\n• Passar o cursor sobre uma época na linha do tempo da execução ou nos gráficos da Análise abre o cartão dela, com o resultado, as datas e a duração. Os rótulos de nó de uma comparação de épocas são clicáveis.\n• Antes de uma ação sensível, o cartão do chat diz o que vai ser executado e por que pede confirmação.\n• O seletor de modelos também oferece os modelos que um administrador ocultou, no fim da lista e sob um título próprio.\n• As células de progresso das tabelas mostram a legenda, e uma edição recusada devolve o valor salvo.\n• Pausar um workflow com falha encerra os lembretes de \"continua falhando\".",
+      "mediaAlt": "Dois ícones lado a lado: uma nota adesiva, com a legenda notas que os agentes anexam ao lado do nó que explicam, e um link, com a legenda buscas, filtros, abas e páginas mantidos no endereço"
+    },
+    "latestCloud": {
+      "title": "O programa de parceiros da LiveContext está aberto",
+      "body": "Agências, consultores e freelancers que criam automações para clientes agora podem se tornar parceiros da LiveContext. Você recebe uma parte das faturas de cada cliente durante 12 meses: 30% a partir da sua aprovação, depois 40% no Gold e 50% no Platinum. O selo dourado de parceiro aparece ao lado do seu nome no seu perfil do marketplace, em cada app que você publica e na busca, e o seu espaço de parceiro em Configurações cria um link para cada cliente com o plano que você recomenda.\n\nTambém novo:\n• Os agentes anexam notas ao nó que explicam: o canvas coloca cada nota ao lado do seu nó e a destaca quando você seleciona esse nó.\n• Buscas, filtros, ordenações, abas e números de página ficam no endereço, então um recarregamento ou um link compartilhado reabre a página como você a deixou.\n• Passar o cursor sobre uma época na linha do tempo da execução ou nos gráficos da Análise abre o cartão dela, com o resultado, as datas e a duração.\n• Antes de uma ação sensível, o cartão do chat diz o que vai ser executado e quanto custa.\n• Criadores recebem um e-mail sobre novos inscritos, e seguidores sobre novos apps dos criadores que seguem.\n• Pausar um workflow com falha encerra os lembretes de \"continua falhando\".",
+      "mediaAlt": "À esquerda, o perfil do marketplace de um parceiro com o selo dourado de parceiro ao lado do nome e uma etiqueta Platinum, com a legenda o selo de parceiro no seu perfil do marketplace. À direita, três barras crescentes em prata, ouro e platina marcadas 30%, 40% e 50%, com a legenda até 50% durante 12 meses por cliente",
+      "action": "Seja parceiro"
     }
   },
   "optionalComponents": {
@@ -12868,6 +13146,8 @@
     "selfHosted": "Auto-hospedado",
     "signIn": "Entrar",
     "getStarted": "Começar grátis",
+    "openApp": "Abrir o app",
+    "account": "Sua conta",
     "docs": "Docs",
     "product": "Produto",
     "models": "Modelos",
@@ -16428,5 +16708,34 @@
     "dismiss": "Dispensar",
     "unavailable": "As atualizações em tempo real não estão chegando a esta página.",
     "unavailableHint": "As páginas funcionam, mas as mudanças feitas em outro lugar só aparecem após recarregar. Se isso persistir, um proxy ou firewall pode estar bloqueando a conexão em tempo real."
+  },
+  "securityDisclosure": {
+    "metadata": {
+      "title": "Divulgação de vulnerabilidades de segurança",
+      "description": "Como relatar uma vulnerabilidade de segurança no LiveContext, o que nos comprometemos a fazer e as regras da pesquisa de boa-fé."
+    },
+    "title": "Divulgação de vulnerabilidades de segurança",
+    "intro": "Recebemos com satisfação relatos de pesquisadores de segurança e usuários. Se você acredita ter encontrado uma vulnerabilidade de segurança no LiveContext, informe-nos de forma privada para que possamos corrigi-la antes que alguém a explore.",
+    "reportTitle": "Como relatar",
+    "reportBody": "Envie um e-mail para <email>security@livecontext.ai</email> ou use a categoria de segurança do <contact>formulário de contato</contact>. Inclua uma descrição do problema, os passos para reproduzi-lo, a URL ou o componente afetado e o impacto observado. Não abra uma issue pública. Você pode escrever em inglês ou em francês.",
+    "commitTitle": "Nossos compromissos",
+    "commitAck": "Confirmamos o recebimento do seu relato em até 5 dias úteis.",
+    "commitUpdates": "Mantemos você informado enquanto investigamos e corrigimos o problema, e avisamos quando ele estiver resolvido.",
+    "commitCredit": "Se você quiser, damos o crédito a você nas notas de versão assim que a correção for publicada.",
+    "rulesTitle": "Regras da pesquisa de boa-fé",
+    "rules": {
+      "ownAccount": "Teste apenas com contas e dados que pertencem a você ou que você tem autorização explícita para usar.",
+      "noData": "Não acesse, modifique nem exclua dados de outros usuários. Se chegar por acidente aos dados de outra pessoa, pare e mencione isso no seu relato.",
+      "noDisruption": "Não faça testes de negação de serviço, não envie spam e não faça varreduras em um volume que prejudique o serviço para outros usuários.",
+      "noSocial": "Não use engenharia social, phishing nem ataques físicos contra nossa equipe, nossos usuários ou nossas instalações.",
+      "disclosure": "Dê-nos um prazo razoável para corrigir o problema antes de qualquer divulgação pública e combine o momento conosco."
+    },
+    "safeHarborTitle": "Pesquisa de boa-fé",
+    "safeHarbor": "Se você seguir estas regras e agir de boa-fé, consideraremos sua pesquisa autorizada e não tomaremos medidas legais contra você por causa dela.",
+    "scopeTitle": "Escopo",
+    "scopeIn": "Dentro do escopo: livecontext.ai e seus subdomínios, e o código-fonte do LiveContext Community Edition.",
+    "scopeOut": "Fora do escopo: vulnerabilidades em serviços de terceiros que usamos (relate-as ao respectivo fornecedor) e constatações sem impacto de segurança demonstrado, como a simples ausência de um cabeçalho de boas práticas.",
+    "bountyNote": "No momento, não temos um programa de bug bounty remunerado.",
+    "machineReadable": "Esta política também é referenciada no nosso arquivo legível por máquina <file>security.txt</file>."
   }
 }

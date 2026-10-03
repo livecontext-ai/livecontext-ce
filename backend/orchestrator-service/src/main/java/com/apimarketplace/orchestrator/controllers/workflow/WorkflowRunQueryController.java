@@ -51,6 +51,15 @@ public class WorkflowRunQueryController {
     private final com.apimarketplace.orchestrator.repository.WorkflowEpochRepository workflowEpochRepository;
     private final ApplicationRunVersionBatchService applicationRunVersionBatchService;
 
+    /**
+     * Intra-organization access guard (LC-012, security audit 2026-08-13). {@link ScopeGuard}
+     * answers "is this run in the caller's workspace"; this answers "may this member of that
+     * workspace see it". Every read handler below runs both, keyed on the run's parent
+     * workflow, and {@code WorkflowRunQueryOrgGateInvariantTest} fails the build when a new
+     * handler skips either.
+     */
+    private final com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard;
+
     public WorkflowRunQueryController(WorkflowRunRepository workflowRunRepository,
                                       WorkflowStepDataRepository workflowStepDataRepository,
                                       WorkflowRunStatusService workflowRunStatusService,
@@ -59,7 +68,8 @@ public class WorkflowRunQueryController {
                                       StorageService storageService,
                                       ObjectMapper objectMapper,
                                       com.apimarketplace.orchestrator.repository.WorkflowEpochRepository workflowEpochRepository,
-                                      ApplicationRunVersionBatchService applicationRunVersionBatchService) {
+                                      ApplicationRunVersionBatchService applicationRunVersionBatchService,
+                                      com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard) {
         this.workflowRunRepository = workflowRunRepository;
         this.workflowStepDataRepository = workflowStepDataRepository;
         this.workflowRunStatusService = workflowRunStatusService;
@@ -69,6 +79,30 @@ public class WorkflowRunQueryController {
         this.objectMapper = objectMapper;
         this.workflowEpochRepository = workflowEpochRepository;
         this.applicationRunVersionBatchService = applicationRunVersionBatchService;
+        this.orgAccessGuard = orgAccessGuard;
+    }
+
+    /**
+     * The single refusal for a deny-listed read on this controller.
+     *
+     * <p>403 with a stable {@code ORG_ACCESS_DENIED} body, produced by the shared advice
+     * on {@link com.apimarketplace.auth.client.access.OrgAccessDeniedException}. Same shape
+     * the sibling workflow controllers already return for the same decision
+     * ({@code WorkflowCrudController#getWorkflow}, {@code WorkflowVersionController}), so
+     * the frontend has one case to handle, not two. Distinct from the 404 used for a
+     * workspace mismatch, which must not confirm the row exists: here the caller is IN the
+     * workspace and already knows the workflow exists, they are simply restricted from it.
+     */
+    private void denyRead(Object workflowId, String tenantId, String orgId) {
+        logger.warn("OrgAccess deny-list: user {} restricted from reading runs of workflow {} in org {}",
+                tenantId, workflowId, orgId);
+        throw new com.apimarketplace.auth.client.access.OrgAccessDeniedException(
+                "workflow", workflowId == null ? "" : workflowId.toString());
+    }
+
+    /** The run's parent workflow id, for the refusal log/body; never dereferences a null. */
+    private static Object parentWorkflowId(WorkflowRunEntity run) {
+        return run == null || run.getWorkflow() == null ? null : run.getWorkflow().getId();
     }
 
     @GetMapping("/{workflowId}/runs")
@@ -77,7 +111,8 @@ public class WorkflowRunQueryController {
             @RequestParam(value = "limit", defaultValue = "15") int limit,
             @RequestParam(value = "offset", defaultValue = "0") int offset,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         int safeLimit = Math.min(Math.max(limit, 1), 200);
         int safeOffset = Math.max(offset, 0);
@@ -91,6 +126,13 @@ public class WorkflowRunQueryController {
         // bypass the tenant filter.
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.status(401).build();
+        }
+        // Intra-org guard (LC-012): the SQL finder below is workspace-scoped, which says
+        // nothing about this member's standing inside that workspace. Keyed on the workflow
+        // in the path, so no row has to be loaded to refuse.
+        if (!WorkflowControllerHelper.canReadWorkflowResource(
+                orgId, tenantId, workflowId.toString(), orgRole, orgAccessGuard)) {
+            denyRead(workflowId, tenantId, orgId);
         }
         // Route through owner-or-org scope when an active org is present (PR15/V209 contract).
         // Without orgId the InScope finder degenerates to the tenant-strict path.
@@ -128,9 +170,14 @@ public class WorkflowRunQueryController {
     @GetMapping("/{workflowId}/runs/latest")
     public ResponseEntity<?> getLatestRun(@PathVariable("workflowId") UUID workflowId,
                                           @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-                                          @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+                                          @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+                                          @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.status(401).build();
+        }
+        if (!WorkflowControllerHelper.canReadWorkflowResource(
+                orgId, tenantId, workflowId.toString(), orgRole, orgAccessGuard)) {
+            denyRead(workflowId, tenantId, orgId);
         }
         Pageable pageable = PageRequest.of(0, 1, Sort.by(Sort.Direction.DESC, "startedAt"));
         var projections = workflowRunRepository.findRunSummariesByWorkflowIdInScope(
@@ -164,7 +211,8 @@ public class WorkflowRunQueryController {
     public ResponseEntity<?> getPinnedRun(
             @PathVariable("workflowId") UUID workflowId,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         // Cross-tenant guard: this endpoint resolved the pinned run purely by workflowId +
         // version + status with NO tenant filter, so any caller who knew a workflowId read
         // another tenant's pinned run (plan/metadata/triggerPayload) - an IDOR. Bind it to
@@ -182,6 +230,9 @@ public class WorkflowRunQueryController {
         if (!WorkflowControllerHelper.isRunInScope(entity, tenantId, orgId)) {
             return ResponseEntity.notFound().build();
         }
+        if (!WorkflowControllerHelper.canReadRun(entity, tenantId, orgRole, orgAccessGuard)) {
+            denyRead(workflowId, tenantId, orgId);
+        }
         return ResponseEntity.ok(mapRunWithEpochLookup(entity));
     }
 
@@ -194,7 +245,8 @@ public class WorkflowRunQueryController {
             @PathVariable("workflowId") UUID workflowId,
             @RequestParam("publicationId") String publicationId,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         // Cross-tenant guard: the publicationId filter is a functional selector, not a security
         // boundary (it is the marketplace/share resource token, not a secret), so without a tenant
@@ -208,6 +260,9 @@ public class WorkflowRunQueryController {
 
         if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
             return ResponseEntity.notFound().build();
+        }
+        if (!WorkflowControllerHelper.canReadRun(runOpt.get(), tenantId, orgRole, orgAccessGuard)) {
+            denyRead(workflowId, tenantId, orgId);
         }
 
         return ResponseEntity.ok(mapRunWithEpochLookup(runOpt.get()));
@@ -233,7 +288,8 @@ public class WorkflowRunQueryController {
     public ResponseEntity<Map<String, ApplicationRunVersionSummary>> getApplicationRunVersionBatch(
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         Object raw = body.get("workflowIds");
         if (!(raw instanceof List<?> rawList) || rawList.isEmpty()) {
             return ResponseEntity.ok(Map.of());
@@ -248,6 +304,20 @@ public class WorkflowRunQueryController {
         if (ids.isEmpty()) {
             return ResponseEntity.ok(Map.of());
         }
+        // Intra-org guard (LC-012), bulk shape: this batch answers the same question the
+        // per-card endpoints answer, so a workflow the caller is deny-listed from must be
+        // absent here too (the card then simply shows no badge). One guard call for the
+        // whole request rather than one per id.
+        if (orgId != null && !orgId.isBlank() && orgAccessGuard != null && !ids.isEmpty()) {
+            Set<String> restricted =
+                    orgAccessGuard.getRestrictedResourceIds(orgId, userId, "workflow", orgRole);
+            if (restricted != null && !restricted.isEmpty()) {
+                ids.removeIf(id -> restricted.contains(id.toString()));
+                if (ids.isEmpty()) {
+                    return ResponseEntity.ok(Map.of());
+                }
+            }
+        }
         Map<UUID, ApplicationRunVersionSummary> resolved = applicationRunVersionBatchService.resolve(ids, orgId, userId);
         Map<String, ApplicationRunVersionSummary> response = new HashMap<>();
         resolved.forEach((wfId, summary) -> response.put(wfId.toString(), summary));
@@ -257,13 +327,17 @@ public class WorkflowRunQueryController {
     @GetMapping("/runs/{runIdPublic}")
     public ResponseEntity<?> getRunByPublicId(@PathVariable("runIdPublic") String runIdPublic,
                                               @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-                                              @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+                                              @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+                                              @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.status(401).build();
         }
         Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findByRunIdPublic(runIdPublic);
         if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
             return ResponseEntity.notFound().build();
+        }
+        if (!WorkflowControllerHelper.canReadRun(runOpt.get(), tenantId, orgRole, orgAccessGuard)) {
+            denyRead(parentWorkflowId(runOpt.get()), tenantId, orgId);
         }
         return ResponseEntity.ok(mapRunWithEpochLookup(runOpt.get()));
     }
@@ -282,7 +356,8 @@ public class WorkflowRunQueryController {
     @GetMapping("/runs/{runId}/steps")
     public ResponseEntity<List<WorkflowStepDataSummary>> listSteps(@PathVariable("runId") UUID runId,
                                                                     @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-                                                                    @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+                                                                    @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+                                                                    @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.status(401).build();
         }
@@ -291,6 +366,9 @@ public class WorkflowRunQueryController {
         Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findById(runId);
         if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
             return ResponseEntity.notFound().build();
+        }
+        if (!WorkflowControllerHelper.canReadRun(runOpt.get(), tenantId, orgRole, orgAccessGuard)) {
+            denyRead(parentWorkflowId(runOpt.get()), tenantId, orgId);
         }
         // Lightweight projection: heavy JSONB (input_data, metadata, merge_received_branches,
         // merge_skipped_branches) returns as null. Frontend that needs the full payload of a
@@ -326,7 +404,8 @@ public class WorkflowRunQueryController {
             @RequestParam(value = "epoch", required = false) Integer epoch,
             @RequestParam(value = "status", required = false) String status,
             @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.status(401).build();
@@ -334,6 +413,9 @@ public class WorkflowRunQueryController {
         Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findById(runId);
         if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
             return ResponseEntity.notFound().build();
+        }
+        if (!WorkflowControllerHelper.canReadRun(runOpt.get(), tenantId, orgRole, orgAccessGuard)) {
+            denyRead(parentWorkflowId(runOpt.get()), tenantId, orgId);
         }
 
         int safePage = Math.max(page, 0);
@@ -389,7 +471,8 @@ public class WorkflowRunQueryController {
     @GetMapping("/runs/{runId}/status")
     public ResponseEntity<?> getRunStatus(@PathVariable("runId") UUID runId,
                                           @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-                                          @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+                                          @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+                                          @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.status(401).build();
         }
@@ -401,15 +484,31 @@ public class WorkflowRunQueryController {
         // Strict-isolation scope (2026-05-18, ScopeGuard alignment). The run
         // status table reuses the tenant column only; org tag lives on the
         // parent run, so we look it up once when orgId is set.
+        WorkflowRunEntity parentRun = null;
         String parentOrgId = null;
         if (orgId != null && !orgId.isBlank()) {
-            parentOrgId = workflowRunRepository.findById(runId)
-                    .map(WorkflowRunEntity::getOrganizationId)
-                    .orElse(null);
+            parentRun = workflowRunRepository.findById(runId).orElse(null);
+            parentOrgId = parentRun == null ? null : parentRun.getOrganizationId();
         }
         if (!ScopeGuard.isInStrictScope(tenantId, orgId,
                 statusOpt.get().getTenantId(), parentOrgId)) {
             return ResponseEntity.notFound().build();
+        }
+        // Intra-org guard (LC-012): the status payload carries the trigger payload and the
+        // run's progress, so a deny-listed member must not poll it either.
+        //
+        // The parent run is loaded again here when the scope check did not need it. The
+        // deny-list is keyed on the RUN's organization, not on the caller's active-workspace
+        // header, so gating on "the caller sent X-Organization-ID" would skip the check
+        // exactly for the caller who sends no header - a default value silently disarming the
+        // guard. canReadRun is itself a no-op for a personal (org-less) run, so the extra
+        // lookup only ever changes the answer for an org-owned run.
+        if (parentRun == null) {
+            parentRun = workflowRunRepository.findById(runId).orElse(null);
+        }
+        if (parentRun != null
+                && !WorkflowControllerHelper.canReadRun(parentRun, tenantId, orgRole, orgAccessGuard)) {
+            denyRead(parentWorkflowId(parentRun), tenantId, orgId);
         }
         var entity = statusOpt.get();
         return ResponseEntity.ok(Map.of(
@@ -430,7 +529,8 @@ public class WorkflowRunQueryController {
     @GetMapping("/runs/{runIdPublic}/status-counts")
     public ResponseEntity<?> getStatusCounts(@PathVariable("runIdPublic") String runIdPublic,
                                              @RequestHeader(value = "X-User-ID", required = false) String tenantId,
-                                             @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+                                             @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+                                             @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         if (tenantId == null || tenantId.isBlank()) {
             return ResponseEntity.status(401).build();
         }
@@ -439,6 +539,9 @@ public class WorkflowRunQueryController {
         Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findByRunIdPublic(runIdPublic);
         if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
             return ResponseEntity.notFound().build();
+        }
+        if (!WorkflowControllerHelper.canReadRun(runOpt.get(), tenantId, orgRole, orgAccessGuard)) {
+            denyRead(parentWorkflowId(runOpt.get()), tenantId, orgId);
         }
         WorkflowRunEntity runEntity = runOpt.get();
 
@@ -485,10 +588,22 @@ public class WorkflowRunQueryController {
         return ResponseEntity.ok(response);
     }
 
+    /**
+     * The recorded output of one step.
+     *
+     * <p>This is the endpoint that returns the raw persisted third-party payload, e.g. the
+     * message bodies a Gmail step fetched, so the intra-org deny-list has to reach it or it
+     * reaches nothing that matters (LC-012, security audit 2026-08-13). A storage row is not
+     * itself a deny-list resource: the resource is the workflow that produced it, recorded on
+     * the row as {@code workflow_id}, which is what the gate below is keyed on. An ORG row with
+     * no workflow cannot be checked against the deny-list and is refused (fail closed); a
+     * personal row with no workflow is decided by the workspace check above alone.
+     */
     @GetMapping("/storage/{storageId}")
     public ResponseEntity<?> getStorage(@PathVariable("storageId") UUID storageId,
                                         @RequestHeader(value = "X-User-ID", required = false) String userIdHeader,
                                         @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+                                        @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
                                         @RequestParam(value = "tenantId", required = false) String tenantIdParam) {
         // Audit 2026-05-17 round-6 - Bug-#4 closed: header is the only source of truth.
         String tenantId = (userIdHeader != null && !userIdHeader.isBlank()) ? userIdHeader : null;
@@ -496,22 +611,28 @@ public class WorkflowRunQueryController {
             logger.warn("[SCOPE] Ignored client-supplied tenantId on getStorage: header={} param={}", tenantId, tenantIdParam);
         }
         if (tenantId == null) return ResponseEntity.status(401).build();
-        return (organizationId != null && !organizationId.isBlank()
+        var entityOpt = organizationId != null && !organizationId.isBlank()
                 ? storageService.getEntityByIdForScope(storageId, tenantId, organizationId)
-                : storageService.getEntityById(storageId, tenantId))
-            .<ResponseEntity<?>>map(entity -> {
-                Map<String, Object> response = new HashMap<>();
-                response.put("data", parseJson(entity.getData()));
-                response.put("data_mapped", parseJson(entity.getDataMapped()));
-                return ResponseEntity.ok(response);
-            })
-            .orElseGet(() -> ResponseEntity.notFound().build());
+                : storageService.getEntityById(storageId, tenantId);
+        if (entityOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        var entity = entityOpt.get();
+        if (!WorkflowControllerHelper.canReadWorkflowResource(
+                entity.getOrganizationId(), tenantId, entity.getWorkflowId(), orgRole, orgAccessGuard)) {
+            denyRead(entity.getWorkflowId(), tenantId, organizationId);
+        }
+        Map<String, Object> response = new HashMap<>();
+        response.put("data", parseJson(entity.getData()));
+        response.put("data_mapped", parseJson(entity.getDataMapped()));
+        return ResponseEntity.ok(response);
     }
 
     @PutMapping("/storage/{storageId}")
     public ResponseEntity<?> updateStorage(@PathVariable("storageId") UUID storageId,
                                            @RequestHeader(value = "X-User-ID", required = false) String userIdHeader,
                                            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+                                           @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
                                            @RequestParam(value = "tenantId", required = false) String tenantIdParam,
                                            @RequestBody Map<String, Object> body) {
         // Audit 2026-05-17 round-6 - CRITICAL Bug-#4 closed on WRITE path. Prior:
@@ -521,9 +642,36 @@ public class WorkflowRunQueryController {
             logger.warn("[SCOPE] Ignored client-supplied tenantId on updateStorage: header={} param={}", tenantId, tenantIdParam);
         }
         if (tenantId == null) return ResponseEntity.status(401).build();
-        // Org VIEWERs are read-only: overwriting a storage row's data is a write.
-        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole())) {
-            return ResponseEntity.status(403).body(Map.of("error", "VIEWER role cannot modify storage"));
+        // LC-012 (security audit 2026-08-13): a storage row holds a node's recorded output, and
+        // downstream nodes read it. Rewriting it changes what the rest of the run does, so it is
+        // a write in the sense the read-only role bounds. The row itself is not a deny-list
+        // resource, so the role-level block is the check that applies here.
+        if (com.apimarketplace.auth.client.access.OrgAccessGuard.isRoleWriteBlocked(organizationId, orgRole)) {
+            logger.warn("[SCOPE] updateStorage refused for read-only role: storageId={} caller={} role={}",
+                    storageId, tenantId, orgRole);
+            return ResponseEntity.status(403).body(Map.of("error", "Workflow access is read-only"));
+        }
+        // The role gate above stops a VIEWER; it says nothing about a MEMBER who is
+        // deny-listed from THIS workflow. Same resource key as the read side (LC-012):
+        // the workflow recorded on the row. Resolved through the same workspace-scoped
+        // getter the write itself uses, so an out-of-scope id still 404s rather than
+        // revealing that the row exists.
+        if (organizationId != null && !organizationId.isBlank()) {
+            var rowOpt = storageService.getEntityByIdForScope(storageId, tenantId, organizationId);
+            if (rowOpt.isEmpty()) {
+                return ResponseEntity.notFound().build();
+            }
+            String rowWorkflowId = rowOpt.get().getWorkflowId();
+            // Fail closed when the guard is absent: a check that silently does not run is
+            // worse than no check, because the call site reads as if it did.
+            if (rowWorkflowId != null && !rowWorkflowId.isBlank()
+                    && (orgAccessGuard == null
+                        || !orgAccessGuard.canWrite(organizationId, tenantId, "workflow", rowWorkflowId, orgRole))) {
+                logger.warn("OrgAccess deny-list: user {} restricted from writing storage of workflow {} in org {}",
+                        tenantId, rowWorkflowId, organizationId);
+                throw new com.apimarketplace.auth.client.access.OrgAccessDeniedException(
+                        "workflow", rowWorkflowId);
+            }
         }
         Object data = body.get("data");
         Object dataMapped = body.get("data_mapped");

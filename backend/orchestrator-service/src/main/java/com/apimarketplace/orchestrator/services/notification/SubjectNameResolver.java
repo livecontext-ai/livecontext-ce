@@ -45,6 +45,8 @@ public interface SubjectNameResolver {
     String BILLING      = "BILLING";
     /** A marketplace listing (V551): a creator the user follows published a new one. */
     String PUBLICATION  = "PUBLICATION";
+    /** A person (V558): someone subscribed to the recipient. */
+    String USER         = "USER";
 
     /**
      * Stable string discriminator matching the {@code subject_type} column

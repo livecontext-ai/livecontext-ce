@@ -20,6 +20,8 @@ import { orchestratorApi } from '@/lib/api';
 import { useTranslations } from 'next-intl';
 import { useVectorFeatureLock } from '@/hooks/useVectorFeatureLock';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { numberDecimals, NUMBER_CONFIG_MAX_DECIMALS } from '@/components/data-table/cells/NumberCell';
+import { ratingStarCount } from '@/components/data-table/cells/RatingCell';
 import { ModalStepIndicator } from '@/components/ui/ModalStepIndicator';
 
 // ============== Types ==============
@@ -113,7 +115,7 @@ const ColumnConfigInline: React.FC<ColumnConfigInlineProps> = ({ column, onChang
         </div>
         <div>
           <label className="block text-xs font-medium text-theme-secondary mb-1">{ct('configNumberDecimals')}</label>
-          <Input type="number" min={0} max={6} value={decimals} onChange={(e) => onChange({ ...config, decimals: Math.max(0, Number(e.target.value) || 0) })} className="w-16 h-9" />
+          <Input type="number" min={0} max={6} value={decimals} onChange={(e) => onChange({ ...config, decimals: numberDecimals(e.target.value, NUMBER_CONFIG_MAX_DECIMALS) })} className="w-16 h-9" />
         </div>
         {format === 'currency' && (
           <div>
@@ -159,7 +161,7 @@ const ColumnConfigInline: React.FC<ColumnConfigInlineProps> = ({ column, onChang
   }
 
   if (type === 'rating') {
-    const max = (config.max as number) || 5;
+    const max = ratingStarCount(config.max);
     return (
       <div className="pt-2">
         <label className="block text-xs font-medium text-theme-secondary mb-1">{ct('configRatingMax')}</label>
@@ -178,7 +180,7 @@ const ColumnConfigInline: React.FC<ColumnConfigInlineProps> = ({ column, onChang
     return (
       <div className="pt-2">
         <label className="block text-xs font-medium text-theme-secondary mb-1">{ct('configProgressMax')}</label>
-        <Input type="number" min={1} value={max} onChange={(e) => onChange({ ...config, max: Math.max(1, Number(e.target.value) || 100) })} className="w-24 h-9" />
+        <Input type="number" min={1} value={max} onChange={(e) => onChange({ ...config, max: Math.max(1, Math.trunc(Number(e.target.value)) || 100) })} className="w-24 h-9" />
       </div>
     );
   }

@@ -9,8 +9,10 @@ import com.apimarketplace.auth.service.UserService;
 import com.apimarketplace.auth.util.InitialsAvatarGenerator;
 import com.apimarketplace.auth.util.ReservedUsernames;
 import com.apimarketplace.common.storage.domain.StorageEntity;
+import com.apimarketplace.common.web.SafeFileServeHeaders;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -31,7 +33,8 @@ import java.util.concurrent.TimeUnit;
  */
 @RestController
 @RequestMapping("/api/users")
-@CrossOrigin(origins = "*")
+// No @CrossOrigin (LC-033): CORS is decided centrally (gateway CorsConfig). A per-controller
+// wildcard would widen the origin set for any request reaching this service directly.
 @Validated
 public class UserController {
 
@@ -538,7 +541,10 @@ public class UserController {
                 }
             }
 
-            return ResponseEntity.ok()
+            // Uploaded (possibly SVG) markup on the app origin, public GET: nosniff + a sandboxed
+            // no-script CSP, and a non-image declared type downloads instead of rendering (LC-020).
+            return SafeFileServeHeaders.applyTo(ResponseEntity.ok(), mimeType)
+                    .header(HttpHeaders.CONTENT_DISPOSITION, SafeFileServeHeaders.dispositionType(mimeType, true))
                     .eTag(eTag)
                     .contentType(MediaType.parseMediaType(mimeType))
                     // Mutable resource on a stable URL: this avatar changes when the user
@@ -711,7 +717,8 @@ public class UserController {
 
             String mimeType = entity.getMimeType() != null ? entity.getMimeType() : "image/jpeg";
 
-            return ResponseEntity.ok()
+            return SafeFileServeHeaders.applyTo(ResponseEntity.ok(), mimeType)
+                    .header(HttpHeaders.CONTENT_DISPOSITION, SafeFileServeHeaders.dispositionType(mimeType, true))
                     .contentType(MediaType.parseMediaType(mimeType))
                     .cacheControl(CacheControl.maxAge(1, TimeUnit.DAYS))
                     .body(data);

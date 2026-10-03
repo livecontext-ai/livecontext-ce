@@ -60,6 +60,12 @@ public class RemoteToolExecutionService implements ToolExecutionService {
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
+    /** Stable caller identity echoed in X-Provider-ID (gateway signature, CASA LC-013). */
+    static final String INTERNAL_PROVIDER_ID = "internal-agent-tools";
+
+    @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}")
+    private String gatewaySecretKey;
+
     @Value("${services.orchestrator-url:http://localhost:8099}")
     private String orchestratorUrl;
 
@@ -174,6 +180,10 @@ public class RemoteToolExecutionService implements ToolExecutionService {
 
     public RemoteToolExecutionService(ObjectMapper objectMapper) {
         this.restTemplate = createToolExecutionRestTemplate();
+        // CASA LC-013: v2 gateway signature added at send time to the /api/agent-tools/execute
+        // calls stamped below. The secret is a field-injected @Value, hence the supplier.
+        this.restTemplate.getInterceptors().add(
+                new com.apimarketplace.common.web.GatewaySignatureV2Interceptor(() -> gatewaySecretKey));
         this.objectMapper = objectMapper;
     }
 
@@ -1112,6 +1122,9 @@ public class RemoteToolExecutionService implements ToolExecutionService {
         // Without this header, downstream INSERTs in orchestrator/interface/etc.
         // stamp organization_id = NULL, which fails Phase 6 NOT NULL.
         applyOrgHeaders(headers, credentials);
+        // Sign LAST (CASA LC-013): the callee can then authorize on the signed X-User-ID /
+        // X-Organization-ID instead of trusting an unauthenticated public path.
+        com.apimarketplace.common.web.InternalGatewaySigner.stamp(headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
 
@@ -1169,6 +1182,9 @@ public class RemoteToolExecutionService implements ToolExecutionService {
         // Without this header, downstream INSERTs in orchestrator/interface/etc.
         // stamp organization_id = NULL, which fails Phase 6 NOT NULL.
         applyOrgHeaders(headers, credentials);
+        // Sign LAST (CASA LC-013): the callee can then authorize on the signed X-User-ID /
+        // X-Organization-ID instead of trusting an unauthenticated public path.
+        com.apimarketplace.common.web.InternalGatewaySigner.stamp(headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
 
@@ -1232,6 +1248,9 @@ public class RemoteToolExecutionService implements ToolExecutionService {
         // Without this header, downstream INSERTs in orchestrator/interface/etc.
         // stamp organization_id = NULL, which fails Phase 6 NOT NULL.
         applyOrgHeaders(headers, credentials);
+        // Sign LAST (CASA LC-013): the callee can then authorize on the signed X-User-ID /
+        // X-Organization-ID instead of trusting an unauthenticated public path.
+        com.apimarketplace.common.web.InternalGatewaySigner.stamp(headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
 
@@ -1293,6 +1312,15 @@ public class RemoteToolExecutionService implements ToolExecutionService {
         // Hosting workflow node - lets orchestrator tools (browser-agent live
         // view) route run-page events to the right builder node.
         copyCredential(request, credentials, "workflowNodeId", "__workflowNodeId__", "workflowNodeId");
+        // The execution's restricted-data tag (Gmail / Drive content in context) travels WITH the
+        // call, so the tool at the other end classifies what it stores the same way: rows a
+        // table tool writes, a memory the memory tool would save. Dropped here, a restricted
+        // execution wrote NORMAL rows, and any model could read them back later.
+        // Only RESTRICTED is sent: its absence already means NORMAL, so the field can only ever
+        // tighten what a receiver does, never relax it.
+        if (com.apimarketplace.common.classification.DataSensitivity.fromCredentials(credentials).isRestricted()) {
+            request.put("dataSensitivity", com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+        }
 
         // Forward access modes (read/write per resource) - strip __ prefix/suffix
         // Derived, never re-listed: a hand-copied list here is how an axis goes inert (see

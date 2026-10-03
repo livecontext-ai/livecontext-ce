@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { AdaptiveTabBar } from "@/components/settings/AdaptiveTabBar";
 import { useLocale, useTranslations } from "next-intl";
 import { IS_CE } from "@/lib/edition";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
@@ -16,6 +17,7 @@ import InviteMemberModal from "@/components/organization/InviteMemberModal";
 import MemberAccessModal from "@/components/organization/MemberAccessModal";
 import MemberQuotaDialog from "@/components/organization/MemberQuotaDialog";
 import OrganizationDangerZone from "@/components/organization/OrganizationDangerZone";
+import { urlEnum, useUrlState } from "@/hooks/useUrlState";
 import OrganizationAuditLogPanel from "@/components/organization/OrganizationAuditLogPanel";
 import OrganizationSsoPanel from "@/components/organization/OrganizationSsoPanel";
 import { WorkspaceAvatar } from "@/components/organization/WorkspaceAvatar";
@@ -89,6 +91,8 @@ const ORG_TABS: { id: string; labelKey: string; icon: React.ElementType }[] = [
   { id: "advanced", labelKey: "organization.tabs.advanced", icon: Settings },
 ];
 
+const ORG_TAB_IDS = ORG_TABS.map((tab) => tab.id);
+
 function OrganizationSkeleton() {
   return (
     <div className="space-y-8">
@@ -156,10 +160,13 @@ export default function OrganizationSettingsPage() {
   // sections into tabs (the workspace header above stays visible on every tab).
   // "members" is the default so the members table loads first (and existing
   // deep-links / tests that look for member rows keep working).
-  const [activeTab, setActiveTab] = useState<string>("members");
-  // Animated slider behind the active pill - mirrors the overview tabs.
-  const tabContainerRef = useRef<HTMLDivElement>(null);
-  const [tabSliderStyle, setTabSliderStyle] = useState<{ left: number; width: number }>({ left: 0, width: 0 });
+  // It lives in the address (`?tab=`), so a reload or a shared link reopens the same tab. The
+  // audit log under the Security tab owns `category` and `page`, which leave with it.
+  const [activeTab, setActiveTab] = useUrlState<string>("tab", "members", {
+    codec: urlEnum(ORG_TAB_IDS),
+    history: "push",
+    clears: ["category", "page"],
+  });
 
   const fetchData = useCallback(async () => {
     try {
@@ -278,6 +285,8 @@ export default function OrganizationSettingsPage() {
     // the modal would re-open on every reload.
     const next = new URLSearchParams(searchParams?.toString() ?? "");
     next.delete("invite");
+    // This query is the one of the last render: it would put back the tab just left above.
+    next.delete("tab");
     const qs = next.toString();
     const here = pathname ?? "/app/settings/organization";
     showSamePageUrl(
@@ -285,38 +294,7 @@ export default function OrganizationSettingsPage() {
       samePageUrl(here, searchParams ?? new URLSearchParams()),
       'replace',
     );
-  }, [currentOrg, searchParams, pathname]);
-
-  // Deep-link support: ?tab=members|workspaces|security|advanced selects a tab.
-  const tabParam = searchParams?.get("tab");
-  useEffect(() => {
-    if (tabParam && ["members", "workspaces", "security", "advanced"].includes(tabParam)) {
-      setActiveTab(tabParam);
-    }
-  }, [tabParam]);
-
-  // Position the animated slider behind the active pill. Recomputes when the
-  // active tab changes and once content mounts (loading flips false / org loads),
-  // since the pill row only exists after the skeleton is replaced.
-  useEffect(() => {
-    const updateSlider = () => {
-      if (!tabContainerRef.current) return;
-      const activeButton = tabContainerRef.current.querySelector(
-        `[data-tab-id="${activeTab}"]`
-      ) as HTMLButtonElement | null;
-      if (activeButton) {
-        const containerRect = tabContainerRef.current.getBoundingClientRect();
-        const buttonRect = activeButton.getBoundingClientRect();
-        setTabSliderStyle({
-          left: buttonRect.left - containerRect.left,
-          width: buttonRect.width,
-        });
-      }
-    };
-    updateSlider();
-    window.addEventListener("resize", updateSlider);
-    return () => window.removeEventListener("resize", updateSlider);
-  }, [activeTab, loading, currentOrg]);
+  }, [currentOrg, searchParams, pathname, setActiveTab]);
 
   const handleSaveName = async () => {
     if (!currentOrg || !newName.trim() || newName === currentOrg.name) {
@@ -716,39 +694,13 @@ export default function OrganizationSettingsPage() {
           view; only the section below the toggle swaps. */}
       {currentOrg && (
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <div className="relative mb-6 flex max-w-full overflow-x-auto scrollbar-hide">
-            <div
-              ref={tabContainerRef}
-              className="relative mx-auto inline-flex w-max items-center gap-0.5 sm:gap-1 p-1 sm:p-1.5 bg-theme-tertiary rounded-2xl"
-            >
-              {/* Slider highlight */}
-              <div
-                className="absolute top-1 sm:top-1.5 bottom-1 sm:bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
-                style={{
-                  left: tabSliderStyle.left,
-                  width: tabSliderStyle.width,
-                  opacity: tabSliderStyle.width ? 1 : 0,
-                }}
-              />
-              {ORG_TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  data-tab-id={tab.id}
-                  type="button"
-                  onClick={() => setActiveTab(tab.id)}
-                  className={cn(
-                    "relative z-10 flex h-9 items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
-                    activeTab === tab.id
-                      ? "text-[var(--text-primary)]"
-                      : "text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50"
-                  )}
-                >
-                  <tab.icon className={cn("w-4 h-4 flex-shrink-0", activeTab === tab.id ? "text-[var(--text-primary)]" : "text-current")} />
-                  <span className="whitespace-nowrap">{t(tab.labelKey)}</span>
-                </button>
-              ))}
-            </div>
-          </div>
+          <AdaptiveTabBar
+            className="mb-6"
+            tabs={ORG_TABS.map((tab) => ({ id: tab.id, label: t(tab.labelKey), icon: <tab.icon className="w-4 h-4" /> }))}
+            value={activeTab}
+            onChange={setActiveTab}
+            data-testid="organization-tab-bar"
+          />
 
           {/* ===== Members tab ===== */}
           <TabsContent value="members" className="mt-0 space-y-8">

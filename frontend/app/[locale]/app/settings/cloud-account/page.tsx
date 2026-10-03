@@ -17,6 +17,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { urlEnum, useUrlState } from '@/hooks/useUrlState';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import {
@@ -594,10 +595,12 @@ export default function CloudAccountPage() {
 
   // Bundles are now a sub-tab here (no longer a standalone page); deep-linkable
   // via ?tab=bundles (the AI Providers "Open Bundles" link points here).
-  const searchParams = useSearchParams();
-  const [tab, setTab] = useState<'connection' | 'bundles'>(
-    searchParams.get('tab') === 'bundles' ? 'bundles' : 'connection'
-  );
+  // The bundle kind under the Bundles tab (`kind`) leaves with it.
+  const [tab, setTab] = useUrlState<'connection' | 'bundles'>('tab', 'connection', {
+    codec: urlEnum(['connection', 'bundles']),
+    history: 'push',
+    clears: ['kind'],
+  });
 
   const tabs = [
     { id: 'connection' as const, label: tTabs('connection'), icon: Cloud },

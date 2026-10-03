@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch';
 import { useOptionalAuth } from '@/lib/providers/smart-providers';
 import { unifiedApiService } from '@/lib/api/unified-api-service';
 import type { MarketingConsent } from '@/lib/api/services/user-api.service';
+import { PageHeader } from './PageHeader';
 
 export const MARKETING_CONSENT_QUERY_KEY = ['user', 'marketing-consent'] as const;
 
@@ -52,17 +53,9 @@ export function MarketingConsentSetting() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center space-x-3">
-        <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
-          <Mail className="w-5 h-5 text-theme-primary" />
-        </div>
-        <div>
-          <h3 className="text-lg font-semibold text-theme-primary">{t('title')}</h3>
-          <p className="text-sm text-theme-secondary">{t('description')}</p>
-        </div>
-      </div>
+      <PageHeader icon={Mail} title={t('title')} subtitle={t('description')} headingLevel="h2" />
       <div className="flex items-center justify-between gap-4">
-        <p id="marketing-consent-label" className="text-sm text-theme-primary">
+        <p id="marketing-consent-label" className="min-w-0 text-sm text-theme-primary">
           {t('label')}
         </p>
         <Switch

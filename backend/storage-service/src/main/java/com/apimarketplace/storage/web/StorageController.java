@@ -1,6 +1,7 @@
 package com.apimarketplace.storage.web;
 
 import com.apimarketplace.common.web.ContentDispositions;
+import com.apimarketplace.common.web.SafeFileServeHeaders;
 import com.apimarketplace.storage.domain.StoredFile;
 import com.apimarketplace.storage.service.StorageService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,7 +25,8 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/storage")
-@CrossOrigin(origins = "*")
+// No @CrossOrigin (LC-033): CORS is decided centrally (gateway CorsConfig). A per-controller
+// wildcard would widen the origin set for any request reaching this service directly.
 public class StorageController {
 
     @Autowired
@@ -110,10 +112,11 @@ public class StorageController {
                 Resource resource = new UrlResource(filePath.toUri());
 
                 if (resource.exists() && resource.isReadable()) {
-                    return ResponseEntity.ok()
+                    return SafeFileServeHeaders.applyTo(ResponseEntity.ok()
                             .contentType(MediaType.parseMediaType(storedFile.getContentType()))
                             .header(HttpHeaders.CONTENT_DISPOSITION,
-                                    ContentDispositions.attachment(storedFile.getOriginalName()))
+                                    ContentDispositions.attachment(storedFile.getOriginalName())),
+                            storedFile.getContentType())
                             .body(resource);
                 }
             }
@@ -140,8 +143,15 @@ public class StorageController {
                 Resource resource = new UrlResource(filePath.toUri());
 
                 if (resource.exists() && resource.isReadable()) {
-                    return ResponseEntity.ok()
-                            .contentType(MediaType.parseMediaType(storedFile.getContentType()))
+                    // "view" echoes the uploader's declared type: only inline-safe types render,
+                    // everything else downloads, and the response is nosniff + sandboxed (LC-020).
+                    String contentType = storedFile.getContentType();
+                    return SafeFileServeHeaders.applyTo(ResponseEntity.ok()
+                            .contentType(MediaType.parseMediaType(contentType))
+                            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDispositions.of(
+                                    SafeFileServeHeaders.dispositionType(contentType, true),
+                                    storedFile.getOriginalName())),
+                            contentType)
                             .body(resource);
                 }
             }

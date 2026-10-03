@@ -225,6 +225,9 @@ class AgentRemoteExecutionMemoryInjectionTest {
         // The other side of the split at the top of executeAgent: a CLI provider goes
         // out over the bridge instead of through the local loop.
         when(bridgeDispatcher.shouldDispatch(anyString())).thenReturn(true);
+        // A bridge run resolves its budget server-side (LC-056); none here.
+        when(guardChainFactory.bridgeBudget(any(), any(), any(), any()))
+            .thenReturn(new com.apimarketplace.agent.service.budget.GuardChainFactory.BridgeBudget(null, null, null));
 
         TenantResolver.runWithOrgScope(ORG, () -> runIgnoringDownstreamFailure(request(null)));
 

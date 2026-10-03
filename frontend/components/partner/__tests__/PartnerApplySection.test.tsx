@@ -252,4 +252,49 @@ describe('the application form on /partners', () => {
     expect(apply).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('partner-apply-sent')).toBeNull();
   });
+
+  // Moved from the settings page, which no longer holds a form: /partners is the only one.
+  describe('signed in, never applied', () => {
+    beforeEach(() => {
+      auth.isAuthenticated = true;
+      me.mockResolvedValue(dashboard('none'));
+    });
+
+    it('sends the trimmed company, the website and the version of the terms ticked, then confirms', async () => {
+      apply.mockResolvedValue({ success: true, application: { id: 1 } });
+      renderSection();
+
+      fireEvent.change(await screen.findByLabelText('Company or brand'), { target: { value: '  Acme Automation ' } });
+      fireEvent.change(screen.getByLabelText('Website'), { target: { value: 'https://acme.io' } });
+      fireEvent.click(screen.getByTestId('partner-terms-checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Submit my application' }));
+
+      await waitFor(() => expect(apply).toHaveBeenCalledWith({
+        company_name: 'Acme Automation', website: 'https://acme.io', audience: undefined, message: undefined,
+        terms_version: PARTNER_TERMS_VERSION,
+      }));
+      await waitFor(() => expect(screen.getByTestId('partner-apply-sent')).toBeTruthy());
+    });
+
+    it('a refused send shows the translated reason, not a raw token', async () => {
+      const { ApiError } = await import('@/lib/api/api-client');
+      apply.mockRejectedValue(new ApiError('conflict', 409, 'already_pending'));
+      renderSection();
+
+      fireEvent.change(await screen.findByLabelText('Company or brand'), { target: { value: 'Acme' } });
+      fireEvent.click(screen.getByTestId('partner-terms-checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Submit my application' }));
+
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('You already have an application under review.'));
+    });
+
+    it('the submit button stays disabled until a company is entered', async () => {
+      renderSection();
+
+      const submit = await screen.findByRole('button', { name: 'Submit my application' });
+      expect((submit as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.change(screen.getByLabelText('Company or brand'), { target: { value: '   ' } });
+      expect((submit as HTMLButtonElement).disabled).toBe(true);
+    });
+  });
 });

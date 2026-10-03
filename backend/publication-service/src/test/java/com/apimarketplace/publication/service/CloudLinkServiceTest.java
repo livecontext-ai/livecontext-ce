@@ -71,6 +71,7 @@ class CloudLinkServiceTest {
                 restTemplate,
                 clock
         );
+        CloudLinkTokenColumnsFake.backByStubbedEntity(cloudLinkRepository);
     }
 
     @Nested
@@ -366,7 +367,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             com.fasterxml.jackson.databind.JsonNode body =
                     new ObjectMapper().readTree("{\"planCode\":\"TEAM\",\"userId\":42}");
             when(restTemplate.exchange(
@@ -409,7 +409,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             com.fasterxml.jackson.databind.JsonNode body =
                     new ObjectMapper().readTree("{\"planCode\":\"TEAM\",\"userId\":42}");
             when(restTemplate.exchange(
@@ -457,7 +456,6 @@ class CloudLinkServiceTest {
                     .thenReturn(Optional.of(adminLink));
             // getCloudAccessToken(adminLink.tenantId) re-reads the admin link; cached token valid → no refresh.
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(adminLink));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             com.fasterxml.jackson.databind.JsonNode body =
                     new ObjectMapper().readTree("{\"planCode\":\"TEAM\",\"userId\":1}");
             when(restTemplate.exchange(
@@ -488,7 +486,6 @@ class CloudLinkServiceTest {
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
             when(cloudLinkRepository.findFirstByRegisteredAtNotNullOrderByLinkedAtDesc())
                     .thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             com.fasterxml.jackson.databind.JsonNode body =
                     new ObjectMapper().readTree("{\"planCode\":\"TEAM\",\"userId\":42}");
             when(restTemplate.exchange(
@@ -643,7 +640,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             // registerWithCloud POSTs to /ce-link/register; a non-2xx response leaves registeredAt null.
             when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
                     .thenReturn(ResponseEntity.status(503).build());
@@ -690,7 +686,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
             CloudLinkService.CloudRuntimeStatus status = service.getCloudRuntimeStatus(TENANT_ID);
 
@@ -710,7 +705,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
                     .thenReturn(ResponseEntity.status(503).build());
 
@@ -782,7 +776,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
                     .thenReturn(ResponseEntity.status(503).build());
 
@@ -867,7 +860,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
             CloudLinkService.CloudRuntimeStatus status = service.getCatalogRuntimeStatus(TENANT_ID);
 
@@ -887,7 +879,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
                     .thenReturn(ResponseEntity.status(503).build());
 
@@ -1012,7 +1003,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
                     .thenReturn(ResponseEntity.status(503).build());
 
@@ -1117,7 +1107,6 @@ class CloudLinkServiceTest {
             CeCloudLinkEntity link = registeredCloudLink();
             Instant registeredAt = link.getRegisteredAt();
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(Void.class)))
                     .thenThrow(HttpServerErrorException.create(HttpStatus.SERVICE_UNAVAILABLE, "DOWN",
                             HttpHeaders.EMPTY, new byte[0], StandardCharsets.UTF_8));
@@ -1272,15 +1261,15 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(Instant.now().plusSeconds(300)); // valid for 5 more minutes
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
             String token = service.getCloudAccessToken(TENANT_ID);
 
             assertThat(token).isEqualTo("cached-access-token");
-            // Should update lastUsedAt and save
-            ArgumentCaptor<CeCloudLinkEntity> captor = ArgumentCaptor.forClass(CeCloudLinkEntity.class);
-            verify(cloudLinkRepository).save(captor.capture());
-            assertThat(captor.getValue().getLastUsedAt()).isNotNull();
+            // lastUsedAt is stamped with a targeted update, never by saving an entity instance
+            // (a save could carry token columns read before a concurrent refresh, audit B #2).
+            verify(cloudLinkRepository).touchLastUsedAt(eq(TENANT_ID), any(Instant.class));
+            verify(cloudLinkRepository, never()).save(any());
+            assertThat(link.getLastUsedAt()).isNotNull();
         }
     }
 
@@ -1377,7 +1366,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             com.fasterxml.jackson.databind.JsonNode body =
                     new ObjectMapper().readTree("{\"planCode\":\"PRO\",\"userId\":42}");
             when(restTemplate.exchange(
@@ -1415,7 +1403,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             com.fasterxml.jackson.databind.JsonNode body =
                     new ObjectMapper().readTree("{\"planCode\":\"PRO\"}");
             when(restTemplate.exchange(
@@ -1440,7 +1427,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             com.fasterxml.jackson.databind.JsonNode withPlan =
                     new ObjectMapper().readTree("{\"planCode\":\"PRO\"}");
             com.fasterxml.jackson.databind.JsonNode noPlan = new ObjectMapper().readTree("{}");
@@ -1472,7 +1458,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             com.fasterxml.jackson.databind.JsonNode body =
                     new ObjectMapper().readTree("{\"planCode\":\"PRO\",\"userId\":42}");
             when(restTemplate.exchange(
@@ -1534,7 +1519,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             Map<String, Object> breakdown = new HashMap<>();
             breakdown.put("CE_LLM_RELAY", Map.of("count", 5, "credits", 1234));
             // The cloud account's OTHER activity - must NOT leak into the CE view.
@@ -1569,7 +1553,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             Map<String, Object> breakdown = new HashMap<>();
             breakdown.put("CHAT_CONVERSATION", Map.of("count", 99, "credits", 999999));
             Map<String, Object> cloudSummary = new HashMap<>();
@@ -1614,7 +1597,6 @@ class CloudLinkServiceTest {
             link.setCachedAccessToken("cached-access-token");
             link.setTokenExpiresAt(clock.instant().plusSeconds(300));
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
-            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             Map<String, Object> pageBody = Map.of("content", java.util.List.of(), "totalPages", 0, "number", 0);
             when(restTemplate.exchange(
                     org.mockito.ArgumentMatchers.contains("/credits/history?page=2&size=15&sourceType=CE_LLM_RELAY"),

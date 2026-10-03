@@ -2,7 +2,9 @@ package com.apimarketplace.conversation.streaming;
 
 import com.apimarketplace.conversation.domain.stream.StreamEvent;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -589,6 +591,88 @@ class StreamPubSubServiceTest {
             StreamEvent.ToolCall toolCall = (StreamEvent.ToolCall) result;
             assertThat(toolCall.toolName()).isEqualTo("search");
             assertThat(toolCall.toolId()).isEqualTo("tool-1");
+        }
+
+        @Test
+        @DisplayName("regression: a bridge ToolCall whose arguments are JSON text is replayed, not dropped")
+        void toolCallWithArgumentsAsJsonTextIsAToolCall() throws Exception {
+            // Exactly what the CLI bridge buffers: arguments is the model's JSON TEXT, not an
+            // object. It used to throw "no String-argument constructor" and the replay dropped it.
+            String json = "{\"streamId\":\"s1\",\"toolName\":\"workflow\",\"toolId\":\"call-1\","
+                    + "\"arguments\":\"{\\\"action\\\":\\\"help\\\",\\\"topics\\\":[\\\"split\\\"]}\","
+                    + "\"timestamp\":\"2026-09-30T20:08:39.000Z\"}";
+
+            StreamEvent result = service.deserializeEvent(json);
+
+            assertThat(result).isInstanceOf(StreamEvent.ToolCall.class);
+            StreamEvent.ToolCall toolCall = (StreamEvent.ToolCall) result;
+            assertThat(toolCall.toolId()).isEqualTo("call-1");
+            assertThat(toolCall.arguments())
+                    .containsEntry("action", "help")
+                    .containsEntry("topics", java.util.List.of("split"));
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "arguments text = [{0}]")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {"{\"action\":\"he", "[1,2]", "42", "null"})
+        @DisplayName("regression: ToolCall arguments text that is not a JSON object is kept under raw")
+        void toolCallWithUnparseableArgumentsKeepsThemUnderRaw(String raw) throws Exception {
+            ObjectNode event = objectMapper.createObjectNode()
+                    .put("streamId", "s1").put("toolName", "workflow").put("toolId", "call-1")
+                    .put("arguments", raw);
+
+            StreamEvent result = service.deserializeEvent(objectMapper.writeValueAsString(event));
+
+            assertThat(result).isInstanceOf(StreamEvent.ToolCall.class);
+            assertThat(((StreamEvent.ToolCall) result).arguments()).isEqualTo(Map.of("raw", raw));
+        }
+
+        @Test
+        @DisplayName("ToolCall arguments sent as empty text are a call with no arguments")
+        void toolCallWithEmptyArgumentsTextHasNoArguments() throws Exception {
+            StreamEvent result = service.deserializeEvent(
+                    "{\"streamId\":\"s1\",\"toolName\":\"t\",\"toolId\":\"c\",\"arguments\":\"\"}");
+
+            assertThat(result).isInstanceOf(StreamEvent.ToolCall.class);
+            assertThat(((StreamEvent.ToolCall) result).arguments()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("ToolCall arguments that are neither text nor an object are kept under raw, as a string")
+        void toolCallWithNonTextNonObjectArgumentsKeepsThemUnderRawAsString() throws Exception {
+            StreamEvent result = service.deserializeEvent(
+                    "{\"streamId\":\"s1\",\"toolName\":\"t\",\"toolId\":\"c\",\"arguments\":[1,2]}");
+
+            assertThat(((StreamEvent.ToolCall) result).arguments()).isEqualTo(Map.of("raw", "[1,2]"));
+        }
+
+        @Test
+        @DisplayName("regression: a bridge ToolCall survives the replay round trip with arguments as an object")
+        void bridgeToolCallReplayRoundTripCarriesArgumentsAsObject() throws Exception {
+            // The replay deserializes the buffered event and publishes it again: what goes back
+            // on the wire must carry the arguments as an object, with the call's identity intact.
+            String buffered = "{\"streamId\":\"s1\",\"toolName\":\"catalog\",\"toolId\":\"toolu_01\","
+                    + "\"arguments\":\"{\\\"action\\\":\\\"search\\\"}\",\"timestamp\":\"2026-09-30T20:08:39.123Z\"}";
+
+            JsonNode republished = objectMapper.readTree(
+                    objectMapper.writeValueAsString(service.deserializeEvent(buffered)));
+
+            assertThat(republished.get("toolId").asText()).isEqualTo("toolu_01");
+            assertThat(republished.get("toolName").asText()).isEqualTo("catalog");
+            assertThat(republished.get("arguments").isObject()).isTrue();
+            assertThat(republished.get("arguments").get("action").asText()).isEqualTo("search");
+        }
+
+        @Test
+        @DisplayName("ToolCall arguments already an object, or null, are left as they are")
+        void toolCallWithObjectOrNullArgumentsIsUnchanged() throws Exception {
+            StreamEvent withMap = service.deserializeEvent(
+                    "{\"streamId\":\"s1\",\"toolName\":\"t\",\"toolId\":\"c\",\"arguments\":{\"raw\":\"x\"}}");
+            StreamEvent withNull = service.deserializeEvent(
+                    "{\"streamId\":\"s1\",\"toolName\":\"t\",\"toolId\":\"c\",\"arguments\":null}");
+
+            assertThat(((StreamEvent.ToolCall) withMap).arguments()).isEqualTo(Map.of("raw", "x"));
+            assertThat(withNull).isInstanceOf(StreamEvent.ToolCall.class);
+            assertThat(((StreamEvent.ToolCall) withNull).arguments()).isNull();
         }
 
         @Test

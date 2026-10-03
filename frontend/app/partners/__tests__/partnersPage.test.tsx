@@ -102,10 +102,12 @@ async function renderPage() {
 
 const main = () => document.querySelector('main') as HTMLElement;
 /** What a visitor reads in the page: the text of <main> without its inline stylesheets (the brand
- *  mark animates with keyframes such as "0%, 100%", which are not copy). */
-const visibleText = () => {
+ *  mark animates with keyframes such as "0%, 100%", which are not copy). `programOnly` also
+ *  leaves out the example app's screen: a picture of an app, whose invoice amounts say nothing
+ *  about the program. */
+const visibleText = ({ programOnly = false } = {}) => {
   const copy = main().cloneNode(true) as HTMLElement;
-  copy.querySelectorAll('style').forEach((node) => node.remove());
+  copy.querySelectorAll(programOnly ? 'style, [data-testid="partner-example-app-screen"]' : 'style').forEach((node) => node.remove());
   return copy.textContent ?? '';
 };
 const text = (testId: string) => screen.getByTestId(testId).textContent ?? '';
@@ -162,16 +164,25 @@ describe('/partners', () => {
     expect(visibleText()).not.toContain('$60');
   });
 
-  it('every example price opens the in-app pricing preset to it (monthly, its credit tier), the hidden 5M tier unlocked', async () => {
+  it('every example price opens the in-app pricing preset to it (monthly, its credit tier), the hidden 5M tier unlocked, in the page\x27s language', async () => {
     await renderPage();
 
     const bill = (key: string) => (screen.getByTestId('partner-scenarios')
       .querySelector(`[data-scenario="${key}"] [data-testid="partner-scenario-bill"]`) as HTMLAnchorElement).getAttribute('href');
     // Not the public /pricing: on cloud it redirects to the landing, which has no credit slider.
-    const preset = '/app/settings/pricing?pricingMode=subscription&billingCycle=monthly&creditTierIndex=';
+    const preset = '/en/app/settings/pricing?pricingMode=subscription&billingCycle=monthly&creditTierIndex=';
     expect(bill('single')).toBe(`${preset}8&tiers=full`);
     expect(bill('agency')).toBe(`${preset}5`);
     expect(bill('large')).toBe(`${preset}7`);
+  });
+
+  it('regression: a French page opens the French pricing (an unprefixed app link sent everyone to /en)', async () => {
+    state.locale = 'fr';
+    await renderPage();
+
+    const href = (screen.getByTestId('partner-scenarios')
+      .querySelector('[data-scenario="agency"] [data-testid="partner-scenario-bill"]') as HTMLAnchorElement).getAttribute('href');
+    expect(href).toBe('/fr/app/settings/pricing?pricingMode=subscription&billingCycle=monthly&creditTierIndex=5');
   });
 
   it('regression: a one-month commission and a one-day hold read in the singular, in the hero, the steps and the FAQ', async () => {
@@ -299,7 +310,9 @@ describe('/partners', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Earn a share of every invoice your clients pay');
     // The visible page only: the inlined stylesheet legitimately contains percentages.
     expect(visibleText()).not.toMatch(/\d+\s?%/);
-    expect(visibleText()).not.toMatch(/\$\d/);
+    expect(visibleText({ programOnly: true })).not.toMatch(/\$\d/);
+    // The example app keeps its picture: its amounts are invoices, not program figures.
+    expect(screen.getByTestId('partner-example-app-screen')).toBeTruthy();
     expect(screen.queryByLabelText('Program terms')).toBeNull();
     expect(screen.queryByTestId('partner-hero-earnings')).toBeNull();
     expect(screen.queryByTestId('partner-scenarios')).toBeNull();
@@ -387,6 +400,20 @@ describe('/partners', () => {
     expect(spotlight.querySelector('style')?.textContent).toContain('.lc-spotlight-card [data-badge="partner"]');
   });
 
+  it('the partner app card shows the app at work, not a bare row of icons: its counters and latest invoices', async () => {
+    await renderPage();
+
+    const card = screen.getByTestId('partner-badge-spotlight').querySelector('.lc-spotlight-card') as HTMLElement;
+    const app = within(card).getByTestId('partner-example-app-screen');
+    const words = en.partnersLanding.badge.screen;
+    // A picture: the card's heading and description already say what the app is.
+    expect(app.getAttribute('aria-hidden')).toBe('true');
+    expect(app.textContent).toContain(words.running);
+    expect(app.textContent).toContain(`${words.booked}$48,920`);
+    expect(within(app).getAllByText(words.statusBooked)).toHaveLength(3);
+    expect(within(app).getByText(words.statusReview)).toBeTruthy();
+  });
+
   it('when the marketplace cannot be read, quiet placeholders stand in for the neighbours, and the page still renders', async () => {
     fetchMarketplace.mockResolvedValue({ publications: [], truncated: true });
     await renderPage();
@@ -394,7 +421,7 @@ describe('/partners', () => {
     const neighbours = within(screen.getByTestId('partner-badge-spotlight')).getAllByTestId('partner-spotlight-neighbour');
     expect(neighbours).toHaveLength(2);
     expect(neighbours.every((n) => n.querySelector('h3') === null)).toBe(true);
-    expect(screen.getByText('Invoice Autopilot')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 3, name: 'Invoice Autopilot' })).toBeTruthy();
   });
 
   it('no "Example" labels, but the fictional partner is disclosed next to it (the earnings and reviews it shows are invented)', async () => {
@@ -477,7 +504,67 @@ describe('/partners', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toMatch(/jusqu’à 50\s%/);
     expect(within(screen.getByTestId('partner-tier-track')).getByText('30 %')).toBeTruthy();
     expect(text('partner-hero-month')).toMatch(/^3\s135\s\$US$/);
+    // The app's screen too: its amounts are written the French way.
+    expect(text('partner-example-app-screen')).toMatch(/48\s920\s\$US/);
     expect(within(screen.getByTestId('partner-scenarios')).getByText(/^30 clients en Pro, 250\sk crédits$/)).toBeTruthy();
+  });
+
+  it('regression: each language has its own URL, canonical to itself, in one hreflang cluster with an English x-default', async () => {
+    state.locale = 'fr';
+    const meta = await generateMetadata();
+
+    expect(meta.alternates?.canonical).toBe('/fr/partners');
+    expect(meta.alternates?.languages).toEqual({
+      en: 'https://livecontext.ai/partners',
+      fr: 'https://livecontext.ai/fr/partners',
+      es: 'https://livecontext.ai/es/partners',
+      de: 'https://livecontext.ai/de/partners',
+      pt: 'https://livecontext.ai/pt/partners',
+      zh: 'https://livecontext.ai/zh/partners',
+      'x-default': 'https://livecontext.ai/partners',
+    });
+    const og = meta.openGraph as Record<string, unknown>;
+    expect(og.url).toBe('https://livecontext.ai/fr/partners');
+    expect(og.locale).toBe('fr_FR');
+    expect(og.alternateLocale).not.toContain('fr_FR');
+
+    state.locale = 'en';
+    expect((await generateMetadata()).alternates?.canonical).toBe('/partners');
+  });
+
+  it('the search snippet quotes the top rate the terms pay, with its percent sign, stays under 155 characters, and names no figure without terms', async () => {
+    // regression: the rate is formatted as a bare number, and the snippet read "up to 50 of every invoice".
+    const rate: Record<string, string> = { en: 'up to 50% of', fr: 'jusqu’à 50 % de', de: 'bis zu 50 % jeder', es: 'hasta un 50 % de', pt: 'até 50% de', zh: '最多获得 50% 分成' };
+    for (const locale of ['en', 'fr', 'de', 'es', 'pt', 'zh']) {
+      state.locale = locale;
+      fetchPartnerTerms.mockResolvedValue(TERMS);
+      const withRate = String((await generateMetadata()).description);
+      expect(withRate, locale).toContain(rate[locale]);
+      expect(withRate.length, locale).toBeLessThanOrEqual(155);
+
+      fetchPartnerTerms.mockResolvedValue(null);
+      const without = String((await generateMetadata()).description);
+      expect(without, locale).not.toMatch(/\d/);
+      expect(without.length, locale).toBeLessThanOrEqual(155);
+    }
+  });
+
+  it('regression: the cloud page sets no robots of its own, so the site-wide directives (large image previews) apply', async () => {
+    expect('robots' in (await generateMetadata())).toBe(false);
+  });
+
+  it('describes itself to search engines: a WebPage in the page language and a two-step breadcrumb', async () => {
+    state.locale = 'de';
+    await renderPage();
+
+    const block = document.querySelector('script[type="application/ld+json"]');
+    expect(block).not.toBeNull();
+    const graph = JSON.parse(block!.textContent ?? '{}')['@graph'];
+    const page = graph.find((node: { '@type': string }) => node['@type'] === 'WebPage');
+    expect(page.url).toBe('https://livecontext.ai/de/partners');
+    expect(page.inLanguage).toBe('de');
+    const crumbs = graph.find((node: { '@type': string }) => node['@type'] === 'BreadcrumbList').itemListElement;
+    expect(crumbs.map((c: { item: string }) => c.item)).toEqual(['https://livecontext.ai/de', 'https://livecontext.ai/de/partners']);
   });
 
   it('does not exist on a self-hosted build, and is never indexed there', async () => {

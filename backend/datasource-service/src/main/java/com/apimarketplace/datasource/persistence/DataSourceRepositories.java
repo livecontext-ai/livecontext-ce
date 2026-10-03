@@ -358,44 +358,64 @@ public final class DataSourceRepositories {
             this.objectMapper = objectMapper;
         }
 
-        public DataSourceItem save(DataSourceItem item) {
+        /**
+         * Inserts a NEW item stamped with {@code sensitivity} (CASA LC-066), in the same INSERT,
+         * so a restricted row is never visible, even for an instant, as an ordinary one.
+         */
+        public DataSourceItem insert(DataSourceItem item, com.apimarketplace.common.classification.DataSensitivity sensitivity) {
+            return insertNew(item, sensitivity != null ? sensitivity : com.apimarketplace.common.classification.DataSensitivity.NORMAL);
+        }
+
+        /**
+         * The one INSERT of a new item. Without a {@code sensitivity} the column is left to its
+         * default (NORMAL), which is the statement {@link #save} has always sent.
+         */
+        private DataSourceItem insertNew(DataSourceItem item, com.apimarketplace.common.classification.DataSensitivity sensitivity) {
             try {
-                if (item.id() == null) {
-                    // Insert avec NamedParameterJdbcTemplate pour gerer le JSON
-                    String sql = """
+                String sql = sensitivity == null
+                    ? """
                         INSERT INTO data_source_items (data_source_id, tenant_id, data, priority)
                         VALUES (:data_source_id, :tenant_id, :data::json, :priority)
+                        """
+                    : """
+                        INSERT INTO data_source_items (data_source_id, tenant_id, data, priority, data_sensitivity)
+                        VALUES (:data_source_id, :tenant_id, :data::json, :priority, :data_sensitivity)
                         """;
-                    
-                    SqlParameterSource params = new MapSqlParameterSource()
-                        .addValue("data_source_id", item.dataSourceId())
-                        .addValue("tenant_id", item.tenantId())
-                        .addValue("data", objectMapper.writeValueAsString(item.data()))
-                        .addValue("priority", item.priority());
-                    
-                    KeyHolder keyHolder = new GeneratedKeyHolder();
-                    namedJdbc.update(sql, params, keyHolder, new String[]{"id"});
-                    
-                    Long id = keyHolder.getKeyAs(Long.class);
-                    return new DataSourceItem(id, item.dataSourceId(), item.tenantId(), item.data(), item.priority(), item.createdAt());
-                } else {
-                    // Update
-                    String sql = """
-                        UPDATE data_source_items 
-                        SET data = :data::json, priority = :priority
-                        WHERE id = :id
-                        """;
-                    
-                    SqlParameterSource params = new MapSqlParameterSource()
-                        .addValue("data", objectMapper.writeValueAsString(item.data()))
-                        .addValue("priority", item.priority())
-                        .addValue("id", item.id());
-                    
-                    namedJdbc.update(sql, params);
-                    return item;
+                MapSqlParameterSource params = new MapSqlParameterSource()
+                    .addValue("data_source_id", item.dataSourceId())
+                    .addValue("tenant_id", item.tenantId())
+                    .addValue("data", objectMapper.writeValueAsString(item.data()))
+                    .addValue("priority", item.priority());
+                if (sensitivity != null) {
+                    params.addValue("data_sensitivity", sensitivity.name());
                 }
+                KeyHolder keyHolder = new GeneratedKeyHolder();
+                namedJdbc.update(sql, params, keyHolder, new String[]{"id"});
+                Long id = keyHolder.getKeyAs(Long.class);
+                return new DataSourceItem(id, item.dataSourceId(), item.tenantId(), item.data(), item.priority(), item.createdAt());
             } catch (Exception e) {
-                throw new RuntimeException("Erreur lors de la sauvegarde de l'item DataSource", e);
+                throw new RuntimeException("Failed to insert the DataSource item", e);
+            }
+        }
+
+        public DataSourceItem save(DataSourceItem item) {
+            if (item.id() == null) {
+                return insertNew(item, null);
+            }
+            try {
+                String sql = """
+                    UPDATE data_source_items
+                    SET data = :data::json, priority = :priority
+                    WHERE id = :id
+                    """;
+                SqlParameterSource params = new MapSqlParameterSource()
+                    .addValue("data", objectMapper.writeValueAsString(item.data()))
+                    .addValue("priority", item.priority())
+                    .addValue("id", item.id());
+                namedJdbc.update(sql, params);
+                return item;
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to update the DataSource item", e);
             }
         }
 
@@ -450,6 +470,80 @@ public final class DataSourceRepositories {
                     + "WHERE i.data_source_id = ? AND ds.organization_id = ? "
                     + "ORDER BY i.priority DESC, i.id ASC LIMIT ? OFFSET ?";
             return jdbc.query(sql, new DataSourceItemRowMapper(), dataSourceId, organizationId, limit, offset);
+        }
+
+        /**
+         * True when any of these rows is RESTRICTED (CASA LC-066). The ids come from a read the
+         * caller was already scoped for, so they are pre-authorized: no tenant or org filter.
+         */
+        public boolean anyRestricted(Long dataSourceId, List<Long> itemIds) {
+            if (dataSourceId == null || itemIds == null || itemIds.isEmpty()) {
+                return false;
+            }
+            SqlParameterSource params = new MapSqlParameterSource()
+                    .addValue("dataSourceId", dataSourceId)
+                    .addValue("ids", itemIds);
+            Boolean found = namedJdbc.queryForObject(
+                    "SELECT EXISTS (SELECT 1 FROM data_source_items WHERE data_source_id = :dataSourceId "
+                            + "AND id IN (:ids) AND data_sensitivity = 'RESTRICTED')",
+                    params, Boolean.class);
+            return Boolean.TRUE.equals(found);
+        }
+
+        /**
+         * Position of the last row of a page in the table order ({@code priority DESC, id ASC}),
+         * the keyset a publication copy resumes after.
+         */
+        public record CopyCursor(int priority, long id) {}
+
+        /**
+         * One page of a publication copy, org-strict scope (same JOIN as
+         * {@link #findByDataSourceIdInOrgScopePaginated}). See {@link #copyPageSql} for the
+         * RESTRICTED filter and the keyset.
+         */
+        public List<DataSourceItem> findCopyPageInOrgScope(Long dataSourceId, String organizationId,
+                                                           int offset, int limit, CopyCursor after) {
+            String sql = copyPageSql("SELECT i.* FROM data_source_items i "
+                    + "INNER JOIN data_sources ds ON ds.id = i.data_source_id "
+                    + "WHERE i.data_source_id = ? AND ds.organization_id = ? ", "i.", after);
+            return jdbc.query(sql, new DataSourceItemRowMapper(),
+                    copyPageArgs(dataSourceId, organizationId, offset, limit, after));
+        }
+
+        /** {@link #findCopyPageInOrgScope}, legacy tenant-only scope. */
+        public List<DataSourceItem> findCopyPageForTenant(Long dataSourceId, String tenantId,
+                                                          int offset, int limit, CopyCursor after) {
+            String sql = copyPageSql("SELECT * FROM data_source_items WHERE data_source_id = ? AND tenant_id = ? ",
+                    "", after);
+            return jdbc.query(sql, new DataSourceItemRowMapper(),
+                    copyPageArgs(dataSourceId, tenantId, offset, limit, after));
+        }
+
+        /**
+         * A copy page leaves the RESTRICTED rows (CASA LC-066) out IN the query, before the page
+         * is cut, so a page is full until the copyable rows run out and a short page really is
+         * the last one. With a cursor it resumes strictly after that row in the total order
+         * {@code priority DESC, id ASC} (keyset, the offset is not used): rows inserted or deleted
+         * while the copy pages through the table do not shift the next page, as they would with an
+         * offset. Without one it is a plain offset page (the first page, and older callers).
+         */
+        private static String copyPageSql(String selectWhere, String alias, CopyCursor after) {
+            StringBuilder sql = new StringBuilder(selectWhere)
+                    .append("AND ").append(alias).append("data_sensitivity IS DISTINCT FROM 'RESTRICTED' ");
+            if (after != null) {
+                sql.append("AND (").append(alias).append("priority < ? OR (")
+                        .append(alias).append("priority = ? AND ").append(alias).append("id > ?)) ");
+            }
+            sql.append("ORDER BY ").append(alias).append("priority DESC, ").append(alias).append("id ASC ");
+            sql.append(after != null ? "LIMIT ?" : "LIMIT ? OFFSET ?");
+            return sql.toString();
+        }
+
+        private static Object[] copyPageArgs(Long dataSourceId, String scope, int offset, int limit,
+                                             CopyCursor after) {
+            return after != null
+                    ? new Object[] {dataSourceId, scope, after.priority(), after.priority(), after.id(), limit}
+                    : new Object[] {dataSourceId, scope, limit, offset};
         }
 
         /**

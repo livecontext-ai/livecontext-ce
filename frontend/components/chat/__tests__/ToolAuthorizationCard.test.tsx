@@ -39,7 +39,7 @@ describe('ToolAuthorizationCard', () => {
       <ToolAuthorizationCard conversationId="c1" pendingAuthorization={{ ...baseAuth, rule: 'application:execute' }} />,
     );
 
-    expect(screen.getByText('runTitle')).toBeInTheDocument();
+    expect(screen.getByText('applicationExecuteTitle')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'approve' })).toBeInTheDocument();
     // No amber "warning" styling anywhere.
     expect(container.innerHTML).not.toContain('amber');

@@ -48,6 +48,11 @@ export interface SettingsNavItem {
   managedCloudOnly?: boolean;
   /** Temporarily hidden from all modes */
   hidden?: boolean;
+  /**
+   * Only for a user with a partner space (a partner, or an applicant under review): their own
+   * dashboard. Everyone else finds the program on /partners and the rewards page.
+   */
+  partnerOnly?: boolean;
   /** Renders a thin separator above this item in the nav (visual group break). */
   groupStart?: boolean;
 }
@@ -72,9 +77,10 @@ export const settingsNavItems: SettingsNavItem[] = [
   { href: '/app/settings/quota', label: 'Quota & Usage', icon: Coins },
   { href: '/app/settings/storage', label: 'Storage', icon: HardDrive },
   { href: '/app/settings/rewards', label: 'Refer & earn', icon: Gift },
-  // The partner's own dashboard (apply, then track referrals and commissions). Cloud only,
-  // like the admin Partners page: the backend answers 503 where credits are unlimited.
-  { href: '/app/settings/partner', label: 'Partner program', icon: Award, hiddenInCE: true },
+  // The partner's own dashboard (their link, tier, referrals and commissions, or where their
+  // application stands). Partners and applicants only: the others apply on /partners. Cloud
+  // only, like the admin Partners page: the backend answers 503 where credits are unlimited.
+  { href: '/app/settings/partner', label: 'Partner program', icon: Award, hiddenInCE: true, partnerOnly: true },
   { href: '/app/settings/admin-credits', label: 'Credits & Plans', icon: Crown, adminOnly: true, hiddenInCE: true },
   { href: '/app/settings/partners', label: 'Partners', icon: Handshake, adminOnly: true, hiddenInCE: true },
   // Not hiddenInCE: a self-hosted admin has the same tool failures to chase, and
@@ -127,10 +133,11 @@ export const settingsNavItems: SettingsNavItem[] = [
  */
 export function isSettingsNavItemVisible(
   item: SettingsNavItem,
-  { isAdmin }: { isAdmin: boolean },
+  { isAdmin, isPartner = false }: { isAdmin: boolean; isPartner?: boolean },
 ): boolean {
   if (item.hidden) return false;
   if (item.adminOnly && !isAdmin) return false;
+  if (item.partnerOnly && !isPartner) return false;
   if (item.hiddenInCE && IS_CE) return false;
   if (item.ceOnly && !IS_CE) return false;
   if (item.managedCloudOnly && !IS_MANAGED_CLOUD) return false;

@@ -46,9 +46,13 @@ vi.mock('@/contexts/SidePanelContext', () => ({
 vi.mock('../ConnectionTypeSelector', () => ({ ConnectionTypeSelector: () => null }));
 vi.mock('../WorkflowPlanGenerator', () => ({ WorkflowPlanGenerator: () => null }));
 const mockLayoutConfigForDirection = vi.fn((_direction: string) => ({}));
+const UNPLACED = [{ id: 'unplaced' }];
+const mockUnplaceAttachedNotes = vi.fn((_nodes: unknown) => UNPLACED);
+const mockApplyDagreLayout = vi.fn((nodes: unknown) => nodes);
 vi.mock('../../services/LayoutService', () => ({
-  applyDagreLayout: (n: unknown) => n,
+  applyDagreLayout: (n: unknown) => mockApplyDagreLayout(n),
   layoutConfigForDirection: (direction: string) => mockLayoutConfigForDirection(direction),
+  unplaceAttachedNotes: (nodes: unknown) => mockUnplaceAttachedNotes(nodes),
 }));
 
 const mockPreviewOnly = { value: false };
@@ -185,6 +189,10 @@ describe('CanvasSettingsPanel - layout direction belongs to the workflow', () =>
 
     expect(onForceNodesUpdate).toHaveBeenCalledTimes(1);
     expect(mockLayoutConfigForDirection).toHaveBeenLastCalledWith('vertical');
+    // Attached notes are placed again beside their node: their offset belonged to the old direction.
+    expect(mockUnplaceAttachedNotes).toHaveBeenCalledWith([expect.objectContaining({ id: 'a' })]);
+    expect(mockApplyDagreLayout, 'the layout must run on the unplaced nodes').toHaveBeenLastCalledWith(UNPLACED);
+    expect(onForceNodesUpdate).toHaveBeenCalledWith(UNPLACED);
   });
 
   it('does nothing when the direction does not change', () => {

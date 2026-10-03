@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { evaluatePasswordChange } from './changePasswordOutcome';
+import { evaluatePasswordChange, MIN_PASSWORD_LENGTH } from './changePasswordOutcome';
 
 describe('evaluatePasswordChange', () => {
   const validForm = {
@@ -32,7 +32,25 @@ describe('evaluatePasswordChange', () => {
     expect(changePassword).not.toHaveBeenCalled();
   });
 
-  it('returns "too_short" (and no backend call) when matching but under 8 chars', async () => {
+  it('pins the minimum at 12 characters, the backend PasswordAuthService value (CASA LC-084)', () => {
+    expect(MIN_PASSWORD_LENGTH).toBe(12);
+  });
+
+  it('refuses 11 characters and accepts exactly 12 (the boundary the backend enforces)', async () => {
+    const changePassword = vi.fn().mockResolvedValue({ success: true });
+    const eleven = 'a'.repeat(11);
+    const twelve = 'a'.repeat(12);
+
+    expect(await evaluatePasswordChange(
+      { currentPassword: 'cur', newPassword: eleven, confirmPassword: eleven }, changePassword,
+    )).toBe('too_short');
+    expect(changePassword).not.toHaveBeenCalled();
+    expect(await evaluatePasswordChange(
+      { currentPassword: 'cur', newPassword: twelve, confirmPassword: twelve }, changePassword,
+    )).toBe('success');
+  });
+
+  it('returns "too_short" (and no backend call) when matching but under the minimum', async () => {
     const changePassword = vi.fn();
 
     const outcome = await evaluatePasswordChange(

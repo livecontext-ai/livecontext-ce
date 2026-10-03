@@ -90,6 +90,20 @@ public class MemoryToolsProvider implements ToolsProvider {
             }
 
             if (crudModule.canHandle(action)) {
+                // LC-004 / LC-066: long-term memory has no expiry and is recalled in every future
+                // conversation of this workspace, so writing Gmail / Drive content into it would
+                // extend that data's retention indefinitely and route around the bounded-retention
+                // and allow-listed-provider controls entirely. Reads (get/list/search/delete) are
+                // unaffected; only a save that could persist new restricted content is refused.
+                if ("save".equals(action)
+                        && com.apimarketplace.common.classification.DataSensitivity
+                            .fromCredentials(context.credentials()).isRestricted()) {
+                    return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                        com.apimarketplace.common.classification.RestrictedDataPolicy.REFUSAL_CODE
+                        + ": Content from Gmail or Google Drive seen earlier in this conversation cannot be "
+                        + "saved to long-term memory, which is kept indefinitely across future conversations. "
+                        + "Save a fact you conclude yourself instead of the restricted content verbatim.");
+                }
                 return crudModule.execute(action, parameters, tenantId, context)
                     .orElse(ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
                         "Memory module failed for action: " + action));

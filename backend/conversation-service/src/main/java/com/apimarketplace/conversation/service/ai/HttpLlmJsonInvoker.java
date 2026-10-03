@@ -2,6 +2,7 @@ package com.apimarketplace.conversation.service.ai;
 
 import com.apimarketplace.agent.client.dto.execution.JsonCompletionRequestDto;
 import com.apimarketplace.agent.client.dto.execution.JsonCompletionResponseDto;
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.common.web.OrgContextHeaderForwarder;
 import com.apimarketplace.conversation.service.ai.ColdSummarizerService.LlmJsonInvoker;
 import lombok.extern.slf4j.Slf4j;
@@ -64,7 +65,18 @@ public class HttpLlmJsonInvoker implements LlmJsonInvoker {
 
     @Override
     public String invoke(String provider, String model, String system, String user) {
-        return invoke(provider, model, system, user, null);
+        return invoke(provider, model, system, user, (String) null);
+    }
+
+    /**
+     * LC-004 re-audit: sensitivity-aware SAM override. {@link ChatCompactionOrchestrator}'s
+     * tenant-aware adapter is the one production caller that overrides this (it has both the
+     * tenantId and the conversation's tag on hand); this default path (tenantId=null) covers any
+     * other caller of the plain interface method.
+     */
+    @Override
+    public String invoke(String provider, String model, String system, String user, DataSensitivity sensitivity) {
+        return invoke(provider, model, system, user, null, sensitivity);
     }
 
     /**
@@ -74,12 +86,26 @@ public class HttpLlmJsonInvoker implements LlmJsonInvoker {
      * summariser service doesn't need to know about tenant plumbing.
      */
     public String invoke(String provider, String model, String system, String user, String tenantId) {
+        return invoke(provider, model, system, user, tenantId, null);
+    }
+
+    /**
+     * Tenant- and sensitivity-scoped overload (LC-004 re-audit). This is the only place that
+     * builds a {@link JsonCompletionRequestDto} with a non-null {@code dataSensitivity}: without
+     * it every caller reaching agent-service through this invoker used the legacy 5-arg
+     * constructor, which always sends {@code dataSensitivity=null}, so
+     * {@code JsonCompletionService}'s {@code RestrictedDataRouting.apply} check was a no-op for
+     * every COLD-summary call.
+     */
+    public String invoke(String provider, String model, String system, String user, String tenantId,
+                         DataSensitivity sensitivity) {
         Objects.requireNonNull(provider, "provider");
         Objects.requireNonNull(model, "model");
         Objects.requireNonNull(user, "user");
 
         String url = agentServiceUrl + "/api/internal/agent/execute/json-completion";
-        JsonCompletionRequestDto body = new JsonCompletionRequestDto(provider, model, system, user, tenantId);
+        JsonCompletionRequestDto body = new JsonCompletionRequestDto(provider, model, system, user, tenantId,
+                sensitivity != null ? sensitivity.name() : null);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);

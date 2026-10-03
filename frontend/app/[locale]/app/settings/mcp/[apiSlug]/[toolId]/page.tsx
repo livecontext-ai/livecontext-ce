@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useTranslations } from 'next-intl';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
+import { urlEnum, useUrlState } from '@/hooks/useUrlState';
 import { useApiDetails, useApiTools } from '@/hooks/useApiDetails';
 import NavigationLoader from '@/components/NavigationLoader';
 import LoadingSpinner from '@/components/LoadingSpinner';
@@ -21,6 +22,10 @@ import { generateEnhancedCurl, generateEnhancedJavaScript, generateEnhancedPytho
 
 // Tab components
 import { ConfigTab, ParametersTab, ResponseTab, TestTab } from './components/tabs';
+
+// Every tab the page can show ("body" only for PUT and POST) and every language of the Test tab.
+const TOOL_TABS = ['config', 'pathParams', 'queryParams', 'headers', 'body', 'response', 'test'];
+const CODE_LANGUAGES = ['curl', 'javascript', 'python', 'java', 'php', 'nodejs', 'go', 'ruby', 'shell'];
 
 export default function ToolEditPage() {
     const t = useTranslations('mcp.overview.toolPage');
@@ -40,8 +45,15 @@ export default function ToolEditPage() {
     const isInitialLoading = !apiLoading && !toolsLoading && (!api || !tool) && !error;
 
     // UI state
-    const [activeTab, setActiveTab] = useState('config');
-    const [selectedLanguage, setSelectedLanguage] = useState('curl');
+    // The open tab and the language of the code sample live in the address, so a reload
+    // reopens the tool where it was.
+    const [activeTab, setActiveTab] = useUrlState<string>('tab', 'config', {
+        codec: urlEnum(TOOL_TABS),
+        history: 'push',
+    });
+    const [selectedLanguage, setSelectedLanguage] = useUrlState<string>('lang', 'curl', {
+        codec: urlEnum(CODE_LANGUAGES),
+    });
 
     // Tab slider animation
     const tabContainerRef = useRef<HTMLDivElement>(null);

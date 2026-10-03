@@ -38,9 +38,12 @@ import { GeminiAdapter } from './adapters/gemini-adapter.mjs';
 import { MistralAdapter } from './adapters/mistral-adapter.mjs';
 import { AgentStopReason } from './lib/agentStopReason.js';
 import { applyResultMapping } from './lib/stopReasonMapper.js';
-import { sharedPricingCache } from './lib/pricing.js';
+import { sharedPricingCache, signedSnapshotFetcher } from './lib/pricing.js';
 import { AgentBudgetGuard, TenantBudgetGuard, chainBudgetGuards, sumCacheCounters } from './lib/budgetGuards.js';
-import { internalSignedHeaders } from './lib/gatewayAuth.mjs';
+import { internalSignedHeaders, resolveRestrictedToolset, UNRESTRICTED_PROVIDER_ID, withGatewaySignatureV2 } from './lib/gatewayAuth.mjs';
+import { installBridgeSecurity, createSecretSource, enforcementMode, resolveRequestIdentity } from './lib/bridgeSecurity.mjs';
+import { childUserFromEnv, wrapSpawnForChildUser, grantChildAccess, childUserEnv } from './lib/childUser.mjs';
+import { buildBaseChildEnv } from './lib/childEnv.mjs';
 import { resolveInactivityMs } from './lib/inactivityResolver.mjs';
 import { createInactivityWatchdog } from './lib/inactivityWatchdog.mjs';
 import { applyRecoveredUsage as applyRecoveredUsageToRun } from './lib/usageRecovery.mjs';
@@ -104,10 +107,16 @@ const AUTH_BALANCE_URL = process.env.AUTH_BALANCE_URL || 'http://localhost:8083/
 // the request itself - see lib/gatewayAuth.mjs. Empty in dev/test (backend filter is
 // disabled there); in prod the balance refresh silently 401s without it (the guard
 // just keeps its previous value), so warn loudly at boot rather than fail silently.
-const GATEWAY_SECRET_KEY = process.env.GATEWAY_SECRET_KEY || '';
+// LC-053: read from the systemd credential ($CREDENTIALS_DIRECTORY/gateway-secret) when the unit
+// provides one, so the secret is never in this process's environment; else GATEWAY_SECRET_KEY.
+const SECRETS = createSecretSource();
+const GATEWAY_SECRET_KEY = SECRETS.platformSecret();
 // Provider id the auth-service internal credit client signs with - kept in sync with
 // CreditConsumptionClient.INTERNAL_PROVIDER_ID so both sides hit the same code path.
 const INTERNAL_PROVIDER_ID = 'internal-credit-client';
+// The pricing snapshot lives under auth-service's /api/internal/auth/, which it can HMAC-gate
+// (AUTH_INTERNAL_HMAC_REQUIRED_PATH), so the shared cache signs its reads like the balance refresh.
+sharedPricingCache.fetcher = signedSnapshotFetcher(GATEWAY_SECRET_KEY);
 if (process.env.NODE_ENV === 'production' && !GATEWAY_SECRET_KEY) {
   // Non-fatal: a missing secret degrades the mid-run tenant budget guard back to a
   // one-shot snapshot (every balance refresh 401s and the guard keeps its seed value).
@@ -128,6 +137,26 @@ const SIGKILL_GRACE_MS = parseInt(process.env.BRIDGE_SIGKILL_GRACE_MS || '3000',
 const CANCEL_POLL_MS = parseInt(process.env.BRIDGE_CANCEL_POLL_MS || '2000', 10);
 const MAX_HISTORY_MESSAGES = parseInt(process.env.BRIDGE_MAX_HISTORY_MESSAGES || '20', 10);
 const BODY_LIMIT = process.env.BRIDGE_BODY_LIMIT || '100mb';
+
+// ─── Bridge authentication + exposure (LC-001) ────────────────────────────
+//
+// `POST /api/bridge/execute` spawns a CLI agent child process on this host. It used to accept
+// any caller that could reach the port (and the gateway routed `/api/bridge/**` from the public
+// edge). The gateway route is gone; these two settings close the rest.
+//
+// BRIDGE_REQUIRE_GATEWAY_AUTH: "true" = always enforce (no secret = 503, fail closed; prod sets
+// this), "false" = never (local dev), unset = enforce iff a shared secret is available (CE). With
+// enforcement off no run is ever unrestricted. See lib/bridgeSecurity.mjs.
+// BRIDGE_REQUIRE_SIGNATURE_V2=true additionally refuses requests without the body-bound
+// X-Bridge-Signature (turn it on once every caller is on the signing build).
+const AUTH_MODE = enforcementMode();
+// BRIDGE_BIND_ADDRESS: comma-separated list of addresses to listen on, default loopback only.
+// Every launcher in the repo sets it explicitly (prod systemd: loopback + the LAN address the
+// k3s pods dial; containers: 0.0.0.0 inside the container network).
+const BIND_ADDRESSES = (process.env.BRIDGE_BIND_ADDRESS || '127.0.0.1')
+  .split(',')
+  .map(a => a.trim())
+  .filter(Boolean);
 
 // ─── CLI Adapters ─────────────────────────────────────────────────────────
 
@@ -206,7 +235,17 @@ function stripMcpPrefix(toolName) {
 // ─── Express App ──────────────────────────────────────────────────────────
 
 const app = express();
-app.use(express.json({ limit: BODY_LIMIT }));
+
+// Authentication front (lib/bridgeSecurity.mjs), mounted FIRST: the pre-parse HMAC gate runs
+// before the JSON body is read, then the body is parsed with its raw bytes kept, then the
+// body-bound signature, the replay cache and the signed-identity check run. It is mounted on the
+// `/api/bridge` PREFIX, so a future route under it is protected by default. `/health`,
+// `/metrics` and `/cli-status` stay open: they are read-only, and `/cli-status` + `/health`
+// are polled unsigned by agent-service (BridgeAvailabilityFilter, LlmProviderStatusController).
+installBridgeSecurity(app, { secrets: SECRETS, mode: AUTH_MODE, bodyLimit: BODY_LIMIT });
+
+// LC-053: optional dedicated uid for the spawned agent (BRIDGE_CHILD_UID / BRIDGE_CHILD_GID).
+const CHILD_USER = childUserFromEnv();
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'agent-bridge', port: PORT });
@@ -378,16 +417,25 @@ app.post('/api/bridge/execute', async (req, res) => {
     // everything EXCEPT the credit-spending opt-ins (image_generation, generation).
     enabledModules,
   } = dto;
-  const effectiveOrgId = req.headers['x-organization-id'] || organizationId || '';
-  const effectiveOrgRole = req.headers['x-organization-role'] || organizationRole || '';
+  // The identity this run acts as. For a verified request it is the SIGNED identity only (the
+  // security front already refused a body tenantId/organizationId that differs from it, and the
+  // organization role is taken only from a signed header); legacy header-or-body resolution is
+  // kept solely for enforcement-off launchers.
+  const identity = resolveRequestIdentity(req.gatewayAuth, { tenantId, organizationId, organizationRole }, req.headers);
+  const effectiveTenantId = identity.tenantId;
+  const effectiveOrgId = identity.organizationId;
+  const effectiveOrgRole = identity.organizationRole;
 
-  // CLOUD model-execution-link "API mode": travels via the credentials map (like
-  // __executionId__ / __approvedToolActions__) so the 39-field DTO contract is untouched.
-  // When true, the CLI is locked to ONLY the platform MCP tools (no native Bash/Read/Write/
-  // Web), an empty cwd (no AGENTS.md / CLAUDE.md / project files), and no account/CLI leak -
-  // so a linked model behaves like a plain API and nothing reveals which CLI ran it.
-  // Absent ⇒ today's full-freedom behaviour is unchanged (direct claude-code/codex/... free).
-  const restrictedToolset = !!(credentials && credentials.__restrictedToolset__ === true);
+  // Restricted mode locks the CLI to ONLY the platform MCP tools (no native Bash/Read/Write/
+  // Web), an empty cwd (no AGENTS.md / CLAUDE.md / project files) and no repo/shell MCP tools.
+  //
+  // LC-001 / LC-022: restricted is now the DEFAULT. The only way out is the SIGNED channel: a
+  // request carrying a valid BODY-BOUND signature made with UNRESTRICTED_PROVIDER_ID (the Java
+  // bridge clients do so only for a platform-admin caller on a deployment that allows host tools,
+  // `conversation.bridge.host-tools-enabled`). The body
+  // flag `credentials.__restrictedToolset__` (model-execution-link "API mode") can still only
+  // TIGHTEN; it can no longer be omitted to obtain a host shell.
+  const restrictedToolset = resolveRestrictedToolset(req.gatewayAuth, credentials);
 
   // Set by a caller that re-runs a failed turn on this SAME stream (the execution-link
   // fallback): it publishes the stream's terminal event itself, so a bridge `error` would
@@ -427,7 +475,7 @@ app.post('/api/bridge/execute', async (req, res) => {
   // Build full prompt with conversation history for context
   const fullPrompt = buildPromptWithHistory(prompt, conversationHistory);
 
-  console.log(`[BRIDGE] Execute: conv=${conversationId}, stream=${streamId}, tenant=${tenantId}, provider=${provider || 'default'}, historyMsgs=${(conversationHistory || []).length}, attachments=${(attachments || []).length}`);
+  console.log(`[BRIDGE] Execute: conv=${conversationId}, stream=${streamId}, tenant=${effectiveTenantId}, provider=${provider || 'default'}, historyMsgs=${(conversationHistory || []).length}, attachments=${(attachments || []).length}`);
 
   req.setTimeout(MAX_TIMEOUT_MS);
   res.setTimeout(MAX_TIMEOUT_MS);
@@ -456,9 +504,9 @@ app.post('/api/bridge/execute', async (req, res) => {
     // CreditController binds it as @RequestHeader Long → a non-numeric tenantId
     // would silently 400 and turn refreshTenantBalance into a permanent no-op.
     // Fail loud here instead so any future tenant-id format change is caught early.
-    const tenantIdStr = String(tenantId || '');
+    const tenantIdStr = String(effectiveTenantId || '');
     const tenantIdIsNumeric = /^\d+$/.test(tenantIdStr);
-    if (tenantId && !tenantIdIsNumeric) {
+    if (effectiveTenantId && !tenantIdIsNumeric) {
       process.stderr.write(`[BRIDGE:tenantGuard] WARN non-numeric tenantId="${tenantIdStr}" - auth-service expects Long, refresh disabled\n`);
     }
     const refreshTenantBalance = async () => {
@@ -469,13 +517,13 @@ app.post('/api/bridge/execute', async (req, res) => {
         // signature binds userId + orgId; internalSignedHeaders builds the signed
         // headers AND the X-User-ID / X-Organization-ID from the SAME inputs, so the
         // values we send can never diverge from the values we sign.
-        const headers = internalSignedHeaders({
+        const headers = withGatewaySignatureV2(internalSignedHeaders({
           secretKey: GATEWAY_SECRET_KEY,
           providerId: INTERNAL_PROVIDER_ID,
           userId: tenantIdStr,
           organizationId: effectiveOrgId,
           extra: { 'Accept': 'application/json' },
-        });
+        }), { secretKey: GATEWAY_SECRET_KEY, method: 'GET', url: AUTH_BALANCE_URL });
         const res = await fetch(AUTH_BALANCE_URL, { headers });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const body = await res.json();
@@ -485,7 +533,7 @@ app.post('/api/bridge/execute', async (req, res) => {
         return null; // null → guard keeps the previous value
       }
     };
-    const refreshEnabled = Boolean(tenantId && tenantIdIsNumeric);
+    const refreshEnabled = Boolean(effectiveTenantId && tenantIdIsNumeric);
     const initialBalance = Number(tenantBalance) || 0;
     if (!refreshEnabled && initialBalance > 0) {
       // Caller seeded a balance but we can't refresh it - guard becomes a one-shot
@@ -518,7 +566,7 @@ app.post('/api/bridge/execute', async (req, res) => {
       // Inactivity watchdog window (ms): per-agent credential override > DTO field > 5-min default;
       // <= 0 disables. See lib/inactivityResolver.mjs (mirrors AgentLoopService.resolveInactivityWindowMs).
       inactivityMs: resolveInactivityMs(inactivityTimeout, credentials),
-      tenantId: tenantId || 'default-tenant',
+      tenantId: effectiveTenantId || 'default-tenant',
       publisher,
       attachments: attachments || [],
       isNewConversation: !conversationHistory || conversationHistory.length === 0
@@ -729,6 +777,10 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
       // 2026-06-26). Force the MCP subprocess to see NO checkout when restricted, so
       // isRepoEnabled() is false and neither `repo` nor `shell` is advertised or callable.
       AGENT_REPO_PATH: restrictedToolset ? '' : (process.env.AGENT_REPO_PATH || ''),
+      // LC-022: the in-process `shell` MCP tool has its OWN opt-in (AGENT_SHELL_ENABLED=true on
+      // the bridge host) instead of riding on AGENT_REPO_PATH. Forced off for restricted runs,
+      // for the same reason as AGENT_REPO_PATH above.
+      AGENT_SHELL_ENABLED: restrictedToolset ? '' : (process.env.AGENT_SHELL_ENABLED || ''),
       // Phase 3 - propagate the workspace scope to the MCP subprocess so its
       // own apiPost calls back into orchestrator carry X-Organization-ID. Closes
       // Pattern I (audit 2026-05-19) where InterfaceService.createOrUpdate*
@@ -784,6 +836,9 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
   // stripNulFromArgs below is the unconditional backstop at the spawn boundary.
   let finalPrompt = prompt;
   let attachmentPathToName = new Map();
+  // Set only when at least one attachment was written to disk: a restricted claude run then gets
+  // Read scoped to exactly this directory (see ClaudeAdapter.buildArgs).
+  let attachmentDirOnDisk = null;
   if (attachments && attachments.length > 0) {
     const attachDir = resolve(tmpDir, 'attachments');
     mkdirSync(attachDir, { recursive: true });
@@ -794,6 +849,7 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
     });
     finalPrompt = built.finalPrompt;
     attachmentPathToName = built.attachmentPathToName;
+    if (attachmentPathToName.size > 0) attachmentDirOnDisk = attachDir;
   }
 
   // Build CLI args via adapter. Adapters always return `{ args, stdinPayload }`
@@ -816,6 +872,7 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
     // MCP server name (mcp__<serverName>__*) so adapters can build a tools allowlist
     // restricted to ONLY the platform tools when restrictedToolset is set.
     mcpServerName: mcpServerConfig.serverName,
+    attachmentDir: attachmentDirOnDisk,
   });
 
   // Unconditional backstop: Node's spawn aborts the whole run if ANY argument
@@ -835,33 +892,55 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
   console.log(`[BRIDGE] reasoningEffort=${reasoningEffort || '(none)'} | flagArgs=${JSON.stringify(flagArgs)}`);
 
   // Build child environment via adapter
-  const childEnv = adapter.buildChildEnv ? adapter.buildChildEnv(tmpDir, reasoningEffort, restrictedToolset) : { ...process.env };
+  // The fallback strips platform secrets too: an adapter without buildChildEnv must not be the
+  // one path that hands GATEWAY_SECRET_KEY to a spawned agent (LC-053).
+  const childEnv = adapter.buildChildEnv ? adapter.buildChildEnv(tmpDir, reasoningEffort, restrictedToolset) : buildBaseChildEnv();
 
   console.log(`[BRIDGE] Spawning: ${cmdLabel} ${useShell ? '(shell)' : '(direct)'} --max-turns ${maxTurns}${restrictedToolset ? ' [restricted]' : ''}`);
 
   const needsStdin = stdinPayload != null;
 
-  // Run the agent's native file/shell tools FROM the source checkout when present (see
-  // resolveAgentCwd) - like a real Claude Code launched inside the repo. dev/CE → undefined
-  // → inherit the bridge cwd.
+  // Run the agent's native file/shell tools FROM the source checkout when the operator
+  // configured one (AGENT_REPO_PATH, see resolveAgentCwd) - like a real Claude Code launched
+  // inside the repo.
   //
-  // RESTRICTED (model-execution-link API mode): run from a fresh EMPTY dir instead, so the
-  // CLI can never load the repo's AGENTS.md / CLAUDE.md / .codex or read project files even
-  // on a CLI whose native read tool we can't fully disable (codex/gemini read-only sandbox).
-  // Tracked separately so the cleanup handlers can remove this throwaway dir (the
-  // non-restricted spawnCwd is the real repo checkout and must NEVER be deleted).
+  // RESTRICTED: run from a fresh EMPTY dir instead, so the CLI can never load the repo's
+  // AGENTS.md / CLAUDE.md / .codex or read project files even on a CLI whose native read tool
+  // we can't fully disable (codex/gemini read-only sandbox).
+  //
+  // NO CHECKOUT CONFIGURED (dev / CE): this used to inherit the bridge's own working directory,
+  // i.e. its install dir (server.mjs, lib/gatewayAuth.mjs, and one level up in the systemd layout
+  // the platform .env). Those runs get a throwaway empty dir too (LC-053).
+  //
+  // Both throwaway dirs are tracked so the cleanup handlers can remove them; the configured
+  // checkout is the real source tree and must NEVER be deleted.
   const restrictedCwd = restrictedToolset
     ? mkdtempSync(resolve(tmpdir(), 'bridge-restricted-'))
     : null;
-  const spawnCwd = restrictedCwd || resolveAgentCwd(process.env.AGENT_REPO_PATH || '');
+  const configuredCheckout = restrictedCwd ? null : resolveAgentCwd(process.env.AGENT_REPO_PATH || '');
+  const throwawayCwd = (restrictedCwd || configuredCheckout)
+    ? null
+    : mkdtempSync(resolve(tmpdir(), 'bridge-cwd-'));
+  const spawnCwd = restrictedCwd || configuredCheckout || throwawayCwd;
+
+  // LC-053: with BRIDGE_CHILD_UID set, the agent runs under its own uid through setpriv, and the
+  // per-run dirs it needs are handed to its group. A failure here throws (the run fails) rather
+  // than silently running the agent as the bridge uid.
+  let plan = { cmd: spawnCmd, args: spawnArgs, useShell };
+  let effectiveChildEnv = childEnv;
+  if (CHILD_USER) {
+    grantChildAccess([tmpDir, restrictedCwd, throwawayCwd], CHILD_USER);
+    plan = wrapSpawnForChildUser(plan, CHILD_USER);
+    effectiveChildEnv = childUserEnv(childEnv, CHILD_USER);
+  }
 
   return new Promise((resolvePromise) => {
-    const child = spawn(spawnCmd, spawnArgs, {
-      env: childEnv,
+    const child = spawn(plan.cmd, plan.args, {
+      env: effectiveChildEnv,
       cwd: spawnCwd,
       stdio: [needsStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       timeout: spawnTimeoutMs || MAX_TIMEOUT_MS,
-      shell: useShell,
+      shell: plan.useShell,
     });
 
     // Write prompt to stdin if adapter requires it. `stdinPayload` is closure-
@@ -1093,12 +1172,15 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
       }
     });
 
-    // Log stderr in real-time for diagnostics
+    // Log stderr in real-time for diagnostics, capped: the child's stderr can echo prompt or
+    // tool content (LC-090), so the log keeps the size and a short head only.
     let stderrBuf = '';
     child.stderr.on('data', (chunk) => {
       const text = chunk.toString();
       stderrBuf += text;
-      console.log(`[BRIDGE:stderr] ${text.trim()}`);
+      const trimmed = text.trim();
+      const head = trimmed.length > 200 ? `${trimmed.slice(0, 200)}... (${trimmed.length} chars)` : trimmed;
+      console.log(`[BRIDGE:stderr] ${head}`);
     });
 
     /**
@@ -1131,6 +1213,7 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
       // Cleanup temp directory
       try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
       if (restrictedCwd) { try { rmSync(restrictedCwd, { recursive: true, force: true }); } catch {} }
+      if (throwawayCwd) { try { rmSync(throwawayCwd, { recursive: true, force: true }); } catch {} }
 
       // If a sentinel was set (cancel / system / loop / budget) but the CLI did
       // not emit a `result` message before being killed, the mapper still has the
@@ -1192,6 +1275,7 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
       applyRecoveredUsage();
       try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
       if (restrictedCwd) { try { rmSync(restrictedCwd, { recursive: true, force: true }); } catch {} }
+      if (throwawayCwd) { try { rmSync(throwawayCwd, { recursive: true, force: true }); } catch {} }
 
       error = err.message;
       stopReason = AgentStopReason.ERROR;
@@ -1287,13 +1371,40 @@ function buildPromptWithHistory(prompt, conversationHistory) {
 
 // ─── Start Server ─────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  console.log(`[BRIDGE] Agent Bridge Server started on port ${PORT}`);
-  console.log(`[BRIDGE] Adapters: ${Object.keys(ADAPTERS).join(', ')}`);
-  console.log(`[BRIDGE] MCP server: ${MCP_SERVER_PATH}`);
-  console.log(`[BRIDGE] Agent CLI URL: ${AGENT_CLI_URL}`);
-  console.log(`[BRIDGE] Redis: ${maskSecrets(REDIS_URL)}`);
-});
+// One listener per configured address. A listen failure (EADDRNOTAVAIL: the address is not on
+// this host; EADDRINUSE: another process holds the port) is fatal and named, instead of an
+// unhandled 'error' event: a bridge silently missing its LAN listener is an outage that only
+// shows up as empty chats.
+for (const address of BIND_ADDRESSES) {
+  const server = app.listen(PORT, address, () => {
+    console.log(`[BRIDGE] Agent Bridge Server listening on ${address}:${PORT}`);
+  });
+  server.on('error', (err) => {
+    console.error(`[BRIDGE] FATAL: cannot listen on ${address}:${PORT} (${err.code || err.message}). `
+      + 'Check BRIDGE_BIND_ADDRESS: every address must exist on this host and the port must be free.');
+    process.exit(1);
+  });
+}
+console.log(`[BRIDGE] Agent Bridge Server starting on ${BIND_ADDRESSES.join(', ')}:${PORT}`);
+if (AUTH_MODE === 'on') {
+  console.log(`[BRIDGE] Gateway HMAC required on /api/bridge/** (secret: ${SECRETS.platformSecretSource()}; unrestricted toolset requires a body-bound signature with X-Provider-ID: ${UNRESTRICTED_PROVIDER_ID})`);
+  if (!SECRETS.inboundSecret()) {
+    console.error('[BRIDGE] ERROR: gateway authentication is ENABLED but no shared secret is configured. Every /api/bridge request will 503 until it is provisioned.');
+  }
+} else if (AUTH_MODE === 'auto') {
+  console.log(`[BRIDGE] Gateway HMAC on /api/bridge/** is enforced whenever a shared secret is available (now: ${SECRETS.inboundSecret() ? 'yes' : 'no, requests are NOT authenticated and every run is restricted'}).`);
+} else {
+  console.warn('[BRIDGE] SECURITY WARNING: gateway authentication is DISABLED (BRIDGE_REQUIRE_GATEWAY_AUTH=false). Anything that can reach this port can spawn a (restricted) agent. Only for launchers whose port is not reachable from outside.');
+}
+if (CHILD_USER) {
+  console.log(`[BRIDGE] Agent processes run as uid=${CHILD_USER.uid} gid=${CHILD_USER.gid} (via setpriv).`);
+} else {
+  console.warn('[BRIDGE] WARN agent processes run as the bridge uid (BRIDGE_CHILD_UID unset): a spawned agent can read this process\'s memory and environment. See deploy/systemd/lc-bridge-child-uid.conf.');
+}
+console.log(`[BRIDGE] Adapters: ${Object.keys(ADAPTERS).join(', ')}`);
+console.log(`[BRIDGE] MCP server: ${MCP_SERVER_PATH}`);
+console.log(`[BRIDGE] Agent CLI URL: ${AGENT_CLI_URL}`);
+console.log(`[BRIDGE] Redis: ${maskSecrets(REDIS_URL)}`);
 
 process.on('SIGTERM', async () => {
   console.log('[BRIDGE] Shutting down...');

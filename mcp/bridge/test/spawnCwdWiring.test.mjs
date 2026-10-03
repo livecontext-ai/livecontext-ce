@@ -21,7 +21,14 @@ test('server imports resolveAgentCwd from the spawnCwd helper', () => {
 test('server computes spawnCwd from AGENT_REPO_PATH via resolveAgentCwd (default, non-restricted branch)', () => {
   // spawnCwd is now a ternary: restricted runs use an empty temp dir; the default branch
   // still resolves from AGENT_REPO_PATH via resolveAgentCwd so native tools run from the checkout.
-  assert.match(server, /const\s+spawnCwd\s*=[\s\S]*?resolveAgentCwd\(\s*process\.env\.AGENT_REPO_PATH[^)]*\)/);
+  assert.match(server, /const\s+configuredCheckout\s*=\s*restrictedCwd\s*\?\s*null\s*:\s*resolveAgentCwd\(\s*process\.env\.AGENT_REPO_PATH[^)]*\)/);
+  assert.match(server, /const\s+spawnCwd\s*=\s*restrictedCwd\s*\|\|\s*configuredCheckout\s*\|\|\s*throwawayCwd/);
+});
+
+test('LC-053: with no checkout configured the agent starts in a throwaway empty dir, never the bridge install dir', () => {
+  assert.match(server, /mkdtempSync\(resolve\(tmpdir\(\),\s*'bridge-cwd-'\)\)/);
+  // Both exit paths (close + error) clean the throwaway dir up.
+  assert.equal((server.match(/if \(throwawayCwd\) \{ try \{ rmSync\(throwawayCwd/g) || []).length, 2);
 });
 
 test('server runs a RESTRICTED (model-execution-link) call from a fresh empty temp dir, never the repo checkout', () => {

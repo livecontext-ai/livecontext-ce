@@ -344,6 +344,10 @@ class PlatformCredentialsControllerMyEndpointsTest {
         assertThat(body.get("deleted")).isEqualTo(true);
         assertThat(body.get("revokedCredentialCount")).isEqualTo(2);
         assertThat(body.get("integrationName")).isEqualTo("gmail");
+        // The controller only delegates: revoke-then-delete ordering and the client-id
+        // scoping now live in ByokDeleteService/CredentialService (see
+        // ByokDeleteServiceTest and CredentialServiceByokCascadeTest), so the controller
+        // must never call the raw delete directly.
         verify(service, never()).deleteCredential(any(), any());
     }
 

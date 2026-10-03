@@ -149,6 +149,76 @@ public class GuardChainFactory {
         return forAgentWithFallback(tenantId, agentEntityId, maxCreditBudget, creditsConsumedSoFar, null, null);
     }
 
+    /**
+     * Budget fields the CLI bridge enforces itself: the tenant's spendable balance on the BILLED
+     * model and the agent's budget window. {@code null} for a field the platform cannot answer
+     * (no credit client, no agent entity, no budget configured).
+     */
+    public record BridgeBudget(Double tenantBalance, Double maxCreditBudget, Double creditsConsumedSoFar) {
+
+        /**
+         * The budget this run cannot start under, or null: "tenant" for a balance at or below 0,
+         * "agent" for an agent budget already spent. The bridge reads a 0 balance as "no budget"
+         * and checks the agent budget only after a first turn, so both are refused before
+         * dispatch, as the Java loop's guards refuse them before its first turn. An agent budget of
+         * 0 or less is "no budget" here as everywhere else (BudgetState, both AgentBudgetGuards),
+         * never a spent one.
+         */
+        public String exhaustedScope() {
+            if (tenantBalance != null && tenantBalance <= 0) {
+                return "tenant";
+            }
+            if (maxCreditBudget != null && maxCreditBudget > 0
+                    && creditsConsumedSoFar != null && creditsConsumedSoFar >= maxCreditBudget) {
+                return "agent";
+            }
+            return null;
+        }
+
+        /** The refusal for {@link #exhaustedScope()}, written for the person or agent reading it. */
+        public String refusalMessage(String provider, String model) {
+            return "agent".equals(exhaustedScope())
+                ? "Agent credit budget exhausted: " + creditsConsumedSoFar + " of " + maxCreditBudget
+                    + " credits already used in this budget window, so no agent turn can run."
+                : "Insufficient credits: the spendable balance for " + provider + "/" + model + " is "
+                    + tenantBalance + " (a balance that could not be read counts as 0), so no agent turn can run.";
+        }
+    }
+
+    /**
+     * Resolves {@link BridgeBudget} server-side (CASA LC-056). A run dispatched to the bridge
+     * without these fields ran with the bridge's balance and agent guards both disabled, bounded
+     * only by its turn count. Reads the same balance the Java loop's {@link TenantBudgetGuard}
+     * reads, and the same budget window as {@link #forAgentWithFallback}.
+     */
+    public BridgeBudget bridgeBudget(String tenantId, String agentEntityId, String provider, String model) {
+        Double tenantBalance = null;
+        if (creditConsumptionClient != null && tenantId != null && !tenantId.isBlank()) {
+            BigDecimal balance = creditConsumptionClient.fetchLlmSpendableBalance(tenantId, provider, model);
+            tenantBalance = balance != null ? balance.doubleValue() : null;
+        }
+        Double maxCreditBudget = null;
+        Double consumedSoFar = null;
+        if (agentEntityId != null && budgetResolver != null) {
+            try {
+                BudgetState state = budgetResolver.resolveAndPersistForAgent(
+                    UUID.fromString(agentEntityId), TenantResolver.currentRequestOrganizationId(), Instant.now());
+                if (state.isEnabled()) {
+                    maxCreditBudget = state.totalBudget().doubleValue();
+                    consumedSoFar = state.consumedIncludingReserved().doubleValue();
+                }
+            } catch (IllegalArgumentException e) {
+                log.warn("Invalid agentEntityId '{}', no agent budget sent to the bridge", agentEntityId);
+            } catch (RuntimeException e) {
+                // The tenant balance above still bounds the run; failing it outright over the
+                // agent budget's own lookup would turn a transient error into a refused run.
+                log.warn("Could not resolve the agent budget of {} for the bridge, sent without it: {}",
+                    agentEntityId, e.getMessage());
+            }
+        }
+        return new BridgeBudget(tenantBalance, maxCreditBudget, consumedSoFar);
+    }
+
     private AgentBudgetGuard buildAgentGuard(String agentEntityId, ModelCostCalculator calculator) {
         if (agentEntityId == null || budgetResolver == null) {
             return null;

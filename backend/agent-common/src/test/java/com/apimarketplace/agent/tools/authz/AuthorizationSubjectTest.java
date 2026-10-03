@@ -156,16 +156,123 @@ class AuthorizationSubjectTest {
     }
 
     @Nested
+    @DisplayName("Run rules - the card names what is about to run (was the bare 'Run this action?')")
+    class RunRules {
+
+        @Test
+        @DisplayName("workflow:execute names the workflow, under either id spelling")
+        void workflowExecuteNamesTheWorkflow() {
+            assertThat(AuthorizationSubject.of("workflow:execute", Map.of("action", "execute", "id", "w-1")))
+                    .isEqualTo(Map.of("kind", "workflow", "id", "w-1"));
+            assertThat(AuthorizationSubject.of("workflow:execute", Map.of("workflow_id", "w-2")))
+                    .containsEntry("id", "w-2")
+                    .doesNotContainKey("version");
+        }
+
+        @Test
+        @DisplayName("workflow:execute with both spellings names `id`, the one execute actually runs")
+        void workflowExecutePrefersIdLikeTheExecutor() {
+            // WorkflowBuilderProvider.resolveWorkflowId reads id before workflow_id (pin is the
+            // reverse). Naming workflow_id here would show "Run B?" and then run A.
+            assertThat(AuthorizationSubject.of("workflow:execute",
+                    Map.of("id", "runs-this", "workflow_id", "not-this")))
+                    .containsEntry("id", "runs-this");
+        }
+
+        @Test
+        @DisplayName("workflow:execute on the loaded workflow (no id) names nothing")
+        void workflowExecuteWithoutIdNamesNothing() {
+            assertThat(AuthorizationSubject.of("workflow:execute", Map.of("action", "execute"))).isNull();
+        }
+
+        @Test
+        @DisplayName("restart_from_node names the node and the run, accepting the node_id spelling")
+        void restartNamesTheNode() {
+            assertThat(AuthorizationSubject.of("workflow:restart_from_node",
+                    Map.of("run_id", "r-1", "node", "mcp:fetch_data")))
+                    .containsEntry("kind", "run_node")
+                    .containsEntry("node", "mcp:fetch_data")
+                    .containsEntry("run_id", "r-1");
+            assertThat(AuthorizationSubject.of("workflow:restart_from_node", Map.of("node_id", "core:x")))
+                    .containsEntry("node", "core:x")
+                    .doesNotContainKey("run_id");
+            assertThat(AuthorizationSubject.of("workflow:restart_from_node", Map.of("run_id", "r-1"))).isNull();
+        }
+
+        @Test
+        @DisplayName("run_node names the node type")
+        void runNodeNamesTheType() {
+            assertThat(AuthorizationSubject.of("workflow:run_node", Map.of("type", "send_email")))
+                    .isEqualTo(Map.of("kind", "node", "type", "send_email"));
+        }
+
+        @Test
+        @DisplayName("application:execute, agent:execute and both catalog spellings carry the target id")
+        void idOnlyRulesCarryTheirId() {
+            assertThat(AuthorizationSubject.of("application:execute", Map.of("application_id", "p-1")))
+                    .isEqualTo(Map.of("kind", "application", "id", "p-1"));
+            assertThat(AuthorizationSubject.of("agent:execute", Map.of("agent_id", "a-1", "prompt", "go")))
+                    .isEqualTo(Map.of("kind", "agent", "id", "a-1"));
+            assertThat(AuthorizationSubject.of("catalog:execute", Map.of("tool_id", "t-1")))
+                    .isEqualTo(Map.of("kind", "api_tool", "id", "t-1"));
+            assertThat(AuthorizationSubject.of("catalog:call", Map.of("tool_id", "t-1")))
+                    .containsEntry("id", "t-1");
+        }
+
+        @Test
+        @DisplayName("mailbox:send names the recipient and the subject line")
+        void mailNamesTheRecipient() {
+            assertThat(AuthorizationSubject.of("mailbox:send", Map.of("to", " bob@x.io ", "subject", "Hi")))
+                    .containsEntry("kind", "mail")
+                    .containsEntry("to", "bob@x.io")
+                    .containsEntry("subject", "Hi");
+            assertThat(AuthorizationSubject.of("mailbox:send", Map.of("subject", "Hi"))).isNull();
+        }
+
+        @Test
+        @DisplayName("agent:disarm_tool_authorization names the agent, in the flat and the nested shape")
+        void disarmNamesTheAgent() {
+            assertThat(AuthorizationSubject.of("agent:disarm_tool_authorization",
+                    Map.of("agent_id", "a-1", "require_tool_authorization", false)))
+                    .isEqualTo(Map.of("kind", "agent", "id", "a-1"));
+            assertThat(AuthorizationSubject.of("agent:disarm_tool_authorization",
+                    Map.of("params", Map.of("agent_id", "a-2", "require_tool_authorization", false))))
+                    .containsEntry("id", "a-2");
+        }
+
+        @Test
+        @DisplayName("mailbox:send carries cc and bcc, which receive the mail too")
+        void mailCarriesCopies() {
+            assertThat(AuthorizationSubject.of("mailbox:send",
+                    Map.of("to", "bob@x.io", "cc", "eve@x.io", "bcc", "joe@x.io")))
+                    .containsEntry("cc", "eve@x.io")
+                    .containsEntry("bcc", "joe@x.io");
+            assertThat(AuthorizationSubject.of("mailbox:send", Map.of("to", "bob@x.io")))
+                    .doesNotContainKeys("cc", "bcc");
+        }
+
+        @Test
+        @DisplayName("Run rules read top-level only, like their executors: a nested target is not named")
+        void runRulesIgnoreNestedParams() {
+            assertThat(AuthorizationSubject.of("agent:execute",
+                    Map.of("params", Map.of("agent_id", "a-1")))).isNull();
+            assertThat(AuthorizationSubject.of("mailbox:send",
+                    Map.of("params", Map.of("to", "bob@x.io")))).isNull();
+        }
+    }
+
+    @Nested
     @DisplayName("Everything else")
     class Fallbacks {
 
         @Test
         @DisplayName("A rule that names nothing yields no subject, leaving the old copy in place")
         void rulesWithNothingToNameYieldNoSubject() {
-            // Every rule that shipped before this field must keep rendering exactly as it did.
-            assertThat(AuthorizationSubject.of("workflow:execute", Map.of("id", "w-1"))).isNull();
+            // acquire previews its publication through applicationId, not the subject; a call
+            // missing the argument a rule names by yields nothing rather than an empty subject.
             assertThat(AuthorizationSubject.of("application:acquire", Map.of("application_id", "p-1"))).isNull();
             assertThat(AuthorizationSubject.of("catalog:execute", Map.of("tool", "t"))).isNull();
+            assertThat(AuthorizationSubject.of("mailbox:delete", Map.of("uid", "9"))).isNull();
         }
 
         @Test

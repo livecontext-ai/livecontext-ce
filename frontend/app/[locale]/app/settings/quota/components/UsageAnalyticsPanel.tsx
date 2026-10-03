@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { quotaApi, UsageAnalytics, DailyUsageEntry } from '@/lib/api';
 import { isCeMode, creditsToUsd, formatCost } from '@/lib/format-cost';
 import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
+import { urlEnum, useUrlState } from '@/hooks/useUrlState';
 import {
   AreaChart,
   Area,
@@ -108,11 +109,15 @@ export default function UsageAnalyticsPanel({ orgId, allWorkspaces = false, bala
 
   const [analytics, setAnalytics] = useState<UsageAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState('30');
-  const [filterSourceType, setFilterSourceType] = useState('');
-  const [filterProvider, setFilterProvider] = useState('');
-  const [filterModel, setFilterModel] = useState('');
-  const [metric, setMetric] = useState<ChartMetric>('credits');
+  // The period, the filters and the metric live in the address, so a reload reopens the same
+  // chart. The usage history below shares the page and owns `page` and `type`.
+  const [period, setPeriod] = useUrlState<string>('period', '30', { codec: urlEnum(['7', '30', '90']) });
+  const [filterSourceType, setFilterSourceType] = useUrlState<string>('source', '');
+  const [filterProvider, setFilterProvider] = useUrlState<string>('provider', '');
+  const [filterModel, setFilterModel] = useUrlState<string>('model', '');
+  const [metric, setMetric] = useUrlState<ChartMetric>('metric', 'credits', {
+    codec: urlEnum(['credits', 'calls', 'tokens']),
+  });
   // The filters list the ids the ledger stored; this names them the way the
   // rest of the app does. See ./modelLabels.
   const modelNames = useModelNameIndex();

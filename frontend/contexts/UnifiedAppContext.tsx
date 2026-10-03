@@ -26,6 +26,7 @@ export interface ConversationData {
   createdAt?: string;
   workflowId?: string;
   agentId?: string;
+  taskId?: string | null;
 }
 
 interface UIState {

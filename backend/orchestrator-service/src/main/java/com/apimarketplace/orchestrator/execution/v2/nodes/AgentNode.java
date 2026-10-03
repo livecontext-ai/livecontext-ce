@@ -99,6 +99,8 @@ public class AgentNode extends BaseNode {
     private boolean asyncQueueEnabled = false;
     private PendingAgentRegistry pendingAgentRegistry;
     private com.apimarketplace.orchestrator.services.credit.CreditBudgetService creditBudgetService;
+    /** LC-004: tells whether this run already holds restricted (Gmail / Drive) data. */
+    private com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
 
     // Per-agent runtime overrides (executionTimeout, loop thresholds) populated by
     // ExecutionNodeFactory from the same agent-service fetch that produced agentConfig.
@@ -224,6 +226,7 @@ public class AgentNode extends BaseNode {
         this.workflowRunRepository = registry.getWorkflowRunRepository();
         this.pendingAgentRegistry = registry.getPendingAgentRegistry();
         this.creditBudgetService = registry.getCreditBudgetService();
+        this.stepPayloadService = registry.getStepPayloadService();
     }
 
     /**
@@ -779,6 +782,14 @@ public class AgentNode extends BaseNode {
             logger.debug("Agent input prepared: nodeId={}, inputKeys={}",
                 nodeId, inputData.keySet());
 
+            // LC-004: all three agent types (agent, classify, guardrail) send the resolved
+            // input to the node's provider. Once the run holds Gmail / Drive data, only an
+            // allow-listed provider may receive it. Checked before either dispatch route.
+            NodeExecutionResult restrictedDenial = restrictedDataDenialOrNull(context, startTime);
+            if (restrictedDenial != null) {
+                return restrictedDenial;
+            }
+
             // Guardrail rules that need no model (keywords, regex, length, PII patterns,
             // custom expression, competitor names) are decided here, before any LLM call and
             // on both paths. An invalid rule config throws and fails the node.
@@ -1021,6 +1032,11 @@ public class AgentNode extends BaseNode {
         // then hallucinated off-list labels ("Uncategorized", "N/A") and split
         // branch routing failed silently.
         Map<String, Object> requestPayload = new HashMap<>(inputData);
+        // The node's params are the author's: none of them may set what the platform decides.
+        // Budget fields are resolved by agent-service, and pricingRates would reprice the CLI
+        // bridge's cache every run shares. (maxTokens needs no strip: it is always re-set below
+        // from the agent config, like the inline path, so the pre-flight priced the cap the run gets.)
+        SERVER_OWNED_ASYNC_KEYS.forEach(requestPayload::remove);
         requestPayload.put("provider", provider);
         requestPayload.put("model", model);
         requestPayload.put("tenantId", context.tenantId());
@@ -1031,9 +1047,10 @@ public class AgentNode extends BaseNode {
         if (agentConfig.maxTokens() != null) {
             requestPayload.put("maxTokens", agentConfig.maxTokens());
         }
-        if (agentConfig.maxIterations() != null) {
-            requestPayload.put("maxIterations", agentConfig.maxIterations());
-        }
+        // Always send the CLAMPED value, even when the plan left it unset (LC-056), so the loop
+        // length is bounded server-side. For classify/guardrail that is 1, which is what
+        // agent-service pins them to anyway.
+        requestPayload.put("maxIterations", iterationBudgetFor(agentType));
         if (agentConfig.agentConfigId() != null) {
             requestPayload.put("agentEntityId", agentConfig.agentConfigId());
         }
@@ -1153,6 +1170,12 @@ public class AgentNode extends BaseNode {
         // guardrail → GuardrailRequestDto(content, rules, action, ...)
         // agent     → AgentExecutionRequestDto with the same credentials/variables
         //             envelope as the inline workflow path.
+        // LC-004: the worker deserializes this into the DTO, whose dataSensitivity makes
+        // agent-service refuse a provider (or execution link) outside the allow-list.
+        String sensitivity = runSensitivity(context);
+        if (sensitivity != null && !"agent".equals(agentType)) {
+            requestPayload.put("dataSensitivity", sensitivity);
+        }
         switch (agentType) {
             case "classify" -> {
                 List<Map<String, Object>> categories = agentConfig.classifyCategories();
@@ -1397,7 +1420,7 @@ public class AgentNode extends BaseNode {
             ? content.substring(0, 200) + "..."
             : content;
         logger.info("🏷️ Classify content resolved: nodeId={}, contentLength={}, preview='{}'",
-            nodeId, content != null ? content.length() : 0, contentPreview);
+            nodeId, content != null ? content.length() : 0, com.apimarketplace.common.logging.PayloadLogSafety.describeText(contentPreview, 200));
 
         // Get categories from agent config
         List<Map<String, Object>> categories = agentConfig.classifyCategories();
@@ -1417,7 +1440,7 @@ public class AgentNode extends BaseNode {
             request.provider(), request.model(), request.categories().size());
 
         // Execute classification via agent-service
-        ClassifyResult result = executeClassifyRemotely(request);
+        ClassifyResult result = executeClassifyRemotely(request, runSensitivity(context));
 
         // Record observability data for classify via agent-service
         if (agentClient != null) {
@@ -1566,7 +1589,7 @@ public class AgentNode extends BaseNode {
             request.provider(), request.model(), request.rules().size(), request.action());
 
         // Execute guardrail validation via agent-service
-        GuardrailResult result = executeGuardrailRemotely(request);
+        GuardrailResult result = executeGuardrailRemotely(request, runSensitivity(context));
 
         // Record observability data for guardrail via agent-service
         if (agentClient != null) {
@@ -2027,7 +2050,9 @@ public class AgentNode extends BaseNode {
             .model(agentConfig.model())
             .temperature(agentConfig.temperature())
             .maxTokens(agentConfig.maxTokens())
-            .maxIterations(agentConfig.maxIterations())
+            // Clamped, for the same reason as the async-queue payload above: the pre-flight
+            // budget was priced against this number (LC-056).
+            .maxIterations(effectiveMaxIterations())
             .executionTimeout(executionTimeout)
             .maxTools(agentConfig.maxTools())
             .autoDiscoverTools(autoDiscover)
@@ -2136,7 +2161,10 @@ public class AgentNode extends BaseNode {
         snapshot.put("model", agentConfig.model());
         snapshot.put("temperature", reportedNumber("temperature", agentConfig.temperature()));
         snapshot.put("maxTokens", reportedNumber("maxTokens", agentConfig.maxTokens()));
-        snapshot.put("maxIterations", reportedNumber("maxIterations", agentConfig.maxIterations()));
+        // The clamped value, so the snapshot records what the dispatch was actually allowed
+        // rather than what the plan asked for; still passed through reportedNumber so a
+        // workspace-variable-sourced template is withheld the same as the other fields.
+        snapshot.put("maxIterations", reportedNumber("maxIterations", effectiveMaxIterations()));
         snapshot.put("withMemory", agentConfig.withMemory());
 
         // System prompt hash (not the full prompt - too large)
@@ -2303,6 +2331,12 @@ public class AgentNode extends BaseNode {
         }
         if (context != null && context.runId() != null) {
             credentials.put("__workflowRunId__", context.runId());
+            // LC-004: an agent prompt in this run can quote an earlier Gmail / Drive step. Tag the
+            // execution so agent-service only sends it to an allow-listed provider.
+            if (stepPayloadService != null && stepPayloadService.isRunRestricted(context.runId())) {
+                credentials.put(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY,
+                    com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+            }
         }
         // The hosting workflow NODE, so tools that fan live events out to the
         // run page (browser-agent live view) can address THIS node in the
@@ -2536,7 +2570,7 @@ public class AgentNode extends BaseNode {
             logger.info("🤖 Agent template resolution: nodeId={}, rawKeys={}, resolvedKeys={}, contentBefore='{}', contentAfter='{}'",
                 nodeId, rawInput.keySet(), resolved.keySet(),
                 truncate(String.valueOf(rawInput.get("content")), 100),
-                truncate(String.valueOf(resolved.get("content")), 100));
+                com.apimarketplace.common.logging.PayloadLogSafety.describeText(String.valueOf(resolved.get("content")), 100));
             return resolved;
         }
 
@@ -2605,7 +2639,8 @@ public class AgentNode extends BaseNode {
             resolved.put("maxTokens", reportedNumber("maxTokens", agentConfig.maxTokens()));
         }
         if (agentConfig.maxIterations() != null) {
-            resolved.put("maxIterations", reportedNumber("maxIterations", agentConfig.maxIterations()));
+            // Clamped: the inspector must show the number that will actually be honoured.
+            resolved.put("maxIterations", reportedNumber("maxIterations", effectiveMaxIterations()));
         }
 
         String type = agentConfig.type() != null ? agentConfig.type().toLowerCase() : "agent";
@@ -2763,7 +2798,8 @@ public class AgentNode extends BaseNode {
      * Delta 2 - shared pre-flight budget gate invoked by all four agent-dispatch paths
      * ({@code executeAgent}, {@code executeClassify}, {@code executeGuardrail},
      * {@code executeAgentAsyncQueue}). Asks auth-service whether the tenant's balance covers
-     * the projected cost for this turn before we pay for the LLM call. Without this gate,
+     * the projected cost of the turns THIS dispatch may run, before we pay for the LLM call.
+     * Without this gate,
      * the workflow burns tokens, post-flight debit 402s, and the audit row is the only
      * trace - that was the prod bug class this addresses.
      *
@@ -2774,6 +2810,16 @@ public class AgentNode extends BaseNode {
      * surface as normal execution errors downstream instead of being masked as
      * "insufficient credits".
      *
+     * <p><b>One turn, not the whole loop</b> (regression review 2026-09-29). LC-056 priced this
+     * at maxIterations x maxTokens, i.e. 10 to 100 full turns, which refused dispatches a small
+     * balance could pay for many times over (an agent made in the UI defaults to 100). The loop
+     * itself is already budgeted turn by turn: agent-service's TenantBudgetGuard (and its bridge
+     * twin in budgetGuards.js, which agent-service hands the balance and the agent budget for
+     * every bridge run and refuses outright at a zero balance) checks the spendable balance
+     * before EVERY iteration and stops the loop with BUDGET_EXHAUSTED, overshooting by at most
+     * one turn. What this gate adds is the
+     * refusal before anything is enqueued or started, so it prices exactly one worst-case turn.
+     *
      * @return a failure {@link NodeExecutionResult} when the gate denies, or {@code null}
      *         when dispatch should proceed.
      */
@@ -2783,17 +2829,108 @@ public class AgentNode extends BaseNode {
         if (creditBudgetService == null || provider == null || model == null) {
             return null;
         }
-        int estCompletionTokens = agentConfig.maxTokens() != null ? agentConfig.maxTokens() : 4096;
+        int perTurnCompletionTokens = agentConfig.maxTokens() != null ? agentConfig.maxTokens() : 4096;
+
         boolean allowed = creditBudgetService.preflightAgentBudget(
-            context.tenantId(), provider, model, estPromptTokens, estCompletionTokens);
+            context.tenantId(), provider, model, estPromptTokens, perTurnCompletionTokens);
         if (allowed) {
             return null;
         }
-        logger.warn("💸 Agent dispatch blocked by pre-flight budget: tenant={}, nodeId={}, provider={}, model={}, estPrompt={}, estCompletion={}",
-            context.tenantId(), nodeId, provider, model, estPromptTokens, estCompletionTokens);
+        logger.warn("💸 Agent dispatch blocked by pre-flight budget: tenant={}, nodeId={}, provider={}, model={}, "
+                + "estPromptTokens={}, estCompletionTokens={}",
+            context.tenantId(), nodeId, provider, model, estPromptTokens, perTurnCompletionTokens);
         return NodeExecutionResult.failure(nodeId,
-            "Insufficient credits (pre-flight tenant budget)",
+            "Insufficient credits (pre-flight tenant budget for one agent turn)",
             System.currentTimeMillis() - startTime);
+    }
+
+    /** {@code "RESTRICTED"} when this run already holds restricted data, else null. */
+    String runSensitivity(ExecutionContext context) {
+        return stepPayloadService != null && context != null && context.runId() != null
+            && stepPayloadService.isRunRestricted(context.runId())
+            ? com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name()
+            : null;
+    }
+
+    /**
+     * Refusal when this run already holds restricted data (a Gmail / Drive step ran earlier)
+     * and the node's provider is not on the restricted-data allow-list, else null.
+     */
+    NodeExecutionResult restrictedDataDenialOrNull(ExecutionContext context, long startTime) {
+        if (stepPayloadService == null || context == null || context.runId() == null) {
+            return null;
+        }
+        String provider = agentConfig.provider();
+        if (com.apimarketplace.common.classification.RestrictedDataPolicy.mayReceiveRestricted(provider)
+                || !stepPayloadService.isRunRestricted(context.runId())) {
+            return null;
+        }
+        logger.warn("Agent node {} refused: run {} holds restricted data and provider {} may not receive it",
+            nodeId, context.runId(), provider);
+        return NodeExecutionResult.failure(nodeId,
+            com.apimarketplace.common.classification.RestrictedDataPolicy.refusalMessage(provider),
+            System.currentTimeMillis() - startTime);
+    }
+
+    /**
+     * The loop length classify and guardrail are dispatched with: one LLM turn. Both run with
+     * {@code maxIterations(1)} on the agent-service side whatever the plan says.
+     */
+    static final int SINGLE_TURN_ITERATIONS = 1;
+
+    /**
+     * The turns a dispatch of {@code agentType} may run, sent to agent-service as its loop bound.
+     * Only the agentic type loops; classify and guardrail are single-shot on the agent-service side.
+     */
+    int iterationBudgetFor(String agentType) {
+        String type = agentType == null ? "agent" : agentType.toLowerCase(java.util.Locale.ROOT).trim();
+        return switch (type) {
+            case "classify", "guardrail" -> SINGLE_TURN_ITERATIONS;
+            default -> effectiveMaxIterations();
+        };
+    }
+
+    /**
+     * Server-side ceiling on the agent loop length.
+     *
+     * <p>{@code maxIterations} arrives from the workflow plan, which the author edits, and nothing
+     * clamped it (LC-056). The ceiling is agent-service's own limit for an agent's
+     * {@code maxIterations} (1..1000): regression review 2026-09-29 found it set to 100, which
+     * silently cut short every agent configured between 101 and 1000.
+     */
+    static final int MAX_ITERATIONS_CEILING =
+        com.apimarketplace.agent.client.dto.execution.AgentExecutionRequestDto.MAX_ITERATIONS_LIMIT;
+
+    /** Request keys of an async agent payload that never come from the node's params (LC-056). */
+    static final java.util.List<String> SERVER_OWNED_ASYNC_KEYS = java.util.List.of(
+        "tenantBalance", "pricingRates", "maxCreditBudget", "creditsConsumedSoFar");
+
+    /**
+     * What a plan that does not state a usable loop length is dispatched at.
+     *
+     * <p>This is the same number {@code Agent}'s canonical constructor already substitutes for a
+     * null {@code maxIterations}, so the normal path never reaches the fallback below: an
+     * ordinary agent node arrives here with 10 whether or not the author typed it. Using the
+     * ceiling instead would let an explicit {@code maxIterations: 0} dispatch a 1000-iteration
+     * loop, which is a much longer (and more expensive) run than the plan asked for.
+     */
+    static final int UNSPECIFIED_MAX_ITERATIONS = 10;
+
+    /**
+     * The iteration budget this dispatch is actually allowed. Absent or non-positive falls back
+     * to {@link #UNSPECIFIED_MAX_ITERATIONS}, never to the ceiling.
+     */
+    int effectiveMaxIterations() {
+        Integer configured = agentConfig.maxIterations();
+        if (configured == null || configured <= 0) {
+            return UNSPECIFIED_MAX_ITERATIONS;
+        }
+        if (configured > MAX_ITERATIONS_CEILING) {
+            logger.warn("maxIterations clamped {} → {} (server ceiling) for nodeId={}",
+                configured, MAX_ITERATIONS_CEILING, nodeId);
+            return MAX_ITERATIONS_CEILING;
+        }
+        return configured;
     }
 
     /**
@@ -2883,6 +3020,7 @@ public class AgentNode extends BaseNode {
             String systemPrompt, String userPrompt, boolean memoryEnabled, String conversationId) {
         var req = new com.apimarketplace.agent.client.dto.AgentObservabilityRequest();
         req.setTenantId(context.tenantId());
+        req.setDataSensitivity(runSensitivity(context));
         // PR20 - propagate workspace identity onto the observability row so the
         // execution-history panel can scope its listing by strict isolation.
         req.setOrganizationId(context.organizationId());
@@ -3118,6 +3256,7 @@ public class AgentNode extends BaseNode {
             String agentType, String status, String errorMessage) {
         var req = new com.apimarketplace.agent.client.dto.AgentObservabilityRequest();
         req.setTenantId(context.tenantId());
+        req.setDataSensitivity(runSensitivity(context));
         // PR20 - failure-path / classify-guardrail mirror of the success-path stamp.
         req.setOrganizationId(context.organizationId());
         req.setAgentType(agentType);
@@ -3339,9 +3478,10 @@ public class AgentNode extends BaseNode {
                 context.runId(), // workflowRunId - for sub-agent cancel propagation
                 null, // attachments (not applicable for workflow)
                 agentConfig.agentConfigId(), // agentEntityId - for fleet real-time activity
-                // Bridge-only fields below (tenantBalance/pricingRates) - orchestrator
-                // dispatches to agent-service which uses Java guards reading
-                // CreditConsumptionClient directly. Bridge isn't in this path, so null is fine.
+                // Bridge budget fields (tenantBalance/pricingRates/creditsConsumedSoFar): left
+                // null on purpose. agent-service resolves them server-side for every run it sends
+                // to a CLI bridge (GuardChainFactory.bridgeBudget); its Java loop reads the
+                // balance itself.
                 null, // tenantBalance
                 null, // pricingRates
                 null, // creditsConsumedSoFar - Java guards resolve via BudgetResolver in agent-service
@@ -3504,7 +3644,7 @@ public class AgentNode extends BaseNode {
     /**
      * Execute classify remotely via agent-service.
      */
-    private ClassifyResult executeClassifyRemotely(ClassifyRequest request) {
+    private ClassifyResult executeClassifyRemotely(ClassifyRequest request, String dataSensitivity) {
         try {
             List<ClassifyRequestDto.CategoryDto> categoryDtos = request.categories() != null
                 ? request.categories().stream()
@@ -3522,7 +3662,7 @@ public class AgentNode extends BaseNode {
                 request.maxTokens(),
                 request.tenantId(),
                 request.agentEntityId()
-            );
+            ).withDataSensitivity(dataSensitivity);
 
             ClassifyResponseDto response = agentClient.executeClassify(dto);
 
@@ -3551,7 +3691,7 @@ public class AgentNode extends BaseNode {
     /**
      * Execute guardrail remotely via agent-service.
      */
-    private GuardrailResult executeGuardrailRemotely(GuardrailRequest request) {
+    private GuardrailResult executeGuardrailRemotely(GuardrailRequest request, String dataSensitivity) {
         try {
             List<GuardrailRequestDto.RuleDto> ruleDtos = request.rules() != null
                 ? request.rules().stream()
@@ -3571,7 +3711,7 @@ public class AgentNode extends BaseNode {
                 request.maxTokens(),
                 request.tenantId(),
                 request.agentEntityId()
-            );
+            ).withDataSensitivity(dataSensitivity);
 
             GuardrailResponseDto response = agentClient.executeGuardrail(dto);
 

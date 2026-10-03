@@ -49,10 +49,28 @@ describe('isSettingsNavItemVisible on managed cloud', () => {
     expect(isSettingsNavItemVisible(item({ managedCloudOnly: true }), asAdmin)).toBe(true);
   });
 
+  it('shows a partnerOnly entry to partners and applicants only, admins included in the rule', () => {
+    expect(isSettingsNavItemVisible(item({ partnerOnly: true }), asUser)).toBe(false);
+    // Platform admin is not partnership: the admin has their own Partners page.
+    expect(isSettingsNavItemVisible(item({ partnerOnly: true }), asAdmin)).toBe(false);
+    expect(isSettingsNavItemVisible(item({ partnerOnly: true }), { isAdmin: false, isPartner: true })).toBe(true);
+  });
+
   it('applies every clause, not just the first that matches', () => {
     // adminOnly AND managedCloudOnly: passing the edition must not excuse the role.
     expect(isSettingsNavItemVisible(
       item({ adminOnly: true, managedCloudOnly: true }), asUser)).toBe(false);
+  });
+});
+
+describe('the Partner program entry', () => {
+  const entry = settingsNavItems.find((i) => i.href === '/app/settings/partner');
+
+  it('is shown to partners and applicants only, and never on a self-hosted install', () => {
+    expect(entry?.partnerOnly).toBe(true);
+    expect(entry?.hiddenInCE).toBe(true);
+    expect(isSettingsNavItemVisible(entry!, { isAdmin: false })).toBe(false);
+    expect(isSettingsNavItemVisible(entry!, { isAdmin: false, isPartner: true })).toBe(true);
   });
 });
 

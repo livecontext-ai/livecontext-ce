@@ -1,5 +1,7 @@
 package com.apimarketplace.common.credit;
 
+import com.apimarketplace.common.web.GatewaySignatureV2Interceptor;
+import com.apimarketplace.common.web.InternalGatewaySigner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
@@ -40,9 +42,13 @@ public class PricingSnapshotClient {
     private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
         new ParameterizedTypeReference<>() {};
 
+    /** Provider id the snapshot read is signed with (auth-service can HMAC-gate /api/internal/auth/). */
+    static final String INTERNAL_PROVIDER_ID = "internal-pricing-snapshot-client";
+
     private final RestTemplate restTemplate;
     private final String snapshotUrl;
     private final Duration refreshTtl;
+    private final String gatewaySecretKey;
 
     /**
      * Minimum interval between refresh attempts after a failure. Prevents hammering
@@ -57,15 +63,27 @@ public class PricingSnapshotClient {
     private volatile Instant lastFailureAt = Instant.EPOCH;
     private volatile boolean healthy = false;
 
+    /** Unsigned: tests and deployments whose auth-service verifies nothing. */
     public PricingSnapshotClient(String authServiceUrl) {
-        this(authServiceUrl, DEFAULT_REFRESH_TTL);
+        this(authServiceUrl, DEFAULT_REFRESH_TTL, null);
     }
 
     public PricingSnapshotClient(String authServiceUrl, Duration refreshTtl) {
+        this(authServiceUrl, refreshTtl, null);
+    }
+
+    /** Signs every snapshot read with the shared gateway secret (v1, plus v2 at send time). */
+    public PricingSnapshotClient(String authServiceUrl, String gatewaySecretKey) {
+        this(authServiceUrl, DEFAULT_REFRESH_TTL, gatewaySecretKey);
+    }
+
+    public PricingSnapshotClient(String authServiceUrl, Duration refreshTtl, String gatewaySecretKey) {
         if (authServiceUrl == null || authServiceUrl.isBlank()) {
             throw new IllegalArgumentException("authServiceUrl must not be null or blank");
         }
+        this.gatewaySecretKey = gatewaySecretKey;
         this.restTemplate = new RestTemplate();
+        this.restTemplate.getInterceptors().add(new GatewaySignatureV2Interceptor(() -> gatewaySecretKey));
         String base = authServiceUrl.endsWith("/")
             ? authServiceUrl.substring(0, authServiceUrl.length() - 1)
             : authServiceUrl;
@@ -158,8 +176,10 @@ public class PricingSnapshotClient {
         }
 
         try {
+            HttpHeaders headers = new HttpHeaders();
+            InternalGatewaySigner.stamp(headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
             ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
-                snapshotUrl, HttpMethod.GET, null, MAP_TYPE);
+                snapshotUrl, HttpMethod.GET, new HttpEntity<>(headers), MAP_TYPE);
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 Object ratesObj = response.getBody().get("rates");

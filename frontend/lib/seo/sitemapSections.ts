@@ -18,7 +18,7 @@ import {
 } from '@/lib/integrations/integrations';
 import { videoPath, youtubeCanonicalEmbedUrl } from '@/app/videos/_lib/videos';
 import { fetchPublishedVideosOrEmpty } from '@/app/videos/_lib/publicVideos';
-import { SITE_URL, homeAlternates, homeHref } from './siteUrl';
+import { SITE_URL, homeAlternates, homeHref, localizedPathAlternates, localizedPathHref } from './siteUrl';
 
 export { SITE_URL };
 
@@ -37,6 +37,20 @@ export function landingSitemap(): MetadataRoute.Sitemap {
     url: `${SITE_URL.replace(/\/$/, '')}${homeHref(locale)}`,
     changeFrequency: 'weekly' as const,
     priority: 1.0,
+    alternates: { languages },
+  }));
+}
+
+/**
+ * A public page with one URL per language outside the `[locale]` tree (`/partners`): one entry
+ * per language, each declaring the whole cluster, matching the page's own hreflang.
+ */
+export function localizedPathSitemap(path: string, priority: number): MetadataRoute.Sitemap {
+  const languages = localizedPathAlternates(path, SITE_URL);
+  return locales.map((locale) => ({
+    url: `${SITE_URL.replace(/\/$/, '')}${localizedPathHref(path, locale)}`,
+    changeFrequency: 'monthly' as const,
+    priority,
     alternates: { languages },
   }));
 }

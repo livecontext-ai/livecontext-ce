@@ -30,6 +30,7 @@ export default function DataTable({
   rowFilter,
   serverFilters,
   infiniteScroll = false,
+  urlState = false,
 }: DataTableProps) {
   const tLogs = useTranslations('workflow.logs');
   // Snapshot mode forces read-only + embedded - writes would try to hit an endpoint we don't have,
@@ -103,6 +104,7 @@ export default function DataTable({
     readOnly: effectiveReadOnly,
     snapshotData,
     serverFilters,
+    urlState: urlState && !effectiveEmbedded && !workflowContext,
   });
 
   // Apply optional client-side rowFilter on top of the controller's rows.

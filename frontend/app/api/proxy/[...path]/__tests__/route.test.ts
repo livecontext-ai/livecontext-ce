@@ -56,15 +56,17 @@ describe('proxy route - ?token query handling', () => {
     expect(calledAuth()).toBeUndefined();
   });
 
-  it('still hijacks a JWT-shaped ?token as the Authorization bearer and strips it from the query', async () => {
+  it('LC-044: never promotes a JWT-shaped ?token to the Authorization bearer', async () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig';
     await GET(
       makeReq(`http://localhost:3000/api/proxy/files/x?token=${jwt}`),
       params(['files', 'x']),
     );
 
-    expect(calledUrl()).toBe(`${GATEWAY}/api/files/x`); // token removed from the query
-    expect(calledAuth()).toBe(`Bearer ${jwt}`);
+    // A session credential in a URL is not an authentication channel any more, and it is
+    // stripped rather than forwarded in the gateway URL.
+    expect(calledAuth()).toBeUndefined();
+    expect(calledUrl()).toBe(`${GATEWAY}/api/files/x`);
   });
 
   it('keeps a resource ?token untouched when an Authorization header is already present', async () => {
@@ -107,18 +109,86 @@ describe('proxy route - ?token query handling', () => {
   });
 });
 
+// Scope, stated plainly: this route handler is REACHED in production only for
+// `/api/proxy/external-proxy` (the live proxy for every other path is `proxy.ts`, a middleware
+// rewrite that never lands here). Its log line runs on that path, so the redaction below is a
+// real control there; these tests drive it through GET only because the harness calls the
+// handler directly. The live proxy is covered by `__tests__/proxy.no-url-logging.test.ts`,
+// which pins that `proxy.ts` logs no URL at all.
+describe('proxy route - log redaction (LC-067)', () => {
+  function loggedLine(): string {
+    const spy = console.info as unknown as ReturnType<typeof vi.fn>;
+    return spy.mock.calls.map((c) => String(c[0])).join('\n');
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+  });
+
+  it.each(['sig', 'signature', 'key', 'exp', 'token', 'api_key', 'share_token', 'password'])(
+    'redacts the %s query parameter value',
+    async (name) => {
+      await GET(
+        makeReq(`http://localhost:3000/api/proxy/some/path?${name}=CAPABILITY-VALUE&page=2`),
+        params(['some', 'path']),
+      );
+
+      const line = loggedLine();
+      expect(line).toContain('some/path');
+      expect(line).not.toContain('CAPABILITY-VALUE');
+      expect(line).toContain('page=2');
+    },
+  );
+
+  it('drops the whole query of a signed-URL capability path', async () => {
+    await GET(
+      makeReq('http://localhost:3000/api/proxy/files/proxy-signed?fileId=abc&exp=1999999999&sig=deadbeef'),
+      params(['files', 'proxy-signed']),
+    );
+
+    const line = loggedLine();
+    expect(line).toContain('files/proxy-signed');
+    expect(line).not.toContain('deadbeef');
+    expect(line).not.toContain('1999999999');
+    expect(line).not.toContain('fileId=abc');
+  });
+});
+
 describe('proxy route - CORS response headers', () => {
-  // Regression: the proxy used to emit `Access-Control-Allow-Origin: *` together with
-  // `Access-Control-Allow-Credentials: true`. Browsers reject that pair, and auth is
-  // Bearer-token (never a cookie), so credentials mode must not be advertised. The
-  // wildcard origin stays; the credentials header must be gone.
-  it('sets a wildcard origin without advertising credentials', async () => {
+  // LC-027 audit round 2: the handler emitted `Access-Control-Allow-Origin: *`, so any site
+  // could read what this route returns (it serves /api/proxy/external-proxy, an authenticated
+  // URL fetcher). Every real caller is same-origin, so no CORS header is emitted at all.
+  it('emits no CORS headers (same-origin only)', async () => {
     const res = await GET(
-      makeReq('http://localhost:3000/api/proxy/users/status'),
+      makeReq('http://localhost:3000/api/proxy/users/status', { origin: 'https://evil.example' }),
       params(['users', 'status']),
     );
 
-    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
     expect(res.headers.get('Access-Control-Allow-Credentials')).toBeNull();
+    expect(res.headers.get('Access-Control-Allow-Methods')).toBeNull();
+    expect(res.headers.get('X-Request-Id')).toBeTruthy();
+  });
+});
+
+describe('proxy route - Set-Cookie relay', () => {
+  // Regression: every backend response header was copied with Headers.set, so a response
+  // carrying two Set-Cookie headers reached the browser with only the last one. The OAuth
+  // connect relies on its per-flow binding cookie surviving this hop (LC-005).
+  it('relays every Set-Cookie header, not only the last one', async () => {
+    const upstream = new Headers({ 'content-type': 'application/json' });
+    upstream.append('set-cookie', 'lc_oauth_aaa=1; Path=/; HttpOnly; SameSite=Lax');
+    upstream.append('set-cookie', 'other=2; Path=/');
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200, headers: upstream }));
+
+    const res = await GET(
+      makeReq('http://localhost:3000/api/proxy/credentials/oauth2/initiate'),
+      params(['credentials', 'oauth2', 'initiate']),
+    );
+
+    const cookies = res.headers.getSetCookie();
+    expect(cookies).toHaveLength(2);
+    expect(cookies[0]).toContain('lc_oauth_aaa=1');
+    expect(cookies[1]).toContain('other=2');
   });
 });

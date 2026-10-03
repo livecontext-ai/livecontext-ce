@@ -55,6 +55,10 @@ public class ErrorTriggerDispatchService {
     private final ProductionRunResolver productionRunResolver;
     private final ReusableTriggerService triggerService;
 
+    /** Tells whether the failed run held restricted data (LC-066). Optional for narrow tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
+
     public ErrorTriggerDispatchService(
             WorkflowTriggerLookupService triggerLookupService,
             WorkflowRunRepository runRepository,
@@ -264,6 +268,12 @@ public class ErrorTriggerDispatchService {
         // Defense-in-depth: error payload includes user-controlled data;
         // strip the internal plan-control marker.
         enrichedPayload = ReusableTriggerService.sanitizePlanMarker(enrichedPayload);
+        // LC-066: the error payload quotes the failed run (its error, its failing step's output),
+        // so a failed run holding Gmail / Drive data makes the handler's run restricted too, as a
+        // restricted parent does for a workflow trigger.
+        if (stepPayloadService != null && stepPayloadService.isRunRestricted(parentRunId)) {
+            enrichedPayload = ReusableTriggerService.withRestrictedDataMarker(enrichedPayload);
+        }
 
         // Execute the trigger via ReusableTriggerService
         try {

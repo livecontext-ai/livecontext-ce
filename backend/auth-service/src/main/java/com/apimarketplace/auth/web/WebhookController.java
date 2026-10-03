@@ -100,6 +100,11 @@ public class WebhookController {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.apimarketplace.auth.service.PartnerCommissionService partnerCommissionService;
 
+    // Partner offers (V560): the apps an offer gives go to whoever pays through it, after the
+    // first invoice of the subscription the offer's checkout opened.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.service.PartnerOfferDeliveryService partnerOfferDeliveries;
+
     // Lifecycle emails (Resend): checkout.completed ends the abandoned-checkout sequence.
     // Optional like the fields above: null in legacy test ctors, inert when unconfigured.
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -971,6 +976,7 @@ public class WebhookController {
         // Partner revenue share, BEFORE the credit-upgrade early return below: a pack
         // upgrade is revenue the referred customer paid too.
         tryRecordPartnerCommission(invoice);
+        tryDeliverPartnerOfferApps(invoice, subId);
 
         // Option A - credit-pack tier upgrade: grant credits when the dedicated
         // one-shot invoice is paid. Routed by metadata.kind ("credit_upgrade")
@@ -1089,6 +1095,44 @@ public class WebhookController {
             logger.error("Partner commission failed for invoice {}: {}",
                     invoice != null ? invoice.getId() : "?", e.getMessage(), e);
         }
+    }
+
+    /**
+     * The first paid invoice of a subscription opened from a partner's offer: the offer's apps go
+     * to the client. The offer token rides in the subscription's metadata, which the invoice
+     * carries (parent.subscription_details.metadata) without a call to Stripe; the subscription
+     * itself is read only when an older payload lacks it. Never fails the webhook.
+     */
+    private void tryDeliverPartnerOfferApps(Invoice invoice, String subId) {
+        try {
+            if (partnerOfferDeliveries == null || invoice == null || subId == null) return;
+            if (!"paid".equalsIgnoreCase(invoice.getStatus())) return;
+            // The first payment only: a renewal is not a new purchase through the offer.
+            if (!"subscription_create".equals(invoice.getBillingReason())) return;
+            String token = partnerOfferToken(invoice, subId);
+            if (token == null || token.isBlank()) return;
+            var customer = billingCustomerRepository.findByProviderCustomerId(invoice.getCustomer()).orElse(null);
+            if (customer == null || customer.getUser() == null) {
+                logger.error("Partner offer {}: invoice {} paid by an unknown customer {}, apps not delivered",
+                        token, invoice.getId(), invoice.getCustomer());
+                return;
+            }
+            partnerOfferDeliveries.enqueue(token, customer.getUser().getId(), invoice.getId());
+        } catch (Exception e) {
+            logger.error("Partner offer apps not queued for invoice {}: {}",
+                    invoice != null ? invoice.getId() : "?", e.getMessage(), e);
+        }
+    }
+
+    private String partnerOfferToken(Invoice invoice, String subId) throws com.stripe.exception.StripeException {
+        String key = com.apimarketplace.auth.service.StripeBillingService.PARTNER_OFFER_METADATA;
+        var parent = invoice.getParent();
+        if (parent != null && parent.getSubscriptionDetails() != null
+                && parent.getSubscriptionDetails().getMetadata() != null) {
+            return parent.getSubscriptionDetails().getMetadata().get(key);
+        }
+        var metadata = stripeClient.subscriptions().retrieve(subId).getMetadata();
+        return metadata == null ? null : metadata.get(key);
     }
 
     /** Full refund of a converting charge claws back the referral reward. */

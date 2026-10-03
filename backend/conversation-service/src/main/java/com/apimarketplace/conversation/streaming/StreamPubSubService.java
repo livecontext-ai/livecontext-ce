@@ -460,6 +460,45 @@ public class StreamPubSubService {
     }
 
     /**
+     * A tool call whose {@code arguments} is anything but a JSON object, turned into one.
+     *
+     * <p>{@link StreamEvent.ToolCall#arguments()} is a map, and the Java producers send one.
+     * The CLI bridge sends the arguments as the JSON TEXT the model produced, so every tool
+     * call it buffered was refused here and dropped from the replay of an active stream: a
+     * client that joined or reloaded mid-turn lost the tool cards already played. Text that
+     * is a JSON object is parsed; anything else is kept under {@code raw}, the key the chat
+     * already reads for unparsed arguments, so the card is never lost for its arguments.
+     */
+    private JsonNode withArgumentsAsObject(JsonNode toolCall) {
+        JsonNode arguments = toolCall.get("arguments");
+        if (arguments == null || arguments.isObject() || arguments.isNull()) {
+            return toolCall;
+        }
+        JsonNode asObject = null;
+        if (arguments.isTextual() && arguments.asText().isBlank()) {
+            // A call with no arguments at all, which some CLIs send as empty text.
+            asObject = objectMapper.createObjectNode();
+        } else if (arguments.isTextual()) {
+            try {
+                JsonNode parsed = objectMapper.readTree(arguments.asText());
+                if (parsed != null && parsed.isObject()) {
+                    asObject = parsed;
+                }
+            } catch (JsonProcessingException notJson) {
+                // kept under "raw" below
+            }
+        }
+        if (asObject == null) {
+            // Always a string under "raw": that is what the chat reads there.
+            asObject = objectMapper.createObjectNode()
+                    .put("raw", arguments.isTextual() ? arguments.asText() : arguments.toString());
+        }
+        ObjectNode copy = toolCall.deepCopy();
+        copy.set("arguments", asObject);
+        return copy;
+    }
+
+    /**
      * Deserializes a JSON string to a StreamEvent.
      * Uses the sealed interface type information to reconstruct the correct subtype.
      * Public so it can be reused by StreamControllerV3 for tool event replay.
@@ -484,7 +523,7 @@ public class StreamPubSubService {
             return objectMapper.treeToValue(node, StreamEvent.ToolResult.class);
         } else if (node.has("toolName") && node.has("toolId") && node.has("arguments")) {
             // ToolCall: has toolName + toolId + arguments
-            return objectMapper.treeToValue(node, StreamEvent.ToolCall.class);
+            return objectMapper.treeToValue(withArgumentsAsObject(node), StreamEvent.ToolCall.class);
         } else if (node.has("screenshotIndex") && node.has("screenshotKey")) {
             // FetchScreenshot: has screenshotIndex + screenshotKey
             return objectMapper.treeToValue(node, StreamEvent.FetchScreenshot.class);

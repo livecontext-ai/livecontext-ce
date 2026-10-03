@@ -228,11 +228,24 @@ public class DataSourceTableModule implements ToolModule {
             // it the table lands NULL-org and org-teammates can't see it.
             // Audit 2026-05-16.
             String orgId = context != null ? context.orgId() : null;
-            DataSource result = dataSourceService.createDataSource(
-                tenantId, name, description,
-                DataSourceType.INLINE, Map.of(),
-                data, tenantId, mappingSpec, orgId
-            );
+            // CASA LC-066: rows given inline at creation are written like insert_rows writes
+            // them (DataSourceRowModule): RESTRICTED when the caller's execution holds Gmail /
+            // Drive content. Before, a restricted chat or agent could create a table holding
+            // mailbox content as ordinary rows, which any model could later read.
+            com.apimarketplace.common.classification.DataSensitivity sensitivity = context != null
+                ? com.apimarketplace.common.classification.DataSensitivity.fromCredentials(context.credentials())
+                : com.apimarketplace.common.classification.DataSensitivity.NORMAL;
+            // An untagged create keeps the exact call it always made; only a restricted one uses
+            // the overload that stamps the rows.
+            DataSource result = sensitivity.isRestricted()
+                ? dataSourceService.createDataSource(
+                    tenantId, name, description,
+                    DataSourceType.INLINE, Map.of(),
+                    data, tenantId, mappingSpec, orgId, sensitivity)
+                : dataSourceService.createDataSource(
+                    tenantId, name, description,
+                    DataSourceType.INLINE, Map.of(),
+                    data, tenantId, mappingSpec, orgId);
 
             if (result == null) {
                 return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to create data source");
@@ -548,7 +561,10 @@ public class DataSourceTableModule implements ToolModule {
                 "Add the table to the marketplace. Params: table_id REQUIRED, title REQUIRED, " +
                 "interface_id REQUIRED (UUID of the landing interface shown to acquirers before install), " +
                 "visibility ('PRIVATE' default, 'PUBLIC', 'UNLISTED'), credits_per_use (default 0). " +
-                "PUBLIC listings go through platform review; PRIVATE/UNLISTED activate immediately."),
+                "PUBLIC listings go through platform review; PRIVATE/UNLISTED activate immediately. " +
+                "Refused with RESTRICTED_DATA_PROVIDER_NOT_ALLOWED once this conversation has read Gmail or Google Drive " +
+                "(a listing copies the table's rows); unpublish still works. Rows that came from Gmail or Google Drive are " +
+                "never copied into a listing: acquirers get the table without them, while your own table keeps them."),
             Map.entry("unpublish",
                 "Mark the table's marketplace listing inactive. Params: table_id REQUIRED. " +
                 "Existing acquirers keep their copies - only new installs are blocked.")

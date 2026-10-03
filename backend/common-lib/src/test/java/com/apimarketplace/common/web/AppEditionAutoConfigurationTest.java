@@ -1,5 +1,6 @@
 package com.apimarketplace.common.web;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -17,6 +18,17 @@ class AppEditionAutoConfigurationTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(AppEditionAutoConfiguration.class));
+
+    /**
+     * The auto-config pushes the edition into UrlSafetyValidator's STATIC egress default, and the
+     * CE / self-hosted cases below switch it to self-hosted (private ranges allowed). Left set, it
+     * leaks into every later test class in the same JVM: UrlSafetyValidatorSharedFilterTest then
+     * sees 10.x / 192.168.x / fd00:: accepted and fails, depending only on the run order.
+     */
+    @AfterEach
+    void restoreCloudEgressDefault() {
+        UrlSafetyValidator.resetEditionDefaultsForTests();
+    }
 
     @Test
     @DisplayName("Auto-config registers AppEditionProvider with no component scan")

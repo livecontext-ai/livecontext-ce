@@ -31,7 +31,8 @@ export const metadata = {
   description: 'What we shipped, when. Product updates and release notes.',
   alternates: { canonical: '/changelog' },
   ...socialCard({ title: 'Changelog', description: 'What we shipped, when. Product updates and release notes.', path: '/changelog' }),
-  robots: IS_CE ? { index: false, follow: false } : undefined,
+  // Only on CE: on the cloud an explicit 'robots: undefined' wiped the root layout's directives.
+  ...(IS_CE ? { robots: { index: false, follow: false } } : {}),
 };
 
 export default async function ChangelogPage() {

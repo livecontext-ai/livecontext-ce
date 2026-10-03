@@ -114,6 +114,9 @@ public class ServiceToolsController {
         for (String am : com.apimarketplace.agent.config.ToolAccessControl.ACCESS_MODE_KEYS) {
             copyIfPresent(request, am, credentials, am);
         }
+        // Restricted-data tag forwarded by the calling service (Gmail / Drive content in the caller's
+        // context). Only RESTRICTED is honoured: a body can tighten what a tool does, never relax it.
+        com.apimarketplace.common.classification.DataSensitivity.restoreForwardedTag(request, credentials);
 
         // Extract approvedServices
         @SuppressWarnings("unchecked")
@@ -126,7 +129,11 @@ public class ServiceToolsController {
         String viewingWorkflowName = (String) request.get("viewingWorkflowName");
         String orgId = resolveHeader(httpRequest, "X-Organization-ID");
         String orgRole = resolveHeader(httpRequest, "X-Organization-Role");
-        if (orgId == null) orgId = (String) request.get("orgId");
+        // CASA LC-013: the workspace comes from the X-Organization-ID HEADER only (gateway-injected,
+        // or set by the internal caller next to the signed X-User-ID). The body "orgId" fallback let
+        // a caller whose gateway resolved no active org name any workspace. Every internal caller
+        // (RemoteToolExecutionService, RemoteToolGateway, the conversation relay) already sends the
+        // header from the same value it puts in the body.
         // The ROLE is never taken from the request body. This endpoint is gateway-routed, and the
         // gateway strips the caller's own identity HEADERS but not the body, so a user whose
         // gateway resolved no active org could name a workspace AND assert OWNER in it in one
@@ -141,10 +148,6 @@ public class ServiceToolsController {
         // OWNER did not merely avoid the VIEWER refusal, it bypassed that workspace's whole
         // restricted-resource list. Do not re-read this as "the role only ever refuses" and
         // restore the fallback.
-        //
-        // orgId is STILL read from the body, and that is a compatibility decision, not a safety
-        // one: it is forgeable by the same route. Closing it needs the internal callers to name
-        // the workspace by header first, which is a separate change.
 
         ToolExecutionContext context = new ToolExecutionContext(
             tenantId, credentials, variables, approvedServices,

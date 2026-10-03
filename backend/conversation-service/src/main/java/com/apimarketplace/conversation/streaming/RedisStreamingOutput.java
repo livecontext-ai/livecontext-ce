@@ -285,7 +285,8 @@ public class RedisStreamingOutput implements StreamingOutput {
                 Duration.ofSeconds(2)
         );
 
-        log.info("📢 [REDIS STREAMING] Tool call: {} ({}) - {}", toolName, toolCallId, thinkingMessage);
+        log.info("📢 [REDIS STREAMING] Tool call: {} ({}) - {}", toolName, toolCallId,
+            com.apimarketplace.common.logging.PayloadLogSafety.describeText(thinkingMessage, 200));
     }
 
     @Override

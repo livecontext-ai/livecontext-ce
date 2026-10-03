@@ -18,6 +18,7 @@ import {
 } from "@/lib/api/orchestrator";
 import { useLazyLoadObserver } from "@/app/workflows/builder/components/palette/useLazyLoadObserver";
 import { useTranslations } from "next-intl";
+import { useUrlSearchState, useUrlState } from "@/hooks/useUrlState";
 
 const INITIAL_DISPLAY_COUNT = 12;
 const LOAD_MORE_COUNT = 12;
@@ -86,8 +87,9 @@ export function AvailableCredentialsList({
   const [configuredKeys, setConfiguredKeys] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [authTypeFilter, setAuthTypeFilter] = useState<string>("all");
+  // The search and the auth type live in the address, so a reload reopens the list as it was.
+  const [searchTerm, setSearchTerm] = useUrlSearchState("q");
+  const [authTypeFilter, setAuthTypeFilter] = useUrlState<string>("type", "all");
   const [displayCount, setDisplayCount] = useState(INITIAL_DISPLAY_COUNT);
   const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(new Set());
 
@@ -159,6 +161,13 @@ export function AvailableCredentialsList({
     });
     return Array.from(types).sort();
   }, [templates]);
+
+  // The auth types come from the catalogue, so an address can name one that no longer exists.
+  // Once the templates are in, such a filter is dropped rather than left showing nothing.
+  useEffect(() => {
+    if (templates.length === 0 || authTypeFilter === "all") return;
+    if (!authTypes.includes(authTypeFilter)) setAuthTypeFilter("all");
+  }, [templates, authTypes, authTypeFilter, setAuthTypeFilter]);
 
   // Filter templates
   const filteredTemplates = useMemo(() => {

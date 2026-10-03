@@ -54,7 +54,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from app.config import settings
 from app.services.browser_agent import get_session_state
 from app.services.browser_agent.cdp_jwt import JWTError, verify_cdp_token
-from app.services.browser_agent.redis_io import control_key
+from app.services.browser_agent.redis_io import control_key, xread_entries
 from app.services.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
@@ -742,23 +742,22 @@ async def _tail_steps_to_ws(ws: WebSocket, run_id: str, node_id: str) -> None:
                 logger.exception("xread failed in cdp tail (will retry)")
                 await asyncio.sleep(1.0)
                 continue
-            if not resp:
-                continue
-            for _, entries in resp:
-                for entry_id, fields in entries:
-                    last_id = entry_id
-                    raw = fields.get("json") or fields.get(b"json") or "{}"
-                    if isinstance(raw, bytes):
-                        raw = raw.decode("utf-8", errors="replace")
-                    try:
-                        payload = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    payload["__entry_id"] = entry_id if isinstance(entry_id, str) else entry_id.decode("ascii", errors="replace")
-                    try:
-                        await _send_json(ws, {"type": "step_event", "payload": payload})
-                    except Exception:
-                        # WS closed while we were sending; bail out.
-                        return
+            # xread_entries: the reply shape depends on the redis-py protocol
+            # settings (RESP2/RESP3, legacy_responses), see its docstring.
+            for entry_id, fields in xread_entries(resp):
+                last_id = entry_id
+                raw = fields.get("json") or fields.get(b"json") or "{}"
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="replace")
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                payload["__entry_id"] = entry_id if isinstance(entry_id, str) else entry_id.decode("ascii", errors="replace")
+                try:
+                    await _send_json(ws, {"type": "step_event", "payload": payload})
+                except Exception:
+                    # WS closed while we were sending; bail out.
+                    return
     except asyncio.CancelledError:
         raise

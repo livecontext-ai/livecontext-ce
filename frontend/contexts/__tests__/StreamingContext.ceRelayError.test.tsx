@@ -29,7 +29,8 @@ vi.mock('@/lib/api', () => ({
   },
 }));
 
-vi.mock('@/lib/api/error-utils', () => ({
+vi.mock('@/lib/api/error-utils', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/error-utils')>()),
   is402Error: (e: { status?: number }) => e?.status === 402,
   is413StorageError: () => false,
   isAuthError: (e: { status?: number }) => e?.status === 401,
@@ -151,6 +152,50 @@ describe('StreamingContext chat error -> CE cloud-relay modal routing', () => {
     // verbatim failure text and code to explain the failure to the user.
     expect(showAgentErrorModal).toHaveBeenCalledWith({ message: 'Bridge returned null response', code: 'STREAM_ERROR' });
     expect(streaming.current.getStreamState('conv-a')?.status).toBe('error');
+  });
+
+  it('opens the error modal once for a restricted-data refusal on the stream, and keeps it non-retryable', async () => {
+    // Retrying the same provider can never succeed. The chat has no error banner any more, so the
+    // modal is the only surface: it classifies the token as its own kind (switch provider).
+    handleCeRelayError.mockReturnValue(false);
+    const streaming = await mountAndSend();
+
+    await act(async () => {
+      deliverWsEvent('conv-a', {
+        streamId: 'sid-1',
+        error: "Agent execution error: RESTRICTED_DATA_PROVIDER_NOT_ALLOWED: Data from Gmail or Google Drive cannot be sent to the model provider 'deepseek'.",
+        errorCode: 'STREAM_ERROR',
+      });
+    });
+
+    expect(showAgentErrorModal).toHaveBeenCalledTimes(1);
+    expect(showAgentErrorModal.mock.calls[0][0].message).toContain('RESTRICTED_DATA_PROVIDER_NOT_ALLOWED');
+    expect(showMissingApiKeyModal).not.toHaveBeenCalled();
+    const state = streaming.current.getStreamState('conv-a');
+    expect(state?.status).toBe('error');
+    expect(state?.error?.retryable).toBe(false);
+    expect(state?.error?.message).toContain('RESTRICTED_DATA_PROVIDER_NOT_ALLOWED');
+  });
+
+  it('stores the refusal token when the chat request itself is refused with a 403 code body', async () => {
+    handleCeRelayError.mockReturnValue(false);
+    const { result } = renderHook(() => useStreaming(), { wrapper });
+    await act(async () => {});
+    sendChatMessageWs.mockRejectedValueOnce(
+      Object.assign(new Error('Forbidden'), { status: 403, code: 'RESTRICTED_DATA_PROVIDER_NOT_ALLOWED' }),
+    );
+
+    await act(async () => {
+      await result.current.sendMessage(baseParams('hi'), {});
+    });
+
+    const state = result.current.getStreamState('conv-a');
+    expect(state?.status).toBe('error');
+    expect(state?.error?.retryable).toBe(false);
+    expect(state?.error?.message).toBe('RESTRICTED_DATA_PROVIDER_NOT_ALLOWED');
+    // Without the banner, the refused send must still tell the user why (modal, own kind).
+    expect(showAgentErrorModal).toHaveBeenCalledTimes(1);
+    expect(showAgentErrorModal.mock.calls[0][0].message).toBe('RESTRICTED_DATA_PROVIDER_NOT_ALLOWED');
   });
 
   it('opens the agent-error modal with the failure text when sending the message itself fails', async () => {

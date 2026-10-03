@@ -96,7 +96,8 @@ class MessageSearchRepositoryIT {
                     tool_name VARCHAR(100),
                     agent_id VARCHAR(255),
                     execution_id VARCHAR(255),
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    data_sensitivity VARCHAR(16) NOT NULL DEFAULT 'NORMAL'
                 )
                 """);
 
@@ -135,6 +136,10 @@ class MessageSearchRepositoryIT {
         // CONV_D - inactive; must be excluded when includeInactive=false
         insertMsg("m9", CONV_D, "USER", "Old archived conversation about facture", null, base.plusSeconds(480));
 
+        // LC-066: an assistant message quoting Gmail content, tagged RESTRICTED (V535)
+        insertMsg("m10", CONV_B, "ASSISTANT", "Your mailbox shows the wiretransfer approval", null, base.plusSeconds(540));
+        jdbc.update("UPDATE conversation.messages SET data_sensitivity = 'RESTRICTED' WHERE id = 'm10'");
+
         // 5. Persist + EM for repo
         Map<String, String> jpaProps = new HashMap<>();
         jpaProps.put("jakarta.persistence.jdbc.url", POSTGRES.getJdbcUrl());
@@ -163,6 +168,35 @@ class MessageSearchRepositoryIT {
                 "INSERT INTO conversation.messages (id, conversation_id, role, content, tool_name, created_at) " +
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 id, convId, role, content, toolName, java.sql.Timestamp.from(createdAt));
+    }
+
+    @Nested
+    @DisplayName("Restricted data (LC-066)")
+    class RestrictedData {
+
+        @Test
+        @DisplayName("a RESTRICTED (Gmail / Drive derived) message is never returned by search")
+        void restrictedMessageExcluded() {
+            List<MessageSearchHit> hits = repository.search(
+                    List.of(CONV_A, CONV_B), "wiretransfer",
+                    null, null, null, null, false, null, null, 50);
+
+            assertThat(hits).isEmpty();
+        }
+
+        @Test
+        @DisplayName("the same message is found once it is no longer RESTRICTED (proves the filter, not the tokenizer, hides it)")
+        void sameMessageFoundWhenNormal() {
+            jdbc.update("UPDATE conversation.messages SET data_sensitivity = 'NORMAL' WHERE id = 'm10'");
+            try {
+                List<MessageSearchHit> hits = repository.search(
+                        List.of(CONV_A, CONV_B), "wiretransfer",
+                        null, null, null, null, false, null, null, 50);
+                assertThat(hits).extracting(MessageSearchHit::messageId).containsExactly("m10");
+            } finally {
+                jdbc.update("UPDATE conversation.messages SET data_sensitivity = 'RESTRICTED' WHERE id = 'm10'");
+            }
+        }
     }
 
     @Nested

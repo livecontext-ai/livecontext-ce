@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { quotaApi, CreditSummary, CreditHistoryPage } from '@/lib/api';
 import { useAuth } from '@/lib/providers/smart-providers';
+import { useEffectOnChange } from '@/hooks/useEffectOnChange';
+import { urlEnum, urlPageIndex, useUrlState } from '@/hooks/useUrlState';
 import UsageAnalyticsPanel from './components/UsageAnalyticsPanel';
 import { useModelNameIndex } from './components/modelLabels';
 import { UsageHistoryPanel } from './components/UsageHistoryPanel';
@@ -29,6 +31,32 @@ import {
 
 /** Rows per usage-history page; the table pads a short last page to it. */
 const HISTORY_PAGE_SIZE = 15;
+
+/**
+ * The size the usage history is requested at: {@link HISTORY_PAGE_SIZE} inline, and in full
+ * screen the rows the table can show (reported by UsageHistoryPanel), so a page fills the screen.
+ *
+ * <p>A size change keeps the reader where they were: it moves to the page that holds the first
+ * row SHOWN (the page on screen, never the one requested, like the pager). Every report is
+ * applied, even when the history fits one page anyway: skipping it would leave the page on the
+ * full-screen size after closing, or on the inline size in full screen once a filter lengthens it.
+ */
+function useHistoryPageSize(
+  history: CreditHistoryPage | null,
+  setCurrentPage: (page: number) => void,
+) {
+  const [fittedRows, setFittedRows] = useState<number | null>(null);
+  const pageSize = fittedRows ?? HISTORY_PAGE_SIZE;
+  const onFittedRowsChange = (rows: number | null) => {
+    const next = rows ?? HISTORY_PAGE_SIZE;
+    if (next !== pageSize) {
+      const firstRowShown = history ? history.number * (history.size || pageSize) : 0;
+      setCurrentPage(Math.floor(firstRowShown / next));
+    }
+    setFittedRows(rows);
+  };
+  return { pageSize, onFittedRowsChange };
+}
 
 /**
  * Quota & Usage page.
@@ -63,11 +91,21 @@ function CeQuotaPage() {
   const [usingCloud, setUsingCloud] = useState(false);
   const [history, setHistory] = useState<CreditHistoryPage | null>(null);
   const [loading, setLoading] = useState(true);
-  const [currentPage, setCurrentPage] = useState(0);
-  const [filterType, setFilterType] = useState<string>('');
+  // The history's page and its source filter live in the address, so a reload reopens the
+  // same page of rows.
+  const [currentPage, setCurrentPage] = useUrlState('page', 0, { codec: urlPageIndex });
+  const [filterType, setFilterType] = useUrlState<string>('type', '', {
+    codec: urlEnum(CREDIT_SOURCE_FILTERS_LOCAL_LEDGER),
+  });
   const [refreshing, setRefreshing] = useState(false);
+  const { pageSize, onFittedRowsChange } = useHistoryPageSize(history, setCurrentPage);
+  // Same guard as the cloud page: resizing the full-screen table starts a request per size, and
+  // an answer to an older one must not land after the newer one.
+  const requestSeqRef = useRef(0);
 
   const fetchData = useCallback(async () => {
+    const requestSeq = ++requestSeqRef.current;
+    const stale = () => requestSeq !== requestSeqRef.current;
     try {
       // V366: "All workspaces" aggregates across every workspace; a real id slices
       // to that workspace. Routing/balance are unaffected (single owner-pays wallet).
@@ -75,9 +113,10 @@ function CeQuotaPage() {
       const effectiveOrgId = allWorkspaces ? null : scopeOrgId;
       const [summaryData, historyData, status] = await Promise.all([
         quotaApi.getSummary(effectiveOrgId, allWorkspaces).catch(() => null),
-        quotaApi.getHistory(currentPage, HISTORY_PAGE_SIZE, filterType || undefined, effectiveOrgId, allWorkspaces).catch(() => null),
+        quotaApi.getHistory(currentPage, pageSize, filterType || undefined, effectiveOrgId, allWorkspaces).catch(() => null),
         cloudLinkService.getStatus().catch(() => null),
       ]);
+      if (stale()) return;
       if (summaryData) setSummary(summaryData);
       if (historyData) setHistory(historyData);
       const cloudLinked = !!(status?.registered && status?.llmSource === 'CLOUD');
@@ -86,8 +125,9 @@ function CeQuotaPage() {
         // enforced server-side - so no client source-type filter is sent here.
         const [cloud, cloudHistory] = await Promise.all([
           cloudLinkService.getCloudUsageSummary().catch(() => null),
-          cloudLinkService.getCloudUsageHistory(currentPage, HISTORY_PAGE_SIZE).catch(() => null),
+          cloudLinkService.getCloudUsageHistory(currentPage, pageSize).catch(() => null),
         ]);
+        if (stale()) return;
         setCloudSummary(cloud);
         setUsingCloud(!!cloud);
         // Mirror the cloud account's ledger in the table too (where the relay rows live);
@@ -98,10 +138,12 @@ function CeQuotaPage() {
         setUsingCloud(false);
       }
     } catch { /* ignore */ } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!stale()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [currentPage, filterType, scopeOrgId]);
+  }, [currentPage, pageSize, filterType, scopeOrgId]);
 
   // Follow the sidebar workspace switcher: a global switch resets the page-local
   // filter back to the newly-active workspace.
@@ -109,8 +151,10 @@ function CeQuotaPage() {
     setScopeOrgId(currentOrgId);
   }, [currentOrgId]);
 
-  // Reset + refetch when the scoped workspace changes (global switch or filter).
-  useEffect(() => {
+  // Reset + refetch when the scoped workspace changes (global switch or filter). Not on mount:
+  // nothing is loaded yet, and it would throw away the page the address asked for.
+  useEffectOnChange(() => {
+    requestSeqRef.current += 1;
     setSummary(null);
     setHistory(null);
     setLoading(true);
@@ -202,7 +246,8 @@ function CeQuotaPage() {
       {/* Usage History */}
       <UsageHistoryPanel
         history={history}
-        pageSize={HISTORY_PAGE_SIZE}
+        pageSize={pageSize}
+        onFittedRowsChange={onFittedRowsChange}
         amountHeader={t('history.cost')}
         formatAmount={formatCredits}
         modelNames={modelNames}
@@ -263,8 +308,12 @@ function QuotaPageInner() {
   const [history, setHistory] = useState<CreditHistoryPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [currentPage, setCurrentPage] = useState(0);
-  const [filterType, setFilterType] = useState<string>('');
+  // The history's page and its source filter live in the address, so a reload reopens the
+  // same page of rows.
+  const [currentPage, setCurrentPage] = useUrlState('page', 0, { codec: urlPageIndex });
+  const [filterType, setFilterType] = useUrlState<string>('type', '', {
+    codec: urlEnum(CREDIT_SOURCE_FILTERS),
+  });
   const [refreshing, setRefreshing] = useState(false);
   // A page or filter change refetches while the current rows stay on screen (dimmed). Only the
   // FIRST load and a workspace re-scope show the skeleton: swapping the whole page for it on
@@ -275,6 +324,7 @@ function QuotaPageInner() {
   const [historyReloadKey, setHistoryReloadKey] = useState(0);
   const [topUpOpen, setTopUpOpen] = useState(false);
   const requestSeqRef = useRef(0);
+  const { pageSize, onFittedRowsChange } = useHistoryPageSize(history, setCurrentPage);
 
   // Wallet breakdown + plan info - used to render the bucket-aware balance
   // card and the monthly-cycle counter for paid subscribers.
@@ -329,7 +379,7 @@ function QuotaPageInner() {
       const effectiveOrgId = allWorkspaces ? null : scopeOrgId;
       const [summaryData, historyData] = await Promise.all([
         quotaApi.getSummary(effectiveOrgId, allWorkspaces),
-        quotaApi.getHistory(currentPage, HISTORY_PAGE_SIZE, filterType || undefined, effectiveOrgId, allWorkspaces),
+        quotaApi.getHistory(currentPage, pageSize, filterType || undefined, effectiveOrgId, allWorkspaces),
       ]);
       if (requestSeq !== requestSeqRef.current) return;
       setSummary(summaryData);
@@ -345,7 +395,7 @@ function QuotaPageInner() {
         setRefreshing(false);
       }
     }
-  }, [currentPage, filterType, t, scopeOrgId]);
+  }, [currentPage, pageSize, filterType, t, scopeOrgId]);
 
   // Follow the sidebar workspace switcher: a global switch resets the page-local
   // filter back to the newly-active workspace.
@@ -353,7 +403,8 @@ function QuotaPageInner() {
     setScopeOrgId(currentOrgId);
   }, [currentOrgId]);
 
-  useEffect(() => {
+  // Not on mount: nothing is loaded yet, and it would throw away the page the address asked for.
+  useEffectOnChange(() => {
     requestSeqRef.current += 1;
     setSummary(null);
     setHistory(null);
@@ -545,7 +596,8 @@ function QuotaPageInner() {
       <UsageHistoryPanel
         history={history}
         busy={historyLoading}
-        pageSize={HISTORY_PAGE_SIZE}
+        pageSize={pageSize}
+        onFittedRowsChange={onFittedRowsChange}
         amountHeader={isCeMode ? t('history.cost') : t('history.credits')}
         formatAmount={formatCredits}
         modelNames={modelNames}

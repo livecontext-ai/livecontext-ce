@@ -113,6 +113,10 @@ storage:
   showcase:
     hmac-secret: ${STORAGE_SHOWCASE_HMAC_SECRET:}
 
+# CASA LC-037 (gap 2): orchestrator-service internal API, used by
+# OrchestratorSubWorkflowLineageClient to confirm a sub_workflow-produced file's lineage
+# before extending an APPLICATION share's file access to it. In the CE monolith this is
+# overridden (loopback to self) by application-ce.yml's own `services.orchestrator-url`.
 gateway:
   filter:
     secret-key: ${GATEWAY_SECRET_KEY:}
@@ -125,6 +129,14 @@ gateway:
       # without a JWT (signature is the auth) AND must skip the gateway-secret
       # check downstream - both ends must allowlist it.
       - /api/files/proxy-signed
+    # CASA LC-038: /api/internal/storage/* trusts X-User-ID for its key-owner check, so it must
+    # sit behind the gateway HMAC. Every in-cluster caller signs as of this release
+    # (StorageClient in auth/catalog/conversation/orchestrator/publication), but a caller pod
+    # still on the previous image would be refused during the rolling deploy, so the gate is
+    # armed by the NEXT deploy: set STORAGE_INTERNAL_HMAC_REQUIRED_PATH=/api/internal/storage/
+    # once every service runs this release. Empty = not armed (the previous behaviour).
+    hmac-required-paths:
+      - ${STORAGE_INTERNAL_HMAC_REQUIRED_PATH:}
 
 services:
   # Share-link scope checks (which files belong to a shared application) are answered by
@@ -146,10 +158,9 @@ logging:
     # investigation, set LOGGING_LEVEL_COM_APIMARKETPLACE_STORAGE=DEBUG on the deployment:
     # it is an env override of this key, so it needs no rebuild and no code change.
     #
-    # orchestrator-service is ALSO pinned to DEBUG and is deliberately left alone here. It has
-    # 826 .debug() sites against this service's 8, and it emitted ZERO debug lines in the same
-    # 24h window, so it is dormant rather than noisy: the two are not the same problem, and
-    # auditing that blast radius is its own change rather than a rider on this one.
+    # orchestrator-service's baseline is INFO as well since LC-090 (it used to be pinned to DEBUG
+    # in its profile-less application.yml, overridden only by application-prod.yml), and is
+    # raised the same way when needed: LOGGING_LEVEL_COM_APIMARKETPLACE_ORCHESTRATOR=DEBUG.
     com.apimarketplace.storage: INFO
   pattern:
     # Carries the level, the thread and the logger, like orchestrator/conversation/

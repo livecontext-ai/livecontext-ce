@@ -126,6 +126,9 @@ class PublisherProfileSnapshotterTest {
             for (var path : stream.filter(p -> p.toString().endsWith(".java")).toList()) {
                 String name = path.getFileName().toString();
                 if (name.equals("PublisherProfileSnapshotter.java")) continue; // helper itself
+                // Not a publish path: it reads a FOLLOWER's public name and handle to tell a
+                // creator who subscribed, and writes nothing onto any publication row.
+                if (name.equals("CreatorFollowNotifier.java")) continue;
                 String content = java.nio.file.Files.readString(path);
                 assertThat(content)
                         .as("no service should call authClient.getPublisherProfile directly - "

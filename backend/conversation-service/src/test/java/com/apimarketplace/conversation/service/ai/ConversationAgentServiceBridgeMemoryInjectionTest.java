@@ -95,14 +95,14 @@ class ConversationAgentServiceBridgeMemoryInjectionTest {
         stubContext("claude-code", "claude-opus-4-6");
         when(agentClient.appendMemoryBlock(anyString(), anyString(), any(), any()))
             .thenReturn("you are helpful\n\nPROMPT-WITH-MEMORY-BLOCK");
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class)))
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any()))
             .thenReturn(successResponse("hello"));
 
         service.executeStreaming(chatRequest(), streamOutput, "conv-1");
 
         ArgumentCaptor<AgentExecutionRequestDto> dispatched =
             ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-        verify(bridgeClient).executeViaBridge(dispatched.capture());
+        verify(bridgeClient).executeViaBridge(dispatched.capture(), any());
         // Calling appendMemoryBlock and discarding the result would satisfy any
         // source-level guard and change nothing for the model. The assertion is on
         // what the bridge was actually handed.
@@ -115,7 +115,7 @@ class ConversationAgentServiceBridgeMemoryInjectionTest {
         stubContext("claude-code", "claude-opus-4-6");
         when(agentClient.appendMemoryBlock(anyString(), anyString(), any(), any()))
             .thenAnswer(inv -> inv.getArgument(0));
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class)))
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any()))
             .thenReturn(successResponse("hello"));
 
         // NO runWithOrgScope. This dispatch runs on an async stream worker where the
@@ -141,7 +141,7 @@ class ConversationAgentServiceBridgeMemoryInjectionTest {
         stubContext("claude-code", "claude-opus-4-6");
         when(agentClient.appendMemoryBlock(anyString(), anyString(), any(), any()))
             .thenAnswer(inv -> inv.getArgument(0));
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class)))
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any()))
             .thenReturn(successResponse("hello"));
 
         service.executeStreaming(chatRequest(), streamOutput, "conv-1");
@@ -165,14 +165,14 @@ class ConversationAgentServiceBridgeMemoryInjectionTest {
         // the call sits directly in front of a user's message.
         when(agentClient.appendMemoryBlock(anyString(), anyString(), any(), any()))
             .thenThrow(new RuntimeException("agent-service unreachable"));
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class)))
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any()))
             .thenReturn(successResponse("hello"));
 
         service.executeStreaming(chatRequest(), streamOutput, "conv-1");
 
         ArgumentCaptor<AgentExecutionRequestDto> dispatched =
             ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-        verify(bridgeClient).executeViaBridge(dispatched.capture());
+        verify(bridgeClient).executeViaBridge(dispatched.capture(), any());
         assertThat(dispatched.getValue().systemPrompt()).isEqualTo("you are helpful");
     }
 

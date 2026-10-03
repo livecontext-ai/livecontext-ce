@@ -367,6 +367,13 @@ export interface BuilderNodeData {
   noteTextColor?: string;
   noteWidth?: number;
   noteHeight?: number;
+  /**
+   * ReactFlow id of the node this note explains (resolved from the plan's `attachedTo`
+   * key on import, written back as that node's key on export, so a rename keeps it).
+   */
+  noteAttachedTo?: string;
+  /** Runtime only: the node this note is attached to is selected or focused. */
+  noteFocused?: boolean;
   onNoteUpdate?: (updates: { noteText?: string; noteColor?: string; noteBorderColor?: string; noteTextColor?: string; noteWidth?: number; noteHeight?: number }) => void;
   // Advanced mode fields
   params?: string;

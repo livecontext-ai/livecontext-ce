@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { urlEnum, useUrlState } from '@/hooks/useUrlState';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { useAuth } from '@/lib/providers/smart-providers';
 import { Globe, Webhook, User, ScrollText, RotateCw, Trash2, MessagesSquare, AppWindow } from 'lucide-react';
@@ -25,6 +25,8 @@ import { ScheduleTabContent } from './components/ScheduleTabContent';
 import { SharedLinksTabContent } from './components/SharedLinksTabContent';
 import { useAcquiredAppWorkflowIds } from '@/hooks/useAcquiredAppWorkflowIds';
 
+const TRIGGER_TABS: readonly TriggerTab[] = ['webhook', 'chat', 'form', 'schedule', 'conversations', 'applications'];
+
 export default function TriggersSettingsPage() {
   const { isAuthenticated, isAuthChecking } = useAuthGuard();
   const { loginWithRedirect } = useAuth();
@@ -32,14 +34,18 @@ export default function TriggersSettingsPage() {
   const tWebhook = useTranslations('webhookSettings');
   const tSettings = useTranslations('settings');
   const { toasts, addToast, removeToast } = useToast();
-  const searchParams = useSearchParams();
   // Creating, editing or deleting a trigger changes what the notification bell lists as armed
   // and when its rows say they next fire. That payload is invalidated by nothing, so it has to
   // be asked for here, as every other producer of a row does.
   const refreshAutomations = useRefreshHomeStatus();
 
-  const initialTab = (searchParams.get('tab') as TriggerTab) || 'webhook';
-  const [activeTab, setActiveTab] = useState<TriggerTab>(initialTab);
+  // The open tab lives in the address (`?tab=`), which the bell and the builder link to. The
+  // sub-view of the chat and form tabs (`view`) leaves with its tab.
+  const [activeTab, setActiveTab] = useUrlState<TriggerTab>('tab', 'webhook', {
+    codec: urlEnum(TRIGGER_TABS),
+    history: 'push',
+    clears: ['view'],
+  });
 
   // Decorate webhook cards whose workflow is an acquired application
   // (App badge). Hydrates on mount; empty set during fetch is safe.

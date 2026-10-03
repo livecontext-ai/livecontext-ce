@@ -49,6 +49,10 @@ public class InterfaceResourceStrategy implements ResourcePublicationStrategy {
     private final DataSourceFileCloneService fileCloneService;
     private final ObjectMapper objectMapper;
 
+    /** The shared snapshot budget; null in plain unit constructions (default limits then). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    com.apimarketplace.publication.service.PublicationSnapshotBudget snapshotBudget;
+
     public InterfaceResourceStrategy(InterfaceClient interfaceClient,
                                       DataSourceClient dataSourceClient,
                                       DataSourceFileCloneService fileCloneService,
@@ -202,9 +206,10 @@ public class InterfaceResourceStrategy implements ResourcePublicationStrategy {
                     ? objectMapper.convertValue(ds.mappingSpec(), new TypeReference<Map<String, Object>>() {})
                     : Map.of());
 
-            List<DataSourceItemDto> items = scoped
-                    ? dataSourceClient.getAllItems(dsId, tenantId, organizationId)
-                    : dataSourceClient.getAllItems(dsId, tenantId);
+            List<DataSourceItemDto> items = com.apimarketplace.publication.service.PublicationTableCopies.copy(
+                    dataSourceClient, snapshotBudget,
+                    com.apimarketplace.publication.service.PublicationSnapshotBudget.Listing.INTERFACE,
+                    dsId, ds.name(), tenantId, scoped ? organizationId : null);
             List<Map<String, Object>> rows = new ArrayList<>(items.size());
             for (DataSourceItemDto item : items) {
                 Map<String, Object> row = new LinkedHashMap<>();
@@ -214,6 +219,10 @@ public class InterfaceResourceStrategy implements ResourcePublicationStrategy {
             }
             table.put("items", rows);
             return table;
+        } catch (com.apimarketplace.publication.service.PublicationValidationException e) {
+            // A failed copy or an oversized table must refuse the publish, never ship the
+            // interface without its table (the best-effort skip below is for a missing table).
+            throw e;
         } catch (Exception e) {
             logger.warn("Failed to snapshot embedded table {} for interface clone: {}", dsId, e.getMessage());
             return null;

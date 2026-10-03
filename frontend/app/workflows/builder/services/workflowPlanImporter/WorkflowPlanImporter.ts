@@ -11,9 +11,13 @@ import { EdgeCreationService, type EdgeCreationResult } from './EdgeCreationServ
 import { InputValidationService, type ValidationResult } from './InputValidationService';
 import {
   applyDagreLayout,
+  hasUnplacedNotes,
   hasValidPosition,
   layoutConfigForDirection,
+  placeNotes,
+  unplaceAttachedNotes,
 } from '../LayoutService';
+import { nodeRegistry } from '../../registry/nodeRegistry';
 import type { InterfaceFormatContext } from './InterfaceFormatService';
 import {
   DEFAULT_WORKFLOW_LAYOUT_DIRECTION,
@@ -138,10 +142,17 @@ export class WorkflowPlanImporter {
         unstampedPositionsDirection: layout.unstampedPositionsDirection,
       });
       const layoutConfig = layoutConfigForDirection(layoutDirection);
-      const laidOutFromScratch = relayout || !updatedNodes.every(hasValidPosition);
+      // A note without a position does not relayout the graph: it only needs placing next
+      // to the node it explains, and an agent adding a note must not move the user's nodes.
+      const laidOutFromScratch = relayout
+        || !updatedNodes.every((n) => nodeRegistry.isNoteNode(n) || hasValidPosition(n));
+      // `relayout` means the stored positions were taken in the OTHER direction: attached notes
+      // are placed beside their node again rather than kept at an offset of the old direction.
       const layoutedNodes = laidOutFromScratch
-        ? applyDagreLayout(updatedNodes, edgeResult.edges, layoutConfig)
-        : updatedNodes;
+        ? applyDagreLayout(relayout ? unplaceAttachedNotes(updatedNodes) : updatedNodes, edgeResult.edges, layoutConfig)
+        : hasUnplacedNotes(updatedNodes)
+          ? placeNotes(updatedNodes, layoutDirection, undefined, { onlyUnplaced: true })
+          : updatedNodes;
 
       // Step 6: Validate inputs
       const validation = InputValidationService.validateNodes(layoutedNodes);

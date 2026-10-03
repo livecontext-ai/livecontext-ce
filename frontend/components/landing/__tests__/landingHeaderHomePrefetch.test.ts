@@ -30,3 +30,18 @@ describe('landing header home link', () => {
     expect(homeLink![0]).toContain('prefetch={false}');
   });
 });
+
+describe('landing header account links', () => {
+  // The same reasoning for a signed-in reader: "Open the app" and the avatar sit in the bar of
+  // every public page, and a prefetch would fetch the app's own pages on each view.
+  const accountSrc = readFileSync(path.resolve(__dirname, '../LandingAccount.tsx'), 'utf8');
+
+  for (const href of ['/app/chat', '/app/settings']) {
+    it(`does not prefetch ${href}`, () => {
+      // `appHref` prefixes the main site's origin off the main host (the docs subdomain).
+      const link = accountSrc.match(new RegExp(`<Link\\s+href=\\{appHref\\('${href.replace(/\//g, '\\/')}'\\)\\}[^>]*>`));
+      expect(link, `no <Link href="${href}"> in LandingAccount`).not.toBeNull();
+      expect(link![0]).toContain('prefetch={false}');
+    });
+  }
+});

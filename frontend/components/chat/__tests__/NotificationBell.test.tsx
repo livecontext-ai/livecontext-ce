@@ -1304,6 +1304,60 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
     expect(pushMock).toHaveBeenCalledWith('/app/settings/billing');
   });
 
+  it('newSubscriberRowOpensTheSubscriberProfile (CREATOR_FOLLOWED, V558)', () => {
+    inboxMock.current = {
+      ...inboxMock.current,
+      items: [
+        {
+          subjectId: 'user-uuid',
+          subjectName: 'Bob B.',
+          subjectType: 'USER' as const,
+          runIdPublic: null,
+          category: 'CREATOR_FOLLOWED',
+          severity: 'info' as const,
+          count: 1,
+          firstEventAt: '2026-10-01T07:00:00Z',
+          lastEventAt: '2026-10-01T07:00:00Z',
+          unread: true,
+          profileHandle: 'bob',
+        },
+      ],
+      unreadCount: 1,
+    };
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Bob B.' }));
+
+    expect(pushMock).toHaveBeenCalledWith('/app/u/bob');
+  });
+
+  it('newSubscriberRowWithoutHandleFallsBackToAppHome', () => {
+    inboxMock.current = {
+      ...inboxMock.current,
+      items: [
+        {
+          subjectId: 'user-uuid',
+          subjectName: 'Bob B.',
+          subjectType: 'USER' as const,
+          runIdPublic: null,
+          category: 'CREATOR_FOLLOWED',
+          severity: 'info' as const,
+          count: 1,
+          firstEventAt: '2026-10-01T07:00:00Z',
+          lastEventAt: '2026-10-01T07:00:00Z',
+          unread: true,
+          profileHandle: null,
+        },
+      ],
+      unreadCount: 1,
+    };
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: 'title' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Bob B.' }));
+
+    expect(pushMock).toHaveBeenCalledWith('/app');
+  });
+
   it('creatorPublishedRowOpensTheListingPreview (followed creator published, V551)', () => {
     inboxMock.current = {
       ...inboxMock.current,
@@ -1376,6 +1430,7 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
     ['TRIGGER', 'WEBHOOK_TRIGGER_DISABLED'],
     ['CREDENTIAL', 'CRED_EXPIRED'],
     ['PUBLICATION', 'CREATOR_PUBLISHED'],
+    ['USER', 'CREATOR_FOLLOWED'],
   ] as const)('a %s row draws its subject icon (%s)', (subjectType, category) => {
     inboxMock.current = {
       ...inboxMock.current,

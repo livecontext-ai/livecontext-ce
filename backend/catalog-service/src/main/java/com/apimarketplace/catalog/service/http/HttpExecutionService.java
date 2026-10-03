@@ -804,24 +804,25 @@ public class HttpExecutionService {
             log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Parameters after filtering: {}", tool.getId(), LoggedShape.of(filteredParameters));
 
             String url = buildFullUrl(api, tool);
-            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Base URL: {}, Endpoint: {}, Full URL before path processing: {}",
-                    tool.getId(), api.getBaseUrl(), tool.getEndpoint(), url);
+            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Endpoint: {}",
+                    tool.getId(), describeTarget(url, tool));
 
             url = processPathParameters(url, tool, filteredParameters);
-            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, URL after path parameters: {}", tool.getId(), url);
             // No credential on this path, so nothing fills a placeholder later: check now.
             requireFilledPathParameters(url, tool);
 
-            // Dynamic-URL endpoints first (placeholder reject + host allow-list, no DNS toward
-            // non-allowed hosts), then the generic SSRF validation for every URL.
+            // Dynamic-URL endpoints: placeholder reject + host allow-list, no DNS toward
+            // non-allowed hosts. The generic SSRF check is NOT run here: the host can still hold a
+            // {placeholder} ({account}.snowflakecomputing.com) that is only filled in from the
+            // credential further down, so a check here would validate a URL that is not the one
+            // sent. It runs on the FINAL url at the exchange (validatedTarget, LC-006 / LC-007).
             enforceDynamicUrlConstraints(tool, url);
             // Nothing fills a placeholder on this credential-less path: one left is refused now.
             requireResolvedUrl(url, api, tool, null, false);
-            // SSRF protection: validate after path parameter substitution so {placeholders} don't break URI parsing
-            UrlSafetyValidator.validateUrl(url);
+            // The SSRF check runs on the FINAL url, at the exchange (validatedTarget, LC-006 / LC-007).
 
             url = processQueryParameters(url, tool, filteredParameters);
-            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Final URL: {}", tool.getId(), url);
+            log.debug("[HttpExecutionService.executeHttpCall] Tool: {}, Final target: {}", tool.getId(), describeTarget(url, tool));
 
             HttpHeaders headers = prepareHeaders(api, tool);
             applyHeaderParameters(headers, tool, filteredParameters);
@@ -831,12 +832,12 @@ public class HttpExecutionService {
             dropContentTypeWhenBodyless(headers, body);
             HttpEntity<Object> request = new HttpEntity<>(body, headers);
 
-            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, About to call REST with URL: {}, Method: {}",
-                    tool.getId(), url, tool.getMethod());
+            log.info("[HttpExecutionService.executeHttpCall] Tool: {}, Calling {} {}",
+                    tool.getId(), tool.getMethod(), describeTarget(url, tool));
 
             final String requestUrl = url;
-            ResponseEntity<Object> response = readingText(() -> restTemplate.exchange(
-                    requestUrl,
+            ResponseEntity<Object> response = readingText(() -> transport().exchange(
+                    validatedUri(requestUrl),
                     HttpMethod.valueOf(tool.getMethod()),
                     request,
                     Object.class), false).get();
@@ -868,7 +869,7 @@ public class HttpExecutionService {
             result.put("errorBody", errorBody);
             putRetryAfter(result, e);
 
-            log.error("[HttpExecutionService.executeHttpCall] HTTP error: status={}, error={}", statusCode, errorMessage);
+            log.error("[HttpExecutionService.executeHttpCall] HTTP error: status={}, error={}", statusCode, redactForLog(errorMessage));
             return result;
 
         } catch (Exception e) {
@@ -880,7 +881,7 @@ public class HttpExecutionService {
             result.put("data", Map.of());
             result.put("error", e.getMessage());
 
-            log.error("[HttpExecutionService.executeHttpCall] Error: {}", e.getMessage());
+            log.error("[HttpExecutionService.executeHttpCall] Error: {}", redactForLog(e.getMessage()));
             return result;
         }
     }
@@ -912,11 +913,12 @@ public class HttpExecutionService {
             String url = buildFullUrl(api, tool);
             url = processPathParameters(url, tool, filteredParameters);
 
-            // Dynamic-URL endpoints first (placeholder reject + host allow-list, no DNS toward
-            // non-allowed hosts), then the generic SSRF validation for every URL.
+            // Dynamic-URL endpoints: placeholder reject + host allow-list, no DNS toward
+            // non-allowed hosts. The generic SSRF check is NOT run here: the host can still hold a
+            // {placeholder} ({account}.snowflakecomputing.com) that is only filled in from the
+            // credential further down, so a check here would validate a URL that is not the one
+            // sent. It runs on the FINAL url at the exchange (validatedTarget, LC-006 / LC-007).
             enforceDynamicUrlConstraints(tool, url);
-            // SSRF protection: validate after path parameter substitution so {placeholders} don't break URI parsing
-            UrlSafetyValidator.validateUrl(url);
 
             url = processQueryParameters(url, tool, filteredParameters);
 
@@ -971,7 +973,7 @@ public class HttpExecutionService {
                     credentialValue.isPresent() && !"platform".equals(resolvedCredentialSource));
             realUrl = url;
 
-            log.info("[HttpExecutionService.executeHttpCallWithCredentials] Final URL: {}", safeUrl);
+            log.debug("[HttpExecutionService.executeHttpCallWithCredentials] Final target: {}", describeTarget(url, tool));
 
             // Prepare headers with OAuth credentials if available
             HttpHeaders headers = prepareHeadersWithCredentials(api, tool, userId, credentialName, injection, credentialValue);
@@ -996,7 +998,7 @@ public class HttpExecutionService {
             dropContentTypeWhenBodyless(headers, body);
             HttpEntity<Object> request = new HttpEntity<>(body, headers);
 
-            log.info("[HttpExecutionService.executeHttpCallWithCredentials] Calling {} {}", tool.getMethod(), safeUrl);
+            log.info("[HttpExecutionService.executeHttpCallWithCredentials] Calling {} {}", tool.getMethod(), describeTarget(url, tool));
 
             try {
                 // Sent exactly once. A provider refusal (429 included) is returned to the caller
@@ -1004,8 +1006,8 @@ public class HttpExecutionService {
                 // decision (a workflow node's retryCount, or the agent).
                 // URI.create prevents Spring from re-expanding {variables} as URI templates
                 final String requestUrl = url;
-                ResponseEntity<Object> response = readingText(() -> restTemplate.exchange(
-                    java.net.URI.create(requestUrl),
+                ResponseEntity<Object> response = readingText(() -> transport().exchange(
+                    validatedUri(requestUrl),
                     HttpMethod.valueOf(tool.getMethod()),
                     request,
                     Object.class), false).get();
@@ -1103,8 +1105,8 @@ public class HttpExecutionService {
                     ResponseEntity<Object> response;
                     try {
                         final String refreshedUrl = url;
-                        response = readingText(() -> restTemplate.exchange(
-                            refreshedUrl,
+                        response = readingText(() -> transport().exchange(
+                            validatedUri(refreshedUrl),
                             HttpMethod.valueOf(tool.getMethod()),
                             retryRequest,
                             Object.class), false).get();
@@ -1162,7 +1164,7 @@ public class HttpExecutionService {
                 result.put("data", Map.of());
                 result.put("error", errorMessage);
 
-                log.error("[HttpExecutionService.executeHttpCallWithCredentials] Auth error: {}", errorMessage);
+                log.error("[HttpExecutionService.executeHttpCallWithCredentials] Auth error: {}", redactForLog(errorMessage));
                 return result;
 
             } catch (org.springframework.web.client.HttpClientErrorException.Forbidden e) {
@@ -1190,7 +1192,7 @@ public class HttpExecutionService {
                 // GitHub's secondary rate limit is a 403 that says when to come back.
                 putRetryAfter(result, e);
 
-                log.error("[HttpExecutionService.executeHttpCallWithCredentials] Forbidden error: {} body={}", errorMessage, errorBody);
+                log.error("[HttpExecutionService.executeHttpCallWithCredentials] Forbidden error: {} body={}", redactForLog(errorMessage), describeSize(errorBody));
                 return result;
 
             } catch (org.springframework.web.client.HttpStatusCodeException e) {
@@ -1210,7 +1212,7 @@ public class HttpExecutionService {
                 result.put("errorBody", errorBody);
                 putRetryAfter(result, e);
 
-                log.error("[HttpExecutionService.executeHttpCallWithCredentials] HTTP error: status={}, error={}", statusCode, errorMessage);
+                log.error("[HttpExecutionService.executeHttpCallWithCredentials] HTTP error: status={}, error={}", statusCode, redactForLog(errorMessage));
                 return result;
             }
 
@@ -1233,9 +1235,112 @@ public class HttpExecutionService {
             result.put("data", Map.of());
             result.put("error", message);
 
-            log.error("[HttpExecutionService.executeHttpCallWithCredentials] Error: {}", message);
+            log.error("[HttpExecutionService.executeHttpCallWithCredentials] Error: {}", redactForLog(message));
             return result;
         }
+    }
+
+    /**
+     * The SSRF check every outbound request of this class goes through, on the FINAL url
+     * (after path/query parameters, credential injection and template substitution), immediately
+     * before the exchange (LC-006 / LC-007, CASA readiness). Validation used to run earlier, on a
+     * url whose host could still be a {placeholder} filled in from the caller's own credential
+     * data, and the typed path (binary, multipart, async-poll, streaming) did not run it at all.
+     *
+     * <p>Uses the egress policy: on the cloud edition every private/internal target is refused;
+     * a self-hosted install may reach its own LAN (custom APIs on the Docker network), never
+     * loopback or the cloud metadata endpoint. If you add an outbound call, route it through here.
+     */
+    public static String validatedTarget(String url) {
+        UrlSafetyValidator.validateEgressUrl(url);
+        // LC-002: when the call is using a shipped integration's credential, every request must
+        // stay on that integration's own https hosts (CredentialHostBinding).
+        CredentialHostBinding.enforce(url);
+        return url;
+    }
+
+    /**
+     * The pinned outbound transport (OutboundHttpClients). Production always has it - the setter
+     * below is REQUIRED, so Spring fails to start this service rather than silently falling back
+     * to the unpinned {@link #restTemplate} field (CASA readiness round 3: {@code required = false}
+     * turned the LC-073/LC-006 pin into an opt-in that a missing bean, a component-scan mistake or
+     * a future refactor could quietly disable, with every outbound call still succeeding through
+     * the DNS-rebindable {@code restTemplate}). Unit tests that construct this class directly never
+     * go through Spring's {@code @Autowired} at all, so they are unaffected: {@link #transport()}
+     * still falls back to the constructor-injected {@code restTemplate} (usually a mock) for them.
+     */
+    private RestTemplate outboundRestTemplate;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setOutboundHttpClients(OutboundHttpClients outboundHttpClients) {
+        this.outboundRestTemplate = outboundHttpClients == null ? null : outboundHttpClients.restTemplate();
+    }
+
+    /** Every outbound request goes through this, never through the raw restTemplate field. */
+    RestTemplate transport() {
+        return outboundRestTemplate != null ? outboundRestTemplate : restTemplate;
+    }
+
+    /**
+     * Loggable form of an error message: every url in it loses its query string (a
+     * {@code ResourceAccessException} quotes the full request url, credential query parameter
+     * included) and the text is capped, because a provider error body can echo the request.
+     */
+    static String redactForLog(String message) {
+        return com.apimarketplace.common.web.UrlLogRedaction.redact(message);
+    }
+
+    /** {@link #validatedTarget} for the call sites that pass a {@link java.net.URI}. */
+    static java.net.URI validatedUri(String url) {
+        return java.net.URI.create(validatedTarget(url));
+    }
+
+    /**
+     * Loggable form of an outbound target: scheme, host and the tool's endpoint TEMPLATE, never
+     * the substituted path or the query string. The final url carries user data (a Gmail search
+     * expression, path ids) and, for query- or path-injected credentials, the credential itself
+     * (LC-010).
+     */
+    static String describeTarget(String url, ApiToolEntity tool) {
+        String origin;
+        try {
+            java.net.URI uri = java.net.URI.create(url == null ? "" : url.trim());
+            origin = uri.getHost() == null ? "<no host>"
+                    : (uri.getScheme() == null ? "" : uri.getScheme() + "://") + uri.getHost()
+                        + (uri.getPort() > 0 ? ":" + uri.getPort() : "");
+        } catch (RuntimeException e) {
+            origin = "<unparseable url>";
+        }
+        String endpoint = tool == null ? null : tool.getEndpoint();
+        if (endpoint == null || endpoint.isBlank() || endpoint.startsWith("{")) {
+            return origin;
+        }
+        int query = endpoint.indexOf('?');
+        return origin + (query >= 0 ? endpoint.substring(0, query) : endpoint);
+    }
+
+    /** Loggable form of a request body or parameter set: its shape, never its content (LC-010). */
+    static String describeSize(Object payload) {
+        if (payload == null) return "none";
+        if (payload instanceof JsonNode node) {
+            java.util.List<String> names = new java.util.ArrayList<>();
+            if (node.isObject()) {
+                node.fieldNames().forEachRemaining(names::add);
+                return "fields=" + names;
+            }
+            if (node.isArray()) {
+                for (JsonNode item : node) {
+                    item.fieldNames().forEachRemaining(names::add);
+                }
+                return "params=" + names;
+            }
+            return node.getNodeType().name().toLowerCase(Locale.ROOT);
+        }
+        if (payload instanceof Map<?, ?> map) return map.size() + " field(s) " + map.keySet();
+        if (payload instanceof java.util.Collection<?> c) return c.size() + " item(s)";
+        if (payload instanceof byte[] bytes) return bytes.length + " byte(s)";
+        if (payload instanceof CharSequence cs) return cs.length() + " char(s)";
+        return payload.getClass().getSimpleName();
     }
 
     /**
@@ -1863,7 +1968,8 @@ public class HttpExecutionService {
                     triggerParam, matchValue, rule.path("lookup").path("endpoint").asText());
             return baseValue;
         } catch (Exception e) {
-            log.warn("[HttpExecutionService.resolveSubResourceToken] resolution failed ({}) - using base token", e.toString());
+            log.warn("[HttpExecutionService.resolveSubResourceToken] resolution failed ({}: {}) - using base token",
+                    e.getClass().getSimpleName(), redactForLog(e.getMessage()));
             return baseValue;
         }
     }
@@ -1880,12 +1986,11 @@ public class HttpExecutionService {
         String tokenField = lookup.path("tokenField").asText("access_token");
         String base = api.getBaseUrl().replaceAll("/+$", "");
         String url = base + (endpoint.startsWith("/") ? endpoint : "/" + endpoint);
-        UrlSafetyValidator.validateUrl(url); // SSRF guard, mirroring the main execution path
 
         HttpHeaders headers = new HttpHeaders();
         headers.add("Authorization", "Bearer " + baseToken);
-        ResponseEntity<JsonNode> resp = restTemplate.exchange(
-                java.net.URI.create(url), HttpMethod.GET, new HttpEntity<>(headers), JsonNode.class);
+        ResponseEntity<JsonNode> resp = transport().exchange(
+                validatedUri(url), HttpMethod.GET, new HttpEntity<>(headers), JsonNode.class);
         JsonNode body = resp.getBody();
         JsonNode items = body == null ? null : body.path(itemsPath);
         if (items != null && items.isArray()) {
@@ -2893,8 +2998,8 @@ public class HttpExecutionService {
      */
     public String processPathParameters(String url, ApiToolEntity tool, JsonNode parameters) {
         try {
-            log.info("[HttpExecutionService.processPathParameters] Tool: {}, URL before processing: {}", tool.getId(), url);
-            log.info("[HttpExecutionService.processPathParameters] Tool: {}, Parameters JSON: {}", tool.getId(), LoggedShape.of(parameters));
+            log.debug("[HttpExecutionService.processPathParameters] Tool: {}, target before processing: {}, parameters: {}",
+                    tool.getId(), describeTarget(url, tool), describeSize(parameters));
 
             // Extract expected path parameters from URL
             Pattern pattern = Pattern.compile("\\{([^}]+)\\}");
@@ -2903,7 +3008,7 @@ public class HttpExecutionService {
             while (matcher.find()) {
                 expectedPathParams.add(matcher.group(1));
             }
-            log.info("[HttpExecutionService.processPathParameters] Tool: {}, Expected path parameters in URL: {}",
+            log.debug("[HttpExecutionService.processPathParameters] Tool: {}, Expected path parameters in URL: {}",
                     tool.getId(), expectedPathParams);
 
             if (parameters != null && parameters.isArray()) {
@@ -2915,12 +3020,10 @@ public class HttpExecutionService {
                     if (valueNode == null || valueNode.isNull()) continue; // skip explicit nulls
                     String value = valueNode.asText();
                     availableParams.put(paramName, value);
-                    log.info("[HttpExecutionService.processPathParameters] Tool: {}, Available parameter: {} = {}",
-                            tool.getId(), paramName, LoggedShape.of(value));
                 }
 
-                log.info("[HttpExecutionService.processPathParameters] Tool: {}, Available parameters map: {}",
-                        tool.getId(), LoggedShape.of(availableParams));
+                log.debug("[HttpExecutionService.processPathParameters] Tool: {}, Available parameters: {}",
+                        tool.getId(), availableParams.keySet());
 
                 // Per-param metadata drives the encoding strategy below. Loaded once
                 // here (same DB source as processQueryParameters) so a param can opt
@@ -2972,7 +3075,7 @@ public class HttpExecutionService {
                             default -> encodePathValueConservative(rawValue);
                         };
                         url = url.replace("{" + paramName + "}", value);
-                        log.info("[HttpExecutionService.processPathParameters] Tool: {}, Replaced {{{}}} with {} (encoding={})",
+                        log.debug("[HttpExecutionService.processPathParameters] Tool: {}, Replaced {{{}}} with {} (encoding={})",
                                 tool.getId(), paramName, LoggedShape.of(value), encoding.isEmpty() ? "conservative" : encoding);
                     } else {
                         log.warn("[HttpExecutionService.processPathParameters] Tool: {}, Missing path parameter: {} in available params: {}",
@@ -2983,7 +3086,6 @@ public class HttpExecutionService {
                 log.warn("[HttpExecutionService.processPathParameters] Tool: {}, Parameters is null or not an array", tool.getId());
             }
 
-            log.info("[HttpExecutionService.processPathParameters] Tool: {}, URL after processing: {}", tool.getId(), url);
         } catch (Exception e) {
             log.error("[HttpExecutionService.processPathParameters] Tool: {}, Error processing path parameters: {}",
                     tool.getId(), e.getMessage(), e);
@@ -4180,7 +4282,7 @@ public class HttpExecutionService {
             dropContentTypeWhenBodyless(headers, body);
             HttpEntity<Object> request = new HttpEntity<>(body, headers);
             log.info("[HttpExecutionService.executeTyped] {} {} (bodyType={}, responseType={}, mode={})",
-                tool.getMethod(), safeUrl, bodyType, responseType, mode);
+                tool.getMethod(), describeTarget(url, tool), bodyType, responseType, mode);
 
             // 5a. Streaming mode: aggregate the SSE chunks via WebClient (separate transport
             // from the RestTemplate path because RestTemplate cannot consume SSE incrementally).
@@ -4189,8 +4291,10 @@ public class HttpExecutionService {
                 if (streamingResponseHandler == null) {
                     return failure(0, "Streaming response handler not available", tool);
                 }
+                // Streaming leaves through WebClient, not RestTemplate, so it needs its own check
+                // on the final url (LC-006).
                 Map<String, Object> aggregated = streamingResponseHandler.handle(
-                        url,
+                        validatedTarget(url),
                         HttpMethod.valueOf(tool.getMethod()),
                         headers,
                         body
@@ -4219,8 +4323,8 @@ public class HttpExecutionService {
             }
 
             final String typedUrl = url;
-            ResponseEntity<Object> response = readingText(() -> restTemplate.exchange(
-                java.net.URI.create(typedUrl),
+            ResponseEntity<Object> response = readingText(() -> transport().exchange(
+                validatedUri(typedUrl),
                 HttpMethod.valueOf(tool.getMethod()),
                 request,
                 Object.class), "text".equals(responseType)).get();
@@ -4288,7 +4392,7 @@ public class HttpExecutionService {
         } catch (org.springframework.web.client.HttpStatusCodeException httpEx) {
             int statusCode = httpEx.getStatusCode().value();
             String errorMessage = httpEx.getResponseBodyAsString();
-            log.error("[HttpExecutionService.executeTyped] HTTP error: status={}, error={}", statusCode, errorMessage);
+            log.error("[HttpExecutionService.executeTyped] HTTP error: status={}, error={}", statusCode, redactForLog(errorMessage));
             // This path returns the provider's RAW body as the error, which is exactly the case
             // errorPolicy exists for: an upload or a publish refused for a reason only the account
             // owner can act on reads as a platform bug otherwise.
@@ -4312,14 +4416,11 @@ public class HttpExecutionService {
             throw e;
         } catch (Exception e) {
             // Worded around the full request URL on a transport failure, credential included,
-            // and the text goes back to the caller. The stack trace would print the raw message
-            // again, so it is dropped exactly when scrubbing changed something.
+            // and the text goes back to the caller, so it is scrubbed first. No stack trace: its
+            // message repeats the request url (query string included) and a parse failure quotes
+            // the payload. The exception type identifies the fault (LC-010).
             String message = CredentialUrlScrubber.scrub(e.getMessage(), realUrl, safeUrl, secrets);
-            if (java.util.Objects.equals(message, e.getMessage())) {
-                log.error("[HttpExecutionService.executeTyped] Error: {}", message, e);
-            } else {
-                log.error("[HttpExecutionService.executeTyped] Error: {} ({})", message, exceptionChain(e));
-            }
+            log.error("[HttpExecutionService.executeTyped] Error: {} [{}]", redactForLog(message), e.getClass().getName());
             return failure(0, message != null ? message : "Unknown error", tool);
         }
     }
@@ -4339,8 +4440,8 @@ public class HttpExecutionService {
         if (binaryResponseHandler == null) {
             return failure(0, "Binary response handler not available", tool);
         }
-        ResponseEntity<byte[]> response = restTemplate.exchange(
-            java.net.URI.create(url),
+        ResponseEntity<byte[]> response = transport().exchange(
+            validatedUri(url),
             HttpMethod.valueOf(tool.getMethod()),
             request,
             byte[].class);

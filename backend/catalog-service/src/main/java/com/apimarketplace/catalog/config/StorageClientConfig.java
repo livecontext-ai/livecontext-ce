@@ -23,7 +23,8 @@ public class StorageClientConfig {
     @Bean
     @ConditionalOnMissingBean
     public StorageClient storageClient(
-            @Value("${services.storage-url:http://localhost:8082}") String storageServiceUrl) {
-        return new StorageClient(storageServiceUrl);
+            @Value("${services.storage-url:http://localhost:8082}") String storageServiceUrl,
+            @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
+        return new StorageClient(storageServiceUrl, gatewaySecretKey);
     }
 }

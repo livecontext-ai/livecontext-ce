@@ -2,6 +2,7 @@ package com.apimarketplace.auth.credential.service;
 
 import com.apimarketplace.auth.credential.domain.PlatformCredentialModels.*;
 import com.apimarketplace.auth.credential.repository.PlatformCredentialRepository;
+import com.apimarketplace.auth.credential.util.OAuth2EndpointGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -129,6 +130,16 @@ public class PlatformCredentialService {
     }
 
     /**
+     * A platform/BYOK client row by primary key, with no tenant filter. For the OAuth2 callback
+     * only, which re-reads the client secret of the row it recorded at initiate instead of
+     * carrying the secret in the Redis state (LC-068); the caller checks the row still belongs
+     * to the flow.
+     */
+    public Optional<PlatformCredential> getRawCredentialById(Long id) {
+        return id == null ? Optional.empty() : repository.findById(id);
+    }
+
+    /**
      * Check if OAuth2 credentials are available for an integration.
      */
     public boolean hasOAuth2Credentials(String integrationName) {
@@ -225,6 +236,20 @@ public class PlatformCredentialService {
      * (strict isolation - workspace rows in a workspace, personal rows in
      * personal scope). The {@code GET /my} endpoint passes the active workspace.
      */
+    /**
+     * Client id of the BYOK row {@code tenantId} owns for {@code integrationName} in scope
+     * {@code organizationId} (the row a {@code DELETE /my/{integration}} removes), or null.
+     */
+    public String ownedClientId(String integrationName, String tenantId, String organizationId) {
+        if (tenantId == null || tenantId.isBlank() || integrationName == null) {
+            return null;
+        }
+        return repository.findOwnedRow(normalizeIntegrationName(integrationName), tenantId, organizationId)
+                .map(PlatformCredential::clientId)
+                .filter(id -> !id.isBlank())
+                .orElse(null);
+    }
+
     public List<PlatformCredential> findOwnedByTenant(String tenantId, String organizationId) {
         if (tenantId == null || tenantId.isBlank()) {
             return List.of();
@@ -310,6 +335,9 @@ public class PlatformCredentialService {
      */
     @Transactional
     public PlatformCredentialResponse saveCredential(CreatePlatformCredentialRequest request, String tenantId, String organizationId) {
+        // LC-052: these two URLs later receive the client secret, the code and the refresh token.
+        OAuth2EndpointGuard.assertSafe(request.authUrl(), "authUrl");
+        OAuth2EndpointGuard.assertSafe(request.tokenUrl(), "tokenUrl");
         String normalizedName = normalizeIntegrationName(request.integrationName());
 
         // Variant-aware lookup (V103 / Phase 2d admin dialog). When the request
@@ -492,6 +520,9 @@ public class PlatformCredentialService {
             UpdatePlatformCredentialRequest request,
             String tenantId
     ) {
+        // LC-052: same rule as saveCredential.
+        OAuth2EndpointGuard.assertSafe(request.authUrl(), "authUrl");
+        OAuth2EndpointGuard.assertSafe(request.tokenUrl(), "tokenUrl");
         String normalizedName = normalizeIntegrationName(integrationName);
         Optional<PlatformCredential> existing = tenantId != null
                 ? repository.findByIntegrationName(normalizedName, tenantId)

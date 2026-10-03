@@ -68,7 +68,8 @@ class WorkflowRunQueryControllerTenantGuardTest {
                 storageService,
                 new ObjectMapper(),
                 workflowEpochRepository,
-                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.ApplicationRunVersionBatchService.class)
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.ApplicationRunVersionBatchService.class),
+                org.mockito.Mockito.mock(com.apimarketplace.auth.client.access.OrgAccessGuard.class)
         );
     }
 
@@ -87,7 +88,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
         @Test
         @DisplayName("401 when X-User-ID is missing")
         void unauthorizedWhenHeaderMissing() {
-            ResponseEntity<?> response = controller.listRuns(WORKFLOW_ID, 15, 0, null, null);
+            ResponseEntity<?> response = controller.listRuns(WORKFLOW_ID, 15, 0, null, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
             verify(workflowRunRepository, never())
                     .findRunSummariesByWorkflowIdAndTenantId(any(), any(), any());
@@ -100,7 +101,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
             when(workflowRunRepository.findRunSummariesByWorkflowIdInScope(
                     eq(WORKFLOW_ID), eq(OWNER), any(), any(Pageable.class)))
                     .thenReturn(org.springframework.data.domain.Page.empty());
-            ResponseEntity<?> response = controller.listRuns(WORKFLOW_ID, 15, 0, OWNER, null);
+            ResponseEntity<?> response = controller.listRuns(WORKFLOW_ID, 15, 0, OWNER, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             verify(workflowRunRepository)
                     .findRunSummariesByWorkflowIdInScope(eq(WORKFLOW_ID), eq(OWNER), any(), any(Pageable.class));
@@ -113,7 +114,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
         @Test
         @DisplayName("401 when X-User-ID is missing")
         void unauthorizedWhenHeaderMissing() {
-            ResponseEntity<?> response = controller.getLatestRun(WORKFLOW_ID, null, null);
+            ResponseEntity<?> response = controller.getLatestRun(WORKFLOW_ID, null, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         }
     }
@@ -124,7 +125,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
         @Test
         @DisplayName("401 when X-User-ID is missing")
         void unauthorizedWhenHeaderMissing() {
-            ResponseEntity<?> response = controller.getRunByPublicId(RUN_ID_PUBLIC, null, null);
+            ResponseEntity<?> response = controller.getRunByPublicId(RUN_ID_PUBLIC, null, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
             verify(workflowRunRepository, never()).findByRunIdPublic(RUN_ID_PUBLIC);
         }
@@ -134,7 +135,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
         void notFoundOnCrossTenant() {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID_PUBLIC))
                     .thenReturn(Optional.of(ownedRun()));
-            ResponseEntity<?> response = controller.getRunByPublicId(RUN_ID_PUBLIC, INTRUDER, null);
+            ResponseEntity<?> response = controller.getRunByPublicId(RUN_ID_PUBLIC, INTRUDER, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
     }
@@ -145,7 +146,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
         @Test
         @DisplayName("401 when X-User-ID is missing")
         void unauthorizedWhenHeaderMissing() {
-            ResponseEntity<?> response = controller.listSteps(RUN_UUID, null, null);
+            ResponseEntity<?> response = controller.listSteps(RUN_UUID, null, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
             verify(workflowStepDataRepository, never()).findByWorkflowRunIdOrderByIdAsc(RUN_UUID);
         }
@@ -154,7 +155,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
         @DisplayName("404 on cross-tenant access")
         void notFoundOnCrossTenant() {
             when(workflowRunRepository.findById(RUN_UUID)).thenReturn(Optional.of(ownedRun()));
-            ResponseEntity<?> response = controller.listSteps(RUN_UUID, INTRUDER, null);
+            ResponseEntity<?> response = controller.listSteps(RUN_UUID, INTRUDER, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
             verify(workflowStepDataRepository, never()).findByWorkflowRunIdOrderByIdAsc(RUN_UUID);
         }
@@ -166,7 +167,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
         @Test
         @DisplayName("401 when X-User-ID is missing")
         void unauthorizedWhenHeaderMissing() {
-            ResponseEntity<?> response = controller.listStepsPaged(RUN_UUID, "alias", 0, 1, null, null, null, null);
+            ResponseEntity<?> response = controller.listStepsPaged(RUN_UUID, "alias", 0, 1, null, null, null, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         }
 
@@ -174,7 +175,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
         @DisplayName("404 on cross-tenant access")
         void notFoundOnCrossTenant() {
             when(workflowRunRepository.findById(RUN_UUID)).thenReturn(Optional.of(ownedRun()));
-            ResponseEntity<?> response = controller.listStepsPaged(RUN_UUID, "alias", 0, 1, null, null, INTRUDER, null);
+            ResponseEntity<?> response = controller.listStepsPaged(RUN_UUID, "alias", 0, 1, null, null, INTRUDER, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
     }
@@ -185,7 +186,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
         @Test
         @DisplayName("401 when X-User-ID is missing")
         void unauthorizedWhenHeaderMissing() {
-            ResponseEntity<?> response = controller.getStatusCounts(RUN_ID_PUBLIC, null, null);
+            ResponseEntity<?> response = controller.getStatusCounts(RUN_ID_PUBLIC, null, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         }
 
@@ -194,7 +195,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
         void notFoundOnCrossTenant() {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID_PUBLIC))
                     .thenReturn(Optional.of(ownedRun()));
-            ResponseEntity<?> response = controller.getStatusCounts(RUN_ID_PUBLIC, INTRUDER, null);
+            ResponseEntity<?> response = controller.getStatusCounts(RUN_ID_PUBLIC, INTRUDER, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
     }
@@ -211,7 +212,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
                     Optional.of(ownedRun()), com.apimarketplace.orchestrator.trigger.ProductionRunResolver.Outcome.FOUND, "wf");
             when(productionRunResolver.resolve(eq(WORKFLOW_ID), any())).thenReturn(resolution);
 
-            ResponseEntity<?> response = controller.getPinnedRun(WORKFLOW_ID, INTRUDER, null);
+            ResponseEntity<?> response = controller.getPinnedRun(WORKFLOW_ID, INTRUDER, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
@@ -222,7 +223,7 @@ class WorkflowRunQueryControllerTenantGuardTest {
             when(workflowRunRepository.findFirstByWorkflowIdAndSourceAndPublicationIdOrderByStartedAtDesc(
                     WORKFLOW_ID, "application", "pub-1")).thenReturn(Optional.of(ownedRun()));
 
-            ResponseEntity<?> response = controller.getApplicationRun(WORKFLOW_ID, "pub-1", INTRUDER, null);
+            ResponseEntity<?> response = controller.getApplicationRun(WORKFLOW_ID, "pub-1", INTRUDER, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }

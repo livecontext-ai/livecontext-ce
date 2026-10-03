@@ -52,10 +52,12 @@ describe('decideLoginRedirect - login-redirect loop breaker', () => {
     // 4th automatic bounce inside the window -> breaker trips, caller shows the
     // Session-expired UI instead of redirecting again.
     expect(decideLoginRedirect(false, storage, t + 30)).toBe('stop');
-    // The trip clears the budget (loginWithRedirect then calls markSessionExpired,
-    // whose Session-expired UI halts the loop so no further automatic redirect
-    // fires). The budget itself is therefore fresh again after a trip.
-    expect(decideLoginRedirect(false, storage, t + 40)).toBe('redirect');
+    // REGRESSION (CASA round 2, NIT 2): the trip used to clear the budget, so the very next
+    // automatic path (a refused page-load recovery, then the login page) got a fresh one and
+    // redirected anyway. The budget now holds for the rest of the window.
+    expect(decideLoginRedirect(false, storage, t + 40)).toBe('stop');
+    // ...and frees up once the window has passed.
+    expect(decideLoginRedirect(false, storage, t + 60_001)).toBe('redirect');
   });
 
   it('lets an explicit user sign-in reset the budget so the user can always recover', () => {
@@ -142,7 +144,7 @@ describe('recordLoginRedirect - shared budget primitive', () => {
     expect(storage.dump()['auth_redirect_log']).toBe(JSON.stringify([6_000_000]));
   });
 
-  it('returns false and clears the log once the cap is hit', () => {
+  it('returns false once the cap is hit and KEEPS the log, so every later automatic redirect in the window is refused too', () => {
     const storage = memoryStorage();
     const t = 7_000_000;
 
@@ -150,8 +152,9 @@ describe('recordLoginRedirect - shared budget primitive', () => {
     expect(recordLoginRedirect(storage, t)).toBe(true);
     expect(recordLoginRedirect(storage, t)).toBe(true);
     expect(recordLoginRedirect(storage, t)).toBe(false);
-    // The log is reset when the cap trips, so a later explicit retry isn't poisoned.
-    expect(storage.dump()['auth_redirect_log']).toBeUndefined();
+    // Pre-fix the refusal wiped the log and the next call was allowed again.
+    expect(storage.dump()['auth_redirect_log']).toBe(JSON.stringify([t, t, t]));
+    expect(recordLoginRedirect(storage, t + 1)).toBe(false);
   });
 
   it('fails open when storage is missing or throws', () => {

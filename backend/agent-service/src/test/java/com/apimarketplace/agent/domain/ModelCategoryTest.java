@@ -30,6 +30,19 @@ class ModelCategoryTest {
     }
 
     @Test
+    @DisplayName("free_tier is a ranking, not a surface: it is known, ranks-only, and never seeded")
+    void freeTierIsRanksOnlyAndNeverSeeded() {
+        assertThat(ModelCategory.FREE_TIER.key()).isEqualTo("free_tier");
+        assertThat(ModelCategory.isValidShape("free_tier")).isTrue();
+        assertThat(ModelCategory.ranksOnly("free_tier")).isTrue();
+        assertThat(ModelCategory.ranksOnly("chat")).isFalse();
+        assertThat(ModelCategory.ranksOnly("browser_agent")).isFalse();
+        assertThat(ModelCategory.ranksOnly(null)).isFalse();
+        // A seeded row would carry no rank, and would be written for every model a bundle inserts.
+        assertThat(ModelCategory.defaultKeys()).doesNotContain("free_tier");
+    }
+
+    @Test
     @DisplayName("a generation category derives its mode from its own name, so adding a format is free")
     void generationModeIsDerivedFromTheName() {
         assertThat(ModelCategory.modeForGenerationCategory("video_generation")).isEqualTo("video");

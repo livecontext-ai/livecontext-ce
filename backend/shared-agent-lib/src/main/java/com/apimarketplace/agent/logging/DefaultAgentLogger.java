@@ -130,13 +130,13 @@ public class DefaultAgentLogger implements AgentLogger {
         );
         runLog.addEntry(entry);
 
-        String shortPrompt = userPrompt != null && userPrompt.length() > 60
-            ? userPrompt.substring(0, 57) + "..."
-            : userPrompt;
+        // The prompt is user content (it can quote an email): size only unless payload
+        // logging is explicitly enabled for local debugging.
+        String shortPrompt = com.apimarketplace.common.logging.PayloadLogSafety.describeText(userPrompt, 60);
 
         log.info("{} ════════════════════════════════════════════════════════════════", PREFIX);
         log.info("{} [{}] Agent started | {} / {}", PREFIX, shortId(runId), provider, model);
-        log.info("{} [{}] User: \"{}\"", PREFIX, shortId(runId), shortPrompt);
+        log.info("{} [{}] User: {}", PREFIX, shortId(runId), shortPrompt);
         log.info("{} ════════════════════════════════════════════════════════════════", PREFIX);
     }
 
@@ -170,7 +170,9 @@ public class DefaultAgentLogger implements AgentLogger {
             runLog.addEntry(entry);
         }
 
-        String args = formatArgsForLog(toolCall.arguments());
+        String args = com.apimarketplace.common.logging.PayloadLogSafety.isPayloadLoggingEnabled()
+            ? formatArgsForLog(toolCall.arguments())
+            : com.apimarketplace.common.logging.PayloadLogSafety.describeAny(toolCall.arguments());
         log.info("{} [{}] → {}({})", PREFIX, shortId(runId), toolCall.toolName(), args);
     }
 
@@ -188,7 +190,11 @@ public class DefaultAgentLogger implements AgentLogger {
         }
 
         String status = success ? "✓" : "✗";
-        String resultStr = formatResultForLog(result);
+        String resultStr = com.apimarketplace.common.logging.PayloadLogSafety.isPayloadLoggingEnabled()
+            ? formatResultForLog(result)
+            : (success
+                ? com.apimarketplace.common.logging.PayloadLogSafety.describeSize(result.content())
+                : com.apimarketplace.common.logging.PayloadLogSafety.capMessage(result.error(), 200));
         log.info("{} [{}] {} ← {} [{}ms]", PREFIX, shortId(runId), status, resultStr, durationMs);
     }
 

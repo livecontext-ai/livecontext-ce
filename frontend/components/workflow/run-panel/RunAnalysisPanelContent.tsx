@@ -20,6 +20,7 @@ import { getCanvasEdges, getCanvasNodes, subscribeCanvasNodes } from '@/app/work
 import type { BuilderNodeData } from '@/app/workflows/builder/types';
 import { computeDagOrder, sortByDagOrder } from '@/lib/workflow/dagStepOrder';
 import { RunSummaryBar } from './RunSummaryBar';
+import { EpochDetailsCard } from './EpochDetailsCard';
 import { getCachedRunPanelData, subscribeRunPanelData, type RunPanelData } from './runPanelBus';
 import { formatCompactDuration } from './runFormatting';
 import { getRunStatusLabel } from '@/lib/utils/runStatusUtils';
@@ -54,6 +55,8 @@ const HEAT_CLASS = [
 const BAR_COLOR: Record<string, string> = { COMPLETED: '#10b981', FAILED: '#ef4444', RUNNING: '#3b82f6' };
 const BAR_COLOR_OTHER = '#9ca3af';
 const COST_COLOR = '#8b5cf6';
+/** The chart's height; its hover card opens just below it. */
+const CHART_HEIGHT_PX = 160;
 
 export interface RunAnalysisPanelContentProps {
   workflowId: string;
@@ -326,7 +329,7 @@ export function RunAnalysisPanelContent({ workflowId, runId, surfaceId, onBack, 
                 // strength, as the canvas does. The grid below still rings the default comparison.
                 selected={pickedTarget != null ? comparison?.target ?? null : null}
                 onPick={pickEpoch}
-                labels={{ duration: ta('chart.duration'), cost: ta('chart.cost'), epoch: epochLabel }}
+                labels={{ cost: ta('chart.cost') }}
               />
             </section>
 
@@ -415,6 +418,7 @@ export function RunAnalysisPanelContent({ workflowId, runId, surfaceId, onBack, 
                   runStatus={runStatus}
                   nodeFor={nodeFor}
                   labelFor={labelFor}
+                  onFocusNode={focusNode}
                   onPickReference={chooseReference}
                   onPickTarget={chooseCompared}
                 />
@@ -524,7 +528,7 @@ function EpochChart({
   runStatus: string | null;
   selected: number | null;
   onPick: (epoch: number) => void;
-  labels: { duration: string; cost: string; epoch: (epoch: number) => string };
+  labels: { cost: string };
 }) {
   const data = useMemo(() => epochs.map(e => ({
     epoch: e.epoch,
@@ -532,12 +536,14 @@ function EpochChart({
     durationMs: e.workDurationMs ?? null,
     cost: e.costCredits ?? null,
     outcome: epochOutcome(e, runStatus),
+    startedAt: e.startedAt,
+    endedAt: e.endedAt,
   })), [epochs, runStatus]);
   const hasCost = data.some(d => d.cost != null);
   const yAxis = useMemo(() => durationAxis(data.map(d => d.durationMs)), [data]);
 
   return (
-    <div className="h-40 w-full cursor-pointer" data-run-analysis-chart>
+    <div className="w-full cursor-pointer" style={{ height: CHART_HEIGHT_PX }} data-run-analysis-chart>
       <ResponsiveContainer width="100%" height="100%">
         {/* A click anywhere in an epoch's column picks it, not only on its bar: a short bar
             (or none, for an untimed epoch) is a few pixels to aim at. */}
@@ -553,23 +559,29 @@ function EpochChart({
           <XAxis dataKey="epoch" tick={{ fontSize: '0.75rem' }} tickLine={false} tickFormatter={(v: number) => `#${v}`} minTickGap={16} />
           <YAxis yAxisId="d" tick={{ fontSize: '0.75rem' }} tickLine={false} axisLine={false} width="auto" domain={[0, yAxis.top]} ticks={yAxis.ticks} tickFormatter={(v: number) => formatCompactDuration(v)} />
           {hasCost && <YAxis yAxisId="c" orientation="right" hide />}
+          {/* The same epoch card as the Run tab's epoch list, plus the cost, opened BELOW the
+              chart so it never hides the bars being read. x still follows the pointer. */}
           <ChartTooltip
             cursor={{ fillOpacity: 0.08 }}
-            contentStyle={{
-              backgroundColor: 'var(--bg-secondary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: '0.5rem',
-              fontSize: '0.875rem',
-              color: 'var(--text-primary)',
-            }}
-            itemStyle={{ color: 'var(--text-primary)' }}
-            labelStyle={{ color: 'var(--text-primary)' }}
-            labelFormatter={(v) => labels.epoch(Number(v))}
-            formatter={(value, name) => {
-              if (value == null) return ['-', name === 'cost' ? labels.cost : labels.duration];
-              return name === 'cost'
-                ? [formatCostCompact(value as number), labels.cost]
-                : [formatCompactDuration(value as number), labels.duration];
+            isAnimationActive={false}
+            position={{ y: CHART_HEIGHT_PX + 4 }}
+            allowEscapeViewBox={{ x: false, y: true }}
+            wrapperStyle={{ zIndex: 20, outline: 'none' }}
+            content={({ active, payload }) => {
+              const d = active ? (payload?.[0]?.payload as (typeof data)[number] | undefined) : undefined;
+              if (!d) return null;
+              return (
+                <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 min-w-[240px] dark:border-gray-700 dark:bg-gray-800">
+                  <EpochDetailsCard
+                    epoch={d.epoch}
+                    status={d.outcome}
+                    startedAt={d.startedAt}
+                    endedAt={d.endedAt}
+                    durationMs={d.durationMs}
+                    extraRows={hasCost ? [{ key: 'cost', label: labels.cost, value: d.cost != null ? formatCostCompact(d.cost) : '-' }] : undefined}
+                  />
+                </div>
+              );
             }}
           />
           <Bar
@@ -842,7 +854,7 @@ function CompareCell({ cell }: { cell?: RunAnalysisNodeCell }) {
 }
 
 function ComparisonTable({
-  reference, target, epochs, aliasOrder, runStatus, nodeFor, labelFor, onPickReference, onPickTarget,
+  reference, target, epochs, aliasOrder, runStatus, nodeFor, labelFor, onFocusNode, onPickReference, onPickTarget,
 }: {
   reference: RunAnalysisEpoch;
   target: RunAnalysisEpoch;
@@ -852,6 +864,8 @@ function ComparisonTable({
   runStatus: string | null;
   nodeFor: (alias: string) => Node<BuilderNodeData> | undefined;
   labelFor: (alias: string) => string;
+  /** Selects the node on the canvas and centres on it, as the grid's row labels do. */
+  onFocusNode: (alias: string) => void;
   onPickReference: (epoch: number) => void;
   onPickTarget: (epoch: number) => void;
 }) {
@@ -909,7 +923,14 @@ function ComparisonTable({
               className={`border-t border-theme align-top ${row.differs ? 'bg-red-50/70 dark:bg-red-950/20' : ''}`}
             >
               <td className="max-w-40 px-2.5 py-1.5 font-medium text-theme-primary">
-                <NodeLabel alias={row.alias} node={nodeFor(row.alias)} label={labelFor(row.alias)} />
+                <button
+                  type="button"
+                  onClick={() => onFocusNode(row.alias)}
+                  className="flex w-full min-w-0 items-center text-left hover:underline"
+                  data-compare-node={row.alias}
+                >
+                  <NodeLabel alias={row.alias} node={nodeFor(row.alias)} label={labelFor(row.alias)} />
+                </button>
               </td>
               <td className="px-2.5 py-1.5"><CompareCell cell={row.reference} /></td>
               <td className="px-2.5 py-1.5"><CompareCell cell={row.target} /></td>

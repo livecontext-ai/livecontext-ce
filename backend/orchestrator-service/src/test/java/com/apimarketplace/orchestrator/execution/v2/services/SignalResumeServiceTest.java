@@ -1,6 +1,8 @@
 package com.apimarketplace.orchestrator.execution.v2.services;
 
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.common.storage.service.StorageService;
+import com.apimarketplace.orchestrator.services.persistence.StepPayloadService;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.execution.SignalWaitEntity;
@@ -90,6 +92,7 @@ class SignalResumeServiceTest {
     @Mock private UnifiedSignalService mockSignalService;
     @Mock private CreditConsumptionClient mockCreditClient;
     @Mock private ReadinessContextCache mockReadinessCache;
+    @Mock private StepPayloadService mockStepPayloadService;
 
     private SignalResumeService resumeService;
 
@@ -394,7 +397,7 @@ class SignalResumeServiceTest {
             resumeService.resumeAfterSignal(signal);
 
             verify(mockStorageService, never()).saveJsonWithContext(
-                any(), any(), any(), any(), any(), any(), any(), anyInt(), anyInt(), any(), any());
+                any(), any(), any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any(), any());
             verify(mockStepDataRepository, never()).save(any());
             verify(mockEventService, never()).emitBranchingEdgesForSignalNode(
                 any(), any(), anyInt(), any(), anyInt(), any(), anyBoolean());
@@ -433,6 +436,124 @@ class SignalResumeServiceTest {
                     && Integer.valueOf(1).equals(entity.getIteration())
                     && Integer.valueOf(0).equals(entity.getItemIndex())
             ));
+        }
+
+        // ---- LC-066/LC-011 re-audit item 3: classify-and-tag the signal resolution output ----
+        //
+        // Pre-fix, persistSignalResolutionOutput always called saveJsonWithContext with an
+        // implicit NORMAL tag and expiresAt=null, even for a signal resolved in a run that
+        // already held Gmail/Drive content (e.g. an approval whose context snapshot quotes a
+        // restricted value) - never expiring, never swept.
+
+        @Test
+        @DisplayName("a signal resolved in a run that already holds restricted data is persisted RESTRICTED")
+        void restrictedRunTagsSignalOutputRestricted() throws Exception {
+            setField("stepPayloadService", mockStepPayloadService);
+            when(mockStepPayloadService.classifySensitivityForRun(eq("run-1"), any()))
+                .thenReturn(DataSensitivity.RESTRICTED);
+
+            Instant yieldAt = Instant.parse("2026-05-15T08:00:02Z");
+            SignalWaitEntity signal = createMockSignal("run-1", "core:iteration_gate", "0");
+            when(signal.getSignalType()).thenReturn(SignalType.USER_APPROVAL);
+            when(signal.getResolution()).thenReturn(SignalResolution.APPROVED);
+            when(signal.getCreatedAt()).thenReturn(yieldAt);
+            when(signal.getSplitItemData()).thenReturn(null);
+            when(signal.getEpoch()).thenReturn(1);
+            when(signal.getDagTriggerId()).thenReturn("trigger:start");
+
+            WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            when(run.getStatus()).thenReturn(RunStatus.RUNNING);
+            when(run.isStepByStepMode()).thenReturn(false);
+            when(run.getTenantId()).thenReturn("tenant-1");
+            when(mockRunRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+
+            when(mockStepDataRepository.existsByRunIdAndNormalizedKeyAndEpochAndItemIndexAndStatusAndStartTime(
+                "run-1", "core:iteration_gate", 1, 0, "COMPLETED", yieldAt))
+                .thenReturn(false);
+            when(mockStepDataRepository.countByRunIdAndNormalizedKeyAndEpochAndItemIndexAndStatus(
+                "run-1", "core:iteration_gate", 1, 0, "COMPLETED"))
+                .thenReturn(1L);
+            when(mockStepByStepService.getReadyNodes("run-1", "0", 1)).thenReturn(Set.of());
+
+            resumeService.resumeAfterSignal(signal);
+
+            verify(mockStorageService).saveJsonWithContext(
+                eq("tenant-1"), any(), eq(ExecutionConstants.CONTENT_TYPE_JSON),
+                isNull(), isNull(), eq("run-1"), eq("core:iteration_gate"), eq(0), eq(1), eq(0),
+                any(), eq("SIGNAL"), eq(DataSensitivity.RESTRICTED));
+        }
+
+        @Test
+        @DisplayName("a signal resolved in an ordinary run is persisted NORMAL")
+        void normalRunTagsSignalOutputNormal() throws Exception {
+            setField("stepPayloadService", mockStepPayloadService);
+            when(mockStepPayloadService.classifySensitivityForRun(eq("run-1"), any()))
+                .thenReturn(DataSensitivity.NORMAL);
+
+            Instant yieldAt = Instant.parse("2026-05-15T08:00:02Z");
+            SignalWaitEntity signal = createMockSignal("run-1", "core:iteration_gate", "0");
+            when(signal.getSignalType()).thenReturn(SignalType.USER_APPROVAL);
+            when(signal.getResolution()).thenReturn(SignalResolution.APPROVED);
+            when(signal.getCreatedAt()).thenReturn(yieldAt);
+            when(signal.getSplitItemData()).thenReturn(null);
+            when(signal.getEpoch()).thenReturn(1);
+            when(signal.getDagTriggerId()).thenReturn("trigger:start");
+
+            WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            when(run.getStatus()).thenReturn(RunStatus.RUNNING);
+            when(run.isStepByStepMode()).thenReturn(false);
+            when(run.getTenantId()).thenReturn("tenant-1");
+            when(mockRunRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+
+            when(mockStepDataRepository.existsByRunIdAndNormalizedKeyAndEpochAndItemIndexAndStatusAndStartTime(
+                "run-1", "core:iteration_gate", 1, 0, "COMPLETED", yieldAt))
+                .thenReturn(false);
+            when(mockStepDataRepository.countByRunIdAndNormalizedKeyAndEpochAndItemIndexAndStatus(
+                "run-1", "core:iteration_gate", 1, 0, "COMPLETED"))
+                .thenReturn(1L);
+            when(mockStepByStepService.getReadyNodes("run-1", "0", 1)).thenReturn(Set.of());
+
+            resumeService.resumeAfterSignal(signal);
+
+            verify(mockStorageService).saveJsonWithContext(
+                eq("tenant-1"), any(), eq(ExecutionConstants.CONTENT_TYPE_JSON),
+                isNull(), isNull(), eq("run-1"), eq("core:iteration_gate"), eq(0), eq(1), eq(0),
+                any(), eq("SIGNAL"), eq(DataSensitivity.NORMAL));
+        }
+
+        @Test
+        @DisplayName("no StepPayloadService wired: degrades to NORMAL rather than failing")
+        void missingStepPayloadServiceDegradesToNormal() {
+            // stepPayloadService field left at its production default (null) - no setField call.
+            Instant yieldAt = Instant.parse("2026-05-15T08:00:02Z");
+            SignalWaitEntity signal = createMockSignal("run-1", "core:iteration_gate", "0");
+            when(signal.getSignalType()).thenReturn(SignalType.USER_APPROVAL);
+            when(signal.getResolution()).thenReturn(SignalResolution.APPROVED);
+            when(signal.getCreatedAt()).thenReturn(yieldAt);
+            when(signal.getSplitItemData()).thenReturn(null);
+            when(signal.getEpoch()).thenReturn(1);
+            when(signal.getDagTriggerId()).thenReturn("trigger:start");
+
+            WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            when(run.getStatus()).thenReturn(RunStatus.RUNNING);
+            when(run.isStepByStepMode()).thenReturn(false);
+            when(run.getTenantId()).thenReturn("tenant-1");
+            when(mockRunRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+
+            when(mockStepDataRepository.existsByRunIdAndNormalizedKeyAndEpochAndItemIndexAndStatusAndStartTime(
+                "run-1", "core:iteration_gate", 1, 0, "COMPLETED", yieldAt))
+                .thenReturn(false);
+            when(mockStepDataRepository.countByRunIdAndNormalizedKeyAndEpochAndItemIndexAndStatus(
+                "run-1", "core:iteration_gate", 1, 0, "COMPLETED"))
+                .thenReturn(1L);
+            when(mockStepByStepService.getReadyNodes("run-1", "0", 1)).thenReturn(Set.of());
+
+            resumeService.resumeAfterSignal(signal);
+
+            verify(mockStorageService).saveJsonWithContext(
+                eq("tenant-1"), any(), eq(ExecutionConstants.CONTENT_TYPE_JSON),
+                isNull(), isNull(), eq("run-1"), eq("core:iteration_gate"), eq(0), eq(1), eq(0),
+                any(), eq("SIGNAL"), eq(DataSensitivity.NORMAL));
         }
 
         @Test
@@ -693,7 +814,7 @@ class SignalResumeServiceTest {
             when(mockRunRepository.findByRunIdPublic("run-approval")).thenReturn(Optional.of(run));
             when(mockStorageService.saveJsonWithContext(
                 anyString(), anyMap(), anyString(), any(), any(), anyString(), anyString(),
-                anyInt(), anyInt(), any(), anyString()))
+                anyInt(), anyInt(), anyInt(), any(), anyString(), any()))
                 .thenReturn(UUID.fromString("22222222-2222-2222-2222-222222222222"));
 
             WorkflowPlan plan = mock(WorkflowPlan.class);
@@ -762,7 +883,7 @@ class SignalResumeServiceTest {
             when(mockRunRepository.findByRunIdPublic("run-approval-merge")).thenReturn(Optional.of(run));
             when(mockStorageService.saveJsonWithContext(
                 anyString(), anyMap(), anyString(), any(), any(), anyString(), anyString(),
-                anyInt(), anyInt(), any(), anyString()))
+                anyInt(), anyInt(), anyInt(), any(), anyString(), any()))
                 .thenReturn(UUID.fromString("22222222-2222-2222-2222-222222222222"));
 
             WorkflowPlan plan = mock(WorkflowPlan.class);
@@ -830,7 +951,7 @@ class SignalResumeServiceTest {
             when(mockRunRepository.findByRunIdPublic("run-approval-orphan-refire")).thenReturn(Optional.of(run));
             when(mockStorageService.saveJsonWithContext(
                 anyString(), anyMap(), anyString(), any(), any(), anyString(), anyString(),
-                anyInt(), anyInt(), any(), anyString()))
+                anyInt(), anyInt(), anyInt(), any(), anyString(), any()))
                 .thenReturn(UUID.fromString("22222222-2222-2222-2222-222222222222"));
 
             WorkflowPlan plan = mock(WorkflowPlan.class);
@@ -1382,6 +1503,120 @@ class SignalResumeServiceTest {
             verify(mockReusableTriggerService).resetForNextCycle(
                 eq(run), any(), any(), eq(runId), any(), eq(triggerId), eq(false), eq(epoch), any());
             verify(mockErrorTriggerDispatchService, never()).dispatchEpochFailure(any());
+        }
+    }
+
+    /**
+     * A deferred reset that finds the run already WAITING_TRIGGER skips. Fine when another
+     * thread closed this epoch; a stranded run when the run was re-armed over it (a rerun's
+     * reopen interleaving with another trigger's cycle close, seen in CI with the advisory lock
+     * off). The skip stays, but the stranded case must be named in the log.
+     */
+    @Nested
+    @DisplayName("performDeferredReset on a run that is already WAITING_TRIGGER")
+    class DeferredResetOnReArmedRun {
+
+        private static final String RUN_ID = "run-rearmed";
+        private static final String TRIGGER_ID = "trigger:start";
+
+        @Mock private ReusableTriggerService mockReusableTriggerService;
+
+        private ch.qos.logback.classic.Logger serviceLogger;
+        private ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender;
+
+        @BeforeEach
+        void attachAppender() throws Exception {
+            setField("reusableTriggerService", mockReusableTriggerService);
+            WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            lenient().when(run.getStatus()).thenReturn(RunStatus.WAITING_TRIGGER);
+            // Lenient: the missing-run test looks up a different run id.
+            lenient().when(mockRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
+
+            serviceLogger = (ch.qos.logback.classic.Logger)
+                    org.slf4j.LoggerFactory.getLogger(SignalResumeService.class);
+            appender = new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            serviceLogger.addAppender(appender);
+        }
+
+        @org.junit.jupiter.api.AfterEach
+        void detachAppender() {
+            serviceLogger.detachAppender(appender);
+            appender.stop();
+        }
+
+        private List<String> warnings() {
+            return appender.list.stream()
+                    .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+                    .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                    .toList();
+        }
+
+        @Test
+        @DisplayName("warns when the epoch it was asked to close is still active, and still does not reset")
+        void warnsWhenTheEpochIsLeftActive() {
+            when(mockStateSnapshotService.getSnapshot(RUN_ID))
+                    .thenReturn(com.apimarketplace.orchestrator.domain.execution.StateSnapshot.empty().openEpochForDag(TRIGGER_ID, 1));
+
+            resumeService.performDeferredReset(RUN_ID, TRIGGER_ID, 1);
+
+            assertThat(warnings()).singleElement().asString()
+                    .contains(RUN_ID, "epoch 1", TRIGGER_ID, "still active", "advisory lock");
+            verify(mockReusableTriggerService, never()).resetForNextCycle(
+                any(), any(), any(), any(), any(), any(), anyBoolean(), anyInt(), any());
+        }
+
+        @Test
+        @DisplayName("stays quiet when another thread already closed that epoch")
+        void quietWhenTheEpochWasClosed() {
+            // Epoch 1 closed; the DAG now has a different epoch open.
+            when(mockStateSnapshotService.getSnapshot(RUN_ID))
+                    .thenReturn(com.apimarketplace.orchestrator.domain.execution.StateSnapshot.empty().openEpochForDag(TRIGGER_ID, 2));
+
+            resumeService.performDeferredReset(RUN_ID, TRIGGER_ID, 1);
+
+            assertThat(warnings()).isEmpty();
+            verify(mockReusableTriggerService, never()).resetForNextCycle(
+                any(), any(), any(), any(), any(), any(), anyBoolean(), anyInt(), any());
+        }
+
+        @Test
+        @DisplayName("stays quiet when the snapshot has no DAG for that trigger")
+        void quietWhenTheDagIsAbsent() {
+            when(mockStateSnapshotService.getSnapshot(RUN_ID))
+                    .thenReturn(com.apimarketplace.orchestrator.domain.execution.StateSnapshot.empty());
+
+            resumeService.performDeferredReset(RUN_ID, TRIGGER_ID, 1);
+
+            assertThat(warnings()).isEmpty();
+            // A missing DAG is a normal answer, not a failed lookup.
+            assertThat(appender.list).noneMatch(e -> e.getThrowableProxy() != null);
+        }
+
+        @Test
+        @DisplayName("a run that no longer exists is skipped without reading the snapshot")
+        void skipsAMissingRunWithoutChecking() {
+            when(mockRunRepository.findByRunIdPublic("run-gone")).thenReturn(Optional.empty());
+
+            resumeService.performDeferredReset("run-gone", TRIGGER_ID, 1);
+
+            verify(mockStateSnapshotService, never()).getSnapshot("run-gone");
+            assertThat(warnings()).isEmpty();
+            verify(mockReusableTriggerService, never()).resetForNextCycle(
+                any(), any(), any(), any(), any(), any(), anyBoolean(), anyInt(), any());
+        }
+
+        @Test
+        @DisplayName("a snapshot read failure does not turn the skip into an error")
+        void snapshotFailureIsSwallowed() {
+            when(mockStateSnapshotService.getSnapshot(RUN_ID)).thenThrow(new RuntimeException("DB timeout"));
+
+            resumeService.performDeferredReset(RUN_ID, TRIGGER_ID, 1);
+
+            assertThat(warnings()).isEmpty();
+            assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
+            verify(mockReusableTriggerService, never()).resetForNextCycle(
+                any(), any(), any(), any(), any(), any(), anyBoolean(), anyInt(), any());
         }
     }
 
@@ -2402,7 +2637,7 @@ class SignalResumeServiceTest {
             when(mockRunRepository.findByRunIdPublic("run-split-fb")).thenReturn(Optional.of(run));
             when(mockStorageService.saveJsonWithContext(
                 anyString(), anyMap(), anyString(), any(), any(), anyString(), anyString(),
-                anyInt(), anyInt(), any(), anyString()))
+                anyInt(), anyInt(), anyInt(), any(), anyString(), any()))
                 .thenReturn(UUID.fromString("22222222-2222-2222-2222-222222222222"));
 
             // Split gate: this node is split-context AND sibling item signals are still PENDING
@@ -2474,7 +2709,7 @@ class SignalResumeServiceTest {
             when(mockRunRepository.findByRunIdPublic("run-split-fb2")).thenReturn(Optional.of(run));
             when(mockStorageService.saveJsonWithContext(
                 anyString(), anyMap(), anyString(), any(), any(), anyString(), anyString(),
-                anyInt(), anyInt(), any(), anyString()))
+                anyInt(), anyInt(), anyInt(), any(), anyString(), any()))
                 .thenReturn(UUID.fromString("22222222-2222-2222-2222-222222222222"));
 
             SignalWaitEntity pendingSibling = mock(SignalWaitEntity.class);
@@ -2680,8 +2915,10 @@ class SignalResumeServiceTest {
                 eq(nodeId),
                 eq(0),
                 eq(0),
+                eq(0),
                 isNull(),
-                eq("SIGNAL"));
+                eq("SIGNAL"),
+                any());
 
             assertThat(outputCaptor.getValue().get("output"))
                 .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)

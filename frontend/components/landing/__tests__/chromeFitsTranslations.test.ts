@@ -32,6 +32,10 @@ import { locales } from '@/i18n/routing';
  * `getBoundingClientRect`, not from counting characters.
  */
 const shellSrc = readFileSync(path.resolve(__dirname, '../LandingShell.tsx'), 'utf8');
+// The bar's sign-in end (visitor: Sign in + the pill; signed in: the pill + the account).
+const accountSrc = readFileSync(path.resolve(__dirname, '../LandingAccount.tsx'), 'utf8');
+const visitorEnd = accountSrc.slice(accountSrc.lastIndexOf('  return ('));
+const accountEnd = accountSrc.slice(accountSrc.indexOf('data-testid="landing-account"'), accountSrc.lastIndexOf('  return ('));
 
 const section = (from: string, to: string) => {
   const start = shellSrc.indexOf(from);
@@ -77,8 +81,15 @@ const logo = () => classesAfter(header, 'withBase(siteBaseUrl, \'/\')');
 const nav = () => classesAfter(header, '<nav');
 // 'lg:gap-3' belongs to the sign-in cluster and to nothing else in the bar.
 const cluster = () => classesAfter(header, 'lg:gap-3');
-const signIn = () => classesAfter(header, 'variant="link"');
-const cta = () => classesAfter(header, 'variant="primary"');
+const signIn = () => classesAfter(visitorEnd, 'variant="link"');
+// The visitor's CTA and the signed-in end's "Open the app" are one pill, written once.
+const pill = () => {
+  const match = /const PILL = '([^']+)'/.exec(accountSrc);
+  expect(match, 'LandingAccount lost its PILL').not.toBeNull();
+  return new Set(match![1].split(/\s+/));
+};
+const cta = pill;
+const avatar = () => classesAfter(accountEnd, "href={appHref('/app/settings')}");
 const footerGrid = () => classesAfter(footer, 'flex-1 grid');
 
 describe('the header row holds a long label', () => {
@@ -86,6 +97,19 @@ describe('the header row holds a long label', () => {
     // The pill is `h-9`: a second line does not make it taller, it spills out of it.
     expect(cta()).toContain('whitespace-nowrap');
     expect(cta()).toContain('h-9');
+    // The signed-in end's pill is that very pill.
+    expect(visitorEnd).toMatch(/variant="primary"[\s\S]*?className=\{PILL\}/);
+    expect(accountEnd).toMatch(/href=\{appHref\('\/app\/chat'\)\}[^>]*?className=\{PILL\}/);
+  });
+
+  it('keeps the signed-in end no wider than the visitor end: the avatar goes exactly where "Sign in" does', () => {
+    // Measured before this rule, with the avatar always shown: 16px past the viewport at 320 in
+    // English, 11px at 768 in Portuguese. Where "Sign in" is hidden the visitor end is the pill
+    // alone, so the signed-in end must be the pill alone there too.
+    for (const token of ['hidden', 'sm:inline-flex', 'md:max-[859px]:hidden']) {
+      expect(avatar(), `avatar lost ${token}`).toContain(token);
+    }
+    expect(avatar()).toContain('shrink-0');
   });
 
   it('forbids the nav entries and the sign-in link from wrapping', () => {
@@ -207,7 +231,23 @@ describe('the chrome copy stays inside the width the bar has', () => {
   // the bar is known to survive.
   const NAV_BUDGET = 52;
 
+  // The signed-in end, measured in Chromium in all six locales at 14 widths from 320 to 1280:
+  // no page overflow and no gutter eaten anywhere, the longest labels being 12 units ("Open the
+  // app", "Ouvrir l'app", "Abrir la app"). Where the avatar shows, Chinese is the one locale
+  // whose signed-in end is wider than its visitor end (by 8px, its "Sign in" being narrower than
+  // the avatar), with room to spare. The tight case is 320px, where the pill stands alone beside
+  // the brand: "Get started free" (16 units) already eats 3px of the English gutter there, so
+  // the ceiling stays two units under it.
+  const OPEN_APP_BUDGET = 14;
+
   for (const locale of locales) {
+    it(`fits the ${locale} "Open the app" pill where it stands alone (320px, and 768px beside the nav)`, () => {
+      const shell = messages[locale].LandingShell;
+      expect(shell.openApp, `${locale}.LandingShell.openApp is missing`).toBeTruthy();
+      expect(widthUnits(shell.openApp), `${locale}: "${shell.openApp}" is too wide for the signed-in header`)
+        .toBeLessThanOrEqual(OPEN_APP_BUDGET);
+    });
+
     it(`fits the ${locale} CTA label beside the nav at 768px`, () => {
       const label = messages[locale].LandingShell.getStarted;
       expect(label, `${locale}.LandingShell.getStarted is missing`).toBeTruthy();

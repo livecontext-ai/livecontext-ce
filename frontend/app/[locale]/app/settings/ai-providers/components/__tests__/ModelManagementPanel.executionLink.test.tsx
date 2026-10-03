@@ -2,7 +2,7 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
-import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 /**
  * One-click execution link from the admin Models panel: a billed model whose provider
@@ -143,6 +143,37 @@ describe('ModelManagementPanel - per-model execution link', () => {
     });
     // Re-read so the badge reflects the server, not an optimistic guess.
     await waitFor(() => expect(mocks.listExecutionLinks).toHaveBeenCalledTimes(2));
+  });
+
+  it('regression - keeps keyboard focus on the badge once the click has linked the model', async () => {
+    // Linking turns the plain button into the popover's trigger, a different place in the
+    // tree: React remounts it and focus used to drop to <body>.
+    mocks.getEffectiveModels.mockResolvedValue([buildModel()]);
+    mocks.listExecutionLinks.mockResolvedValueOnce([]).mockResolvedValue([link()]);
+    mocks.saveExecutionLink.mockResolvedValue({});
+
+    render(<ModelManagementPanel t={t} />);
+    await waitFor(() => expect(control()).toBeInTheDocument());
+    control()!.focus();
+    fireEvent.click(control()!);
+
+    await waitFor(() => expect(control()).toHaveAttribute('aria-haspopup', 'dialog'));
+    expect(control()).toHaveFocus();
+  });
+
+  it('keeps keyboard focus on the badge when removing the routing unlinks the model', async () => {
+    // The other direction: the trigger turns back into a plain button, remounted as well.
+    mocks.getEffectiveModels.mockResolvedValue([buildModel()]);
+    mocks.listExecutionLinks.mockResolvedValueOnce([link()]).mockResolvedValue([]);
+    mocks.deleteExecutionLink.mockResolvedValue(undefined);
+
+    render(<ModelManagementPanel t={t} />);
+    await waitFor(() => expect(control()).toBeInTheDocument());
+    fireEvent.click(control()!);
+    fireEvent.click(screen.getByText(`${KEY}.removeRouting`));
+
+    await waitFor(() => expect(control()).not.toHaveAttribute('aria-haspopup'));
+    expect(control()).toHaveFocus();
   });
 
   it('shows the surfaces ALL covers as covered, not as switches that could turn them off', async () => {
@@ -398,7 +429,10 @@ describe('ModelManagementPanel - per-model execution link', () => {
 
     fireEvent.click(control()!);
     expect(screen.getByText(new RegExp(`${KEY}\\.routedViaTitle`))).toBeInTheDocument();
-    fireEvent.mouseDown(document.body);
+    // pointerdown: what a browser sends first, and what the portalled popover listens to.
+    // Radix arms that listener on the tick after opening, as a real click never lands sooner.
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    fireEvent.pointerDown(document.body);
     await waitFor(() =>
       expect(screen.queryByText(new RegExp(`${KEY}\\.routedViaTitle`))).toBeNull());
   });
@@ -821,21 +855,48 @@ describe('ModelManagementPanel - per-model execution link', () => {
     fireEvent.click(control()!);
     expect(screen.queryByText(`${KEY}.accessPolicyCaveat`)).toBeNull();
   });
-  it('closes on a second real click of the badge, mousedown included', async () => {
-    // fireEvent.click alone never emits mousedown, which is what hid this: a real click
-    // fires mousedown first, and with the outside-click ref scoped to the panel the
-    // badge counted as outside, so the popover closed and the click reopened it.
+  it('regression - the surface panel is portalled out of the list, which used to clip it', async () => {
+    mocks.getEffectiveModels.mockResolvedValue([buildModel()]);
+    mocks.listExecutionLinks.mockResolvedValue([link()]);
+
+    render(<ModelManagementPanel t={t} />);
+    await waitFor(() => expect(control()).toBeInTheDocument());
+    fireEvent.click(control()!);
+
+    const title = screen.getByText(new RegExp(`${KEY}\\.routedViaTitle`));
+    // The list scrolls, so it clips: a panel inside it lost its right side and bottom.
+    expect(screen.getByTestId('model-list')).not.toContainElement(title);
+    expect(control()).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('a model not linked yet gets a plain button that announces no popup', async () => {
+    mocks.getEffectiveModels.mockResolvedValue([buildModel()]);
+    mocks.listExecutionLinks.mockResolvedValue([]);
+
+    render(<ModelManagementPanel t={t} />);
+    await waitFor(() => expect(control()).toBeInTheDocument());
+
+    expect(control()).not.toHaveAttribute('aria-haspopup');
+    expect(control()).not.toHaveAttribute('aria-expanded');
+  });
+
+  it('closes on a second real click of the badge, pointerdown included', async () => {
+    // A real click starts with pointerdown, which is what the popover's outside-click
+    // detection listens to. If the badge counted as outside, that pointerdown would close
+    // the panel and the click would reopen it, so it could never be closed from the badge.
     mocks.getEffectiveModels.mockResolvedValue([buildModel()]);
     mocks.listExecutionLinks.mockResolvedValue([link()]);
 
     render(<ModelManagementPanel t={t} />);
     await waitFor(() => expect(control()).toBeInTheDocument());
 
-    fireEvent.mouseDown(control()!);
+    fireEvent.pointerDown(control()!);
     fireEvent.click(control()!);
     expect(screen.getByText(new RegExp(`${KEY}\\.routedViaTitle`))).toBeInTheDocument();
 
-    fireEvent.mouseDown(control()!);
+    // Radix arms its outside-click listener on the tick after opening.
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    fireEvent.pointerDown(control()!);
     fireEvent.click(control()!);
     await waitFor(() =>
       expect(screen.queryByText(new RegExp(`${KEY}\\.routedViaTitle`))).toBeNull());

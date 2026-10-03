@@ -20,13 +20,13 @@ import java.util.Base64;
  * not gated. This class is the single client-side spelling so a new caller has something to reach
  * for that is shorter than writing the HMAC by hand.
  *
- * <p><b>The role headers are deliberately NOT part of the signed string.</b> Changing what is
- * signed is not a code change, it is a fleet-wide cutover: during a rolling deploy, pods on the
- * previous image sign the old string while pods on the new one verify the new string, so every
- * in-cluster call 401s until the rollout finishes. Binding the role needs a versioned signature
- * with a transition window where both are accepted, which is a separate piece of work. Until then,
- * a role header is trusted exactly as far as the HMAC boundary it arrived behind, which is why a
- * role must never be read from a request BODY on a user-reachable endpoint.
+ * <p><b>The v1 string does not bind the role headers, the method or the path.</b> That is what
+ * {@link GatewaySignatureV2} adds (CASA LC-035). Changing what is signed is a fleet-wide cutover,
+ * so v2 is sent NEXT TO v1 rather than instead of it: an old verifier ignores the extra header and
+ * checks v1, a new verifier checks v2 and (while {@code gateway.signature.accept-v1} is true) still
+ * accepts a v1-only request from a signer that has not been redeployed yet. v2 is computed at SEND
+ * time by {@link GatewaySignatureV2Interceptor} (or {@link #stampV2} for a non-RestTemplate client),
+ * because only then are the method and the final URI known.
  */
 public final class InternalGatewaySigner {
 
@@ -84,5 +84,23 @@ public final class InternalGatewaySigner {
                 headers.getFirst("X-Organization-ID"),
                 timestamp,
                 gatewaySecretKey));
+    }
+
+    /**
+     * Add the v2 signature to a request that {@link #stamp} already signed, binding the method,
+     * the URI and every header in {@link GatewaySignatureV2#SIGNED_HEADERS} as they are NOW on
+     * {@code headers}. Call it last, once nothing else will touch the request. A request without
+     * {@code X-Gateway-Timestamp} (the caller never signed it) or a blank secret is left alone.
+     */
+    public static void stampV2(HttpHeaders headers, String method, java.net.URI uri, String gatewaySecretKey) {
+        if (gatewaySecretKey == null || gatewaySecretKey.isBlank()) {
+            return;
+        }
+        String timestamp = headers.getFirst(HEADER_TIMESTAMP);
+        if (timestamp == null || headers.getFirst(HEADER_PROVIDER_ID) == null) {
+            return;
+        }
+        headers.set(GatewaySignatureV2.HEADER,
+                GatewaySignatureV2.sign(gatewaySecretKey, method, uri, headers::get, timestamp));
     }
 }

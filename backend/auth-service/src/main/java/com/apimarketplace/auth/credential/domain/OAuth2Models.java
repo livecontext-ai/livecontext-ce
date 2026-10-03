@@ -30,13 +30,30 @@ public final class OAuth2Models {
             // placeholder name as it appears in the OAuth/base URL templates ({shop} -> "shop").
             // The importer derives which fields belong here from the URL templates, so this is
             // data-driven per provider. Empty/absent for the vast majority of providers.
-            @JsonProperty("template_vars") Map<String, String> templateVars
+            @JsonProperty("template_vars") Map<String, String> templateVars,
+            // Optional subset of the integration's scopes to request (LC-072, minimum scope).
+            // Absent/empty = the full template list, exactly as before. Every entry must be a
+            // scope the integration already offers: the subset can only NARROW the request.
+            @JsonProperty("scopes") List<String> scopes
     ) {
         /** Back-compat constructor without templateVars (defaults to none). */
         public OAuth2InitiateRequest(String credentialTemplateId, String credentialName, String clientId,
                 String clientSecret, String environment, String integration, String returnUrl) {
             this(credentialTemplateId, credentialName, clientId, clientSecret, environment, integration,
-                    returnUrl, null);
+                    returnUrl, null, null);
+        }
+
+        /** Back-compat constructor without a scope subset (requests the full template list). */
+        public OAuth2InitiateRequest(String credentialTemplateId, String credentialName, String clientId,
+                String clientSecret, String environment, String integration, String returnUrl,
+                Map<String, String> templateVars) {
+            this(credentialTemplateId, credentialName, clientId, clientSecret, environment, integration,
+                    returnUrl, templateVars, null);
+        }
+
+        /** Never-null view of the requested scope subset (empty = no narrowing). */
+        public List<String> scopesOrEmpty() {
+            return scopes != null ? scopes : List.of();
         }
 
         /**
@@ -63,12 +80,20 @@ public final class OAuth2Models {
             String environment,
             String integration,
             // Per-instance URL host placeholders (see OAuth2InitiateRequest.templateVars).
-            @JsonProperty("template_vars") Map<String, String> templateVars
+            @JsonProperty("template_vars") Map<String, String> templateVars,
+            // Optional scope subset (see OAuth2InitiateRequest.scopes, LC-072).
+            @JsonProperty("scopes") List<String> scopes
     ) {
         /** Back-compat constructor without templateVars (defaults to none). */
         public OAuth2SimpleInitiateRequest(String credentialTemplateId, String credentialName,
                 String environment, String integration) {
-            this(credentialTemplateId, credentialName, environment, integration, null);
+            this(credentialTemplateId, credentialName, environment, integration, null, null);
+        }
+
+        /** Back-compat constructor without a scope subset. */
+        public OAuth2SimpleInitiateRequest(String credentialTemplateId, String credentialName,
+                String environment, String integration, Map<String, String> templateVars) {
+            this(credentialTemplateId, credentialName, environment, integration, templateVars, null);
         }
 
         /**
@@ -83,7 +108,8 @@ public final class OAuth2Models {
                     environment,
                     integration,
                     null,  // No returnUrl for simple requests
-                    templateVars
+                    templateVars,
+                    scopes
             );
         }
     }
@@ -155,11 +181,45 @@ public final class OAuth2Models {
             // user supplied at connect time, captured so the callback can (a) resolve the token
             // URL and (b) persist them into credential_data for runtime base-URL substitution.
             // Older state blobs (pre-this-field) deserialize with null.
-            Map<String, String> templateVars
+            Map<String, String> templateVars,
+            // SHA-256 of the one-time value handed to the INITIATING browser as a cookie
+            // (OAuth2BrowserBinding). The callback completes the flow only when the browser
+            // presents the matching value (LC-005). Older blobs deserialize with null and are
+            // refused, which only affects flows in flight across the deploy (10 min TTL).
+            String browserBindingHash,
+            // Id of the platform/BYOK client row the flow was started with. When set, the
+            // client secret is NOT kept in the blob: the callback re-reads it from that row
+            // (LC-068). Null when the user typed the client credentials inline, in which case
+            // clientSecret carries them ENCRYPTED.
+            Long platformCredentialId
     ) {
         /** Never-null view of the captured template vars. */
         public Map<String, String> templateVarsOrEmpty() {
             return templateVars != null ? templateVars : Map.of();
+        }
+
+        /** Pre-binding constructor (PKCE + org + templateVars): no browser binding, no row id. */
+        public OAuth2State(
+                String userId,
+                String credentialTemplateId,
+                String credentialName,
+                String clientId,
+                String clientSecret,
+                String authUrl,
+                String accessTokenUrl,
+                String scope,
+                String environment,
+                String integration,
+                String iconUrl,
+                String returnUrl,
+                Instant createdAt,
+                String codeVerifier,
+                String organizationId,
+                Map<String, String> templateVars
+        ) {
+            this(userId, credentialTemplateId, credentialName, clientId, clientSecret, authUrl,
+                    accessTokenUrl, scope, environment, integration, iconUrl, returnUrl,
+                    createdAt, codeVerifier, organizationId, templateVars, null, null);
         }
 
         /** Convenience constructor for callers that don't use PKCE. */
@@ -180,7 +240,7 @@ public final class OAuth2Models {
         ) {
             this(userId, credentialTemplateId, credentialName, clientId, clientSecret, authUrl,
                     accessTokenUrl, scope, environment, integration, iconUrl, returnUrl,
-                    createdAt, null, null, null);
+                    createdAt, null, null, null, null, null);
         }
 
         /** Pre-PR19 PKCE constructor - defaults organizationId to null. */
@@ -202,7 +262,7 @@ public final class OAuth2Models {
         ) {
             this(userId, credentialTemplateId, credentialName, clientId, clientSecret, authUrl,
                     accessTokenUrl, scope, environment, integration, iconUrl, returnUrl,
-                    createdAt, codeVerifier, null, null);
+                    createdAt, codeVerifier, null, null, null, null);
         }
 
         /** Pre-templateVars constructor (PKCE + org) - defaults templateVars to null. */
@@ -225,7 +285,7 @@ public final class OAuth2Models {
         ) {
             this(userId, credentialTemplateId, credentialName, clientId, clientSecret, authUrl,
                     accessTokenUrl, scope, environment, integration, iconUrl, returnUrl,
-                    createdAt, codeVerifier, organizationId, null);
+                    createdAt, codeVerifier, organizationId, null, null, null);
         }
     }
 

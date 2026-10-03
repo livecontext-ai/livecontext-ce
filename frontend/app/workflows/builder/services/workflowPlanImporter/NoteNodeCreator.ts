@@ -6,6 +6,7 @@
 import type { Node } from 'reactflow';
 import type { BuilderNodeData } from '../../types';
 import { parsePosition, NODE_SPACING } from './nodeCreationHelpers';
+import { findNodeByAnchorKey } from '../../utils/noteAnchors';
 
 interface NoteFromPlan {
   id?: string;
@@ -17,6 +18,8 @@ interface NoteFromPlan {
   width?: number;
   height?: number;
   position?: { x?: number | string; y?: number | string };
+  /** Plan key of the node the note explains, e.g. "core:check_seen". */
+  attachedTo?: string;
 }
 
 interface NoteCreationResult {
@@ -30,17 +33,23 @@ interface NoteCreationResult {
 function createNoteNode(
   note: NoteFromPlan,
   currentX: number,
-  currentY: number
+  currentY: number,
+  existingNodes: Node<BuilderNodeData>[]
 ): { node: Node<BuilderNodeData>; incrementY: boolean } {
   const noteNodeId = note.id || `note-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-  // Parse position
+  // Parse position. A note without one (an agent wrote it) keeps a NaN position: the
+  // layout places it next to its anchor node, or above the graph for a free note.
   const { position: notePosition, useSavedPosition } = parsePosition(
     note.position,
     currentX,
     currentY,
     `note ${note.id || noteNodeId}`
   );
+
+  // The anchor is resolved to the ReactFlow node now, while every node exists. An anchor
+  // that names no node leaves a free note rather than failing the import.
+  const anchor = findNodeByAnchorKey(existingNodes, note.attachedTo);
 
   // Create note node
   const noteNode: Node<BuilderNodeData> = {
@@ -62,6 +71,7 @@ function createNoteNode(
       noteTextColor: note.textColor,
       noteWidth: note.width,
       noteHeight: note.height,
+      ...(anchor ? { noteAttachedTo: anchor.id } : {}),
     },
   };
 
@@ -69,18 +79,20 @@ function createNoteNode(
 }
 
 /**
- * Create all note nodes from plan
+ * Create all note nodes from plan. Runs after every other node is created, so
+ * `existingNodes` holds every node a note can be attached to.
  */
 export function createNoteNodes(
   notes: NoteFromPlan[],
   startX: number,
-  startY: number
+  startY: number,
+  existingNodes: Node<BuilderNodeData>[] = []
 ): NoteCreationResult {
   const nodes: Node<BuilderNodeData>[] = [];
   let currentY = startY;
 
   for (const note of notes) {
-    const result = createNoteNode(note, startX, currentY);
+    const result = createNoteNode(note, startX, currentY, existingNodes);
 
     nodes.push(result.node);
 

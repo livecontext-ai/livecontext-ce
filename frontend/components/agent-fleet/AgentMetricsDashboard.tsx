@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
+import { urlNullable, urlString, useUrlState, type UrlStateCodec } from '@/hooks/useUrlState';
 import { Activity, Coins, Clock, CheckCircle2, AlertCircle, AlertTriangle, ChevronDown, ChevronRight, ChevronLeft, Wrench, TrendingUp, MessageSquare, BarChart3, Bot, Brain, Database, GitBranch, XCircle, Tag, Shield, Globe } from 'lucide-react';
 import { useTranslations, useLocale } from 'next-intl';
 import { agentService } from '@/lib/api/orchestrator/agent.service';
@@ -34,6 +35,15 @@ import {
 } from 'recharts';
 import { useResourceRowsDeleted } from '@/lib/resources/resourceDeleted';
 import { OrbiLogo } from '@/components/chat/orbi/OrbiShapes';
+
+const CHART_PERIODS = [7, 30, 90];
+/** The chart period in days: one of the three the buttons offer, anything else is the default. */
+const chartPeriodCodec: UrlStateCodec<number> = {
+  parse: (raw) => (CHART_PERIODS.includes(Number(raw)) ? Number(raw) : undefined),
+  serialize: (value) => String(value),
+};
+/** An agent id, or one of the virtual rows (`__chat__`, `__classify__`, ...). */
+const agentIdCodec = urlNullable(urlString);
 
 /**
  * Agent Metrics Dashboard - fleet overview + per-agent drill-down.
@@ -73,7 +83,8 @@ export function AgentMetricsDashboard() {
   const [fleetSummary, setFleetSummary] = useState<FleetSummary | null>(null);
   const [chatSummary, setChatSummary] = useState<ChatSummary | null>(null);
   const [toolStats, setToolStats] = useState<ToolCallStats[]>([]);
-  const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
+  // The selections below live in the address, so a reload reopens the dashboard as it was.
+  const [expandedAgentId, setExpandedAgentId] = useUrlState<string | null>('expanded', null, { codec: agentIdCodec });
   const [agentExecutions, setAgentExecutions] = useState<PagedResponse<AgentExecutionRecord> | null>(null);
   const [chatExecutions, setChatExecutions] = useState<PagedResponse<AgentExecutionRecord> | null>(null);
   const [classifySummary, setClassifySummary] = useState<ChatSummary | null>(null);
@@ -83,10 +94,10 @@ export function AgentMetricsDashboard() {
   const [guardrailExecutions, setGuardrailExecutions] = useState<PagedResponse<AgentExecutionRecord> | null>(null);
   const [browserAgentExecutions, setBrowserAgentExecutions] = useState<PagedResponse<AgentExecutionRecord> | null>(null);
   const [dailyStats, setDailyStats] = useState<DailyStats[]>([]);
-  const [chartPeriod, setChartPeriod] = useState(30);
-  const [chartAgentId, setChartAgentId] = useState<string | null>(null);
-  const [overviewAgentId, setOverviewAgentId] = useState<string | null>(null);
-  const [toolStatsAgentId, setToolStatsAgentId] = useState<string | null>(null);
+  const [chartPeriod, setChartPeriod] = useUrlState('period', 30, { codec: chartPeriodCodec });
+  const [chartAgentId, setChartAgentId] = useUrlState<string | null>('chart', null, { codec: agentIdCodec });
+  const [overviewAgentId, setOverviewAgentId] = useUrlState<string | null>('overview', null, { codec: agentIdCodec });
+  const [toolStatsAgentId, setToolStatsAgentId] = useUrlState<string | null>('tools', null, { codec: agentIdCodec });
   const [filteredToolStats, setFilteredToolStats] = useState<ToolCallStats[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingChart, setLoadingChart] = useState(false);
@@ -122,6 +133,10 @@ export function AgentMetricsDashboard() {
     setFilteredToolStats(null);
   });
 
+  // True when the last load did not come back. An empty agent list then says nothing about
+  // which agents exist.
+  const [loadFailed, setLoadFailed] = useState(false);
+
   // Initial load - everything
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -142,7 +157,10 @@ export function AgentMetricsDashboard() {
         agentService.getAgentTypeSummary('guardrail'),
         browserAgentP,
         agentService.getToolStats(),
-        agentService.getDailyStats(chartPeriod, chartAgentId || undefined),
+        // The chart may open on a selection restored from the address, the general chat included.
+        chartAgentId === '__chat__'
+          ? agentService.getChatDailyStats(chartPeriod)
+          : agentService.getDailyStats(chartPeriod, chartAgentId || undefined),
       ]);
       setAgents(agentsData);
       setFleetSummary(summary);
@@ -152,8 +170,10 @@ export function AgentMetricsDashboard() {
       setBrowserAgentSummary(browserAgentSum);
       setToolStats(tools);
       setDailyStats(daily);
+      setLoadFailed(false);
     } catch (error) {
       console.error('Failed to load agent metrics:', error);
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -217,8 +237,7 @@ export function AgentMetricsDashboard() {
     }
     setExpandedAgentId(agentId);
     setAgentExecutions(null);
-    loadAgentExecutionsPage(agentId, 0);
-  }, [expandedAgentId, loadAgentExecutionsPage]);
+  }, [expandedAgentId, setExpandedAgentId]);
 
   const handleOpenAgentPanel = useCallback((agent: Agent) => {
     if (!sidePanel) return;
@@ -266,8 +285,7 @@ export function AgentMetricsDashboard() {
     setChatExecutions(null);
     setClassifyExecutions(null);
     setGuardrailExecutions(null);
-    loadChatExecutionsPage(0);
-  }, [expandedAgentId, loadChatExecutionsPage]);
+  }, [expandedAgentId, setExpandedAgentId]);
 
   const loadClassifyExecutionsPage = useCallback(async (page: number) => {
     setLoadingClassifyExecutions(true);
@@ -319,8 +337,7 @@ export function AgentMetricsDashboard() {
     setChatExecutions(null);
     setGuardrailExecutions(null);
     setClassifyExecutions(null);
-    loadClassifyExecutionsPage(0);
-  }, [expandedAgentId, loadClassifyExecutionsPage]);
+  }, [expandedAgentId, setExpandedAgentId]);
 
   const handleExpandGuardrail = useCallback(async () => {
     if (expandedAgentId === '__guardrail__') {
@@ -333,8 +350,7 @@ export function AgentMetricsDashboard() {
     setChatExecutions(null);
     setClassifyExecutions(null);
     setGuardrailExecutions(null);
-    loadGuardrailExecutionsPage(0);
-  }, [expandedAgentId, loadGuardrailExecutionsPage]);
+  }, [expandedAgentId, setExpandedAgentId]);
 
   const handleExpandBrowserAgent = useCallback(async () => {
     if (expandedAgentId === '__browser_agent__') {
@@ -348,8 +364,21 @@ export function AgentMetricsDashboard() {
     setClassifyExecutions(null);
     setGuardrailExecutions(null);
     setBrowserAgentExecutions(null);
-    loadBrowserAgentExecutionsPage(0);
-  }, [expandedAgentId, loadBrowserAgentExecutionsPage]);
+  }, [expandedAgentId, setExpandedAgentId]);
+
+  // The expanded row's executions follow the selection rather than the click, so a row restored
+  // from the address (a reload, Back) loads its list exactly as a click does.
+  useEffect(() => {
+    if (!expandedAgentId) return;
+    if (expandedAgentId === '__chat__') loadChatExecutionsPage(0);
+    else if (expandedAgentId === '__classify__') loadClassifyExecutionsPage(0);
+    else if (expandedAgentId === '__guardrail__') loadGuardrailExecutionsPage(0);
+    else if (expandedAgentId === '__browser_agent__') loadBrowserAgentExecutionsPage(0);
+    else loadAgentExecutionsPage(expandedAgentId, 0);
+  }, [
+    expandedAgentId, loadAgentExecutionsPage, loadChatExecutionsPage, loadClassifyExecutionsPage,
+    loadGuardrailExecutionsPage, loadBrowserAgentExecutionsPage,
+  ]);
 
   const handleExecutionClick = useCallback((exec: AgentExecutionRecord, agentName?: string) => {
     if (sidePanel) {
@@ -464,9 +493,9 @@ export function AgentMetricsDashboard() {
     };
   }, [overviewAgentId, combinedSummary, chatSummary, classifySummary, guardrailSummary, browserAgentSummary, agents]);
 
-  // Tool stats filtered by selected agent (API call)
+  // Tool stats filtered by selected agent (API call). It follows the selection rather than the
+  // click, so a selection restored from the address loads its stats too.
   const loadFilteredToolStats = useCallback(async (id: string | null) => {
-    setToolStatsAgentId(id);
     if (!id) { setFilteredToolStats(null); return; }
     setLoadingToolStats(true);
     try {
@@ -487,6 +516,28 @@ export function AgentMetricsDashboard() {
     } catch { setFilteredToolStats([]); }
     finally { setLoadingToolStats(false); }
   }, []);
+
+  useEffect(() => {
+    loadFilteredToolStats(toolStatsAgentId);
+  }, [toolStatsAgentId, loadFilteredToolStats]);
+
+  // An id restored from the address may name an agent that no longer exists. The overview has
+  // nothing to show for it and would hide its own selector, so every selection that matches no
+  // row falls back to "all". Not while loading: the agents are not there to compare against yet.
+  // Nor after a failed load, for the same reason: dropping the selections then would erase from
+  // the address the view a reload after a dropped connection is meant to come back to.
+  useEffect(() => {
+    if (loading || loadFailed) return;
+    const known = (id: string | null) =>
+      id === null || id.startsWith('__') || agents.some(a => a.id === id);
+    if (overviewAgentId && !overviewStats) setOverviewAgentId(null);
+    if (!known(chartAgentId)) setChartAgentId(null);
+    if (!known(toolStatsAgentId)) setToolStatsAgentId(null);
+    if (!known(expandedAgentId)) setExpandedAgentId(null);
+  }, [
+    loading, loadFailed, agents, overviewStats, overviewAgentId, chartAgentId, toolStatsAgentId, expandedAgentId,
+    setOverviewAgentId, setChartAgentId, setToolStatsAgentId, setExpandedAgentId,
+  ]);
 
   const displayToolStats = toolStatsAgentId ? (filteredToolStats ?? []) : toolStats;
 
@@ -1653,7 +1704,7 @@ export function AgentMetricsDashboard() {
             </div>
             <Select
               value={toolStatsAgentId || '__all__'}
-              onValueChange={(v) => loadFilteredToolStats(v === '__all__' ? null : v)}
+              onValueChange={(v) => setToolStatsAgentId(v === '__all__' ? null : v)}
             >
               <SelectTrigger className="min-h-0 h-7 w-auto min-w-[120px] rounded-md px-2 py-1 text-xs border-slate-200 dark:border-slate-700/50">
                 <SelectValue placeholder={t('allAgents')} />

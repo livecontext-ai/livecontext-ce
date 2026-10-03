@@ -109,6 +109,15 @@ public class MessageService {
      * purely observability.
      */
     public void persistAttemptAndError(String conversationId, String userContent, String errorContent) {
+        persistAttemptAndError(conversationId, userContent, errorContent, null);
+    }
+
+    /**
+     * Same, with the attempted message's classification (CASA LC-066): {@code RESTRICTED} for a
+     * delegated task written from an execution that held Gmail / Drive content, null otherwise.
+     */
+    public void persistAttemptAndError(String conversationId, String userContent, String errorContent,
+                                       String userDataSensitivity) {
         if (conversationId == null || conversationId.isBlank()) return;
 
         try {
@@ -117,6 +126,7 @@ public class MessageService {
             userMsg.setRole("user");
             userMsg.setContent(userContent != null ? userContent : "");
             userMsg.setTimestamp(Instant.now().toString());
+            userMsg.setDataSensitivity(userDataSensitivity);
             perMessageTx.executeWithoutResult(status -> addMessage(conversationId, userMsg, false));
         } catch (Exception e) {
             logger.error("Failed to persist user attempt message for conversation {}: {}",
@@ -134,6 +144,75 @@ public class MessageService {
             logger.error("Failed to persist assistant error message for conversation {}: {}",
                     conversationId, e.getMessage());
         }
+    }
+
+    /** LC-004 / LC-066: answers "does this conversation already hold restricted data". */
+    private com.apimarketplace.conversation.service.ai.RestrictedDataTransferGuard restrictedDataTransferGuard;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setRestrictedDataTransferGuard(
+            com.apimarketplace.conversation.service.ai.RestrictedDataTransferGuard restrictedDataTransferGuard) {
+        this.restrictedDataTransferGuard = restrictedDataTransferGuard;
+    }
+
+    /**
+     * Sensitivity of a message about to be stored. A non-user message (assistant, tool, system) is
+     * RESTRICTED when it was tagged so by its producer, when its tool calls came from a Gmail /
+     * Drive integration, or when the conversation already holds restricted data: any later reply
+     * can quote it. A user message is what the user typed and stays NORMAL unless tagged.
+     */
+    com.apimarketplace.common.classification.DataSensitivity classify(String conversationId,
+            Message.MessageRole role, String toolCallsJson, String explicit) {
+        com.apimarketplace.common.classification.DataSensitivity tagged =
+                com.apimarketplace.common.classification.DataSensitivity.parse(explicit);
+        if (tagged.isRestricted() || role == Message.MessageRole.USER) {
+            return tagged;
+        }
+        if (toolCallsMentionRestricted(toolCallsJson)) {
+            return com.apimarketplace.common.classification.DataSensitivity.RESTRICTED;
+        }
+        if (restrictedDataTransferGuard != null
+                && restrictedDataTransferGuard.conversationHoldsRestrictedData(conversationId)) {
+            return com.apimarketplace.common.classification.DataSensitivity.RESTRICTED;
+        }
+        return com.apimarketplace.common.classification.DataSensitivity.NORMAL;
+    }
+
+    private void retagIfRestricted(Message message, String toolCallsJson) {
+        if (toolCallsMentionRestricted(toolCallsJson) && !"REDACTED".equals(message.getDataSensitivity())) {
+            message.setDataSensitivity(com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+        }
+    }
+
+    /** True when an entry of a tool-calls JSON array names a restricted integration. */
+    boolean toolCallsMentionRestricted(String toolCallsJson) {
+        if (toolCallsJson == null || toolCallsJson.isBlank()) {
+            return false;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(toolCallsJson);
+            if (root == null || !root.isArray()) {
+                return false;
+            }
+            for (com.fasterxml.jackson.databind.JsonNode entry : root) {
+                java.util.Map<String, Object> fields = new java.util.HashMap<>();
+                entry.fields().forEachRemaining(e -> {
+                    if (e.getValue().isTextual()) {
+                        fields.put(e.getKey(), e.getValue().asText());
+                    } else if (e.getValue().isBoolean()) {
+                        // The credentialNeeded flag of a card that read nothing.
+                        fields.put(e.getKey(), e.getValue().asBoolean());
+                    }
+                });
+                if (com.apimarketplace.common.classification.RestrictedDataPolicy
+                        .fromToolMetadata(fields).isRestricted()) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            logger.debug("Tool calls JSON not classifiable: {}", e.getMessage());
+        }
+        return false;
     }
 
     /**
@@ -182,6 +261,10 @@ public class MessageService {
         }
 
         Message message = messageMapper.toEntity(messageDto);
+        // LC-066: classify at the one chokepoint every surface writes through (chat, bridge,
+        // stop / interruption / resume handlers, sub-agents, workflow agents).
+        message.setDataSensitivity(classify(conversationId, messageDto.getRoleEnum(),
+                messageDto.getToolCalls(), messageDto.getDataSensitivity()).name());
         if (message.getTimestamp() == null) {
             message.setTimestamp(Instant.now().toString());
         }
@@ -367,6 +450,7 @@ public class MessageService {
                 .orElseThrow(() -> new InvalidMessageException("Message not found: " + messageId));
 
         message.setToolCalls(toolCallsJson);
+        retagIfRestricted(message, toolCallsJson);
         Message savedMessage = messageRepository.save(message);
 
         return messageMapper.toDto(savedMessage);
@@ -390,6 +474,7 @@ public class MessageService {
             throw new InvalidMessageException("Message not found: " + messageId);
         }
         message.setToolCalls(toolCallsJson);
+        retagIfRestricted(message, toolCallsJson);
         Message savedMessage = messageRepository.save(message);
         return messageMapper.toDto(savedMessage);
     }

@@ -45,6 +45,10 @@ public class TableResourceStrategy implements ResourcePublicationStrategy {
     private final DataSourceFileCloneService fileCloneService;
     private final ObjectMapper objectMapper;
 
+    /** The shared snapshot budget; null in plain unit constructions (default limits then). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    com.apimarketplace.publication.service.PublicationSnapshotBudget snapshotBudget;
+
     public TableResourceStrategy(DataSourceClient dataSourceClient,
                                   DataSourceFileCloneService fileCloneService,
                                   ObjectMapper objectMapper) {
@@ -96,9 +100,12 @@ public class TableResourceStrategy implements ResourcePublicationStrategy {
             throw new IllegalArgumentException("Table not found: " + resourceId);
         }
 
-        List<DataSourceItemDto> items = scoped
-                ? dataSourceClient.getAllItems(id, tenantId, organizationId)
-                : dataSourceClient.getAllItems(id, tenantId);
+        // A publish refuses a copy that failed or is over the row budget; the moderation view
+        // (PublicationTableCopies.forReview) gets what it can, as before.
+        List<DataSourceItemDto> items = com.apimarketplace.publication.service.PublicationTableCopies.copy(
+                dataSourceClient, snapshotBudget,
+                com.apimarketplace.publication.service.PublicationSnapshotBudget.Listing.TABLE,
+                id, ds.name(), tenantId, scoped ? organizationId : null);
 
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("name", ds.name());

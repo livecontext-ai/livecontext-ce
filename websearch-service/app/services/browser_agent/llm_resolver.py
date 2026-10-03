@@ -17,7 +17,7 @@ Accepted `provider` values (per `_resolve_llm`):
   - direct, dedicated browser-use binding: google, anthropic, openai
   - direct, OpenAI-wire-compatible (routed via ChatOpenAI + base_url): see
     `OPENAI_COMPATIBLE_BASE_URLS` below - currently deepseek, mistral, xai,
-    perplexity, cohere, zai, openrouter, qwen, moonshot
+    perplexity, cohere, zai, openrouter, qwen, moonshot, minimax
   - bridge: anything when `provider_kind="bridge"` (provider name is a
     HINT only; the bridge resolves the actual upstream)
 
@@ -97,6 +97,7 @@ DEFAULT_BRIDGE_URL = "http://lc-bridge:8093"
 #     - openrouter → https://openrouter.ai/api/v1/chat/completions
 #     - qwen       → https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions
 #     - moonshot   → https://api.moonshot.ai/v1/chat/completions
+#     - minimax    → https://api.minimax.io/v1/chat/completions
 # We strip the `/chat/completions` suffix because browser-use's ChatOpenAI
 # (via openai SDK's AsyncOpenAI(base_url=...)) appends it itself.
 OPENAI_COMPATIBLE_BASE_URLS: dict[str, str] = {
@@ -109,6 +110,9 @@ OPENAI_COMPATIBLE_BASE_URLS: dict[str, str] = {
     "openrouter": "https://openrouter.ai/api/v1",
     "qwen":       "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "moonshot":   "https://api.moonshot.ai/v1",
+    # International endpoint, same default as the Java factory (the .com host
+    # is the mainland-China deployment and takes a different key).
+    "minimax":    "https://api.minimax.io/v1",
 }
 
 

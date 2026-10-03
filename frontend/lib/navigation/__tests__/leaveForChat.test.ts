@@ -18,6 +18,7 @@ describe('leaveForChat', () => {
 
   afterEach(() => {
     Object.defineProperty(window, 'location', { value: realLocation, configurable: true });
+    window.localStorage.clear();
     vi.restoreAllMocks();
   });
 
@@ -35,6 +36,20 @@ describe('leaveForChat', () => {
 
     // The locale travels, because the next screen is the one the person keeps reading: landing
     // an onboarding finished in French on the English chat is a language change nobody asked for.
+    expect(location.href).toBe('/fr/app/chat');
+  });
+
+  it('ends onboarding on the pricing page that sent the person there, once', () => {
+    window.localStorage.setItem('lc_post_onboarding_return_v1', JSON.stringify({
+      path: '/fr/app/settings/pricing?planCode=PRO&lc_ref=NORTHWIND&lc_rec=pro.5.monthly', owner: 'user-1', savedAt: Date.now(),
+    }));
+    const location = captureNavigation();
+
+    leaveForChat('fr');
+
+    expect(location.href).toBe('/fr/app/settings/pricing?planCode=PRO&lc_ref=NORTHWIND&lc_rec=pro.5.monthly');
+    // One use: a later onboarding exit goes to the chat again.
+    leaveForChat('fr');
     expect(location.href).toBe('/fr/app/chat');
   });
 

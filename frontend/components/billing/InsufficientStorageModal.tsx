@@ -18,7 +18,7 @@ import { storageApi, type StorageQuota, type StorageBreakdown, type StorageCateg
 import { RewardCodeInline } from '@/components/reward/RewardCodeInline';
 import { usePersonalOffer } from '@/lib/hooks/usePersonalOffer';
 import { savePersonalOfferJourney } from '@/lib/lifecycle/personalOfferJourney';
-import { hasAttachedPersonalOfferCheckout, personalOfferCheckoutApiError, personalOfferCheckoutBlock } from '@/lib/billing/personal-offer-checkout';
+import { hasAttachedPersonalOfferCheckout, PERSONAL_OFFER_STALE_CODES, personalOfferCheckoutApiError, personalOfferCheckoutBlock, personalOfferPreviewError } from '@/lib/billing/personal-offer-checkout';
 import { ApiError } from '@/lib/api/api-client';
 
 /**
@@ -97,7 +97,10 @@ export default function InsufficientStorageModal() {
         return;
       }
       if (!continueWithoutOffer && (personalOffer.isLoading || personalOffer.isError)) {
-        setCheckoutError(tOffer('verifyUnavailable'));
+        // A refusal the server named (another benefit in the way, the offer expired...) is said;
+        // only a read that failed asks to try again.
+        const refused = personalOffer.isError ? personalOfferPreviewError(personalOffer.errorCode) : null;
+        setCheckoutError(tOffer(refused ?? 'verifyUnavailable'));
         return;
       }
       const hasOffer = !continueWithoutOffer && (!!personalOffer.candidateCode || !!personalOffer.current?.offerId &&
@@ -136,6 +139,7 @@ export default function InsufficientStorageModal() {
       }
     } catch (error) {
       console.error('Error creating subscription from storage modal:', error);
+      if (error instanceof ApiError && PERSONAL_OFFER_STALE_CODES.includes(error.code ?? '')) void personalOffer.refresh();
       const offerPaymentError = error instanceof ApiError ? personalOfferCheckoutApiError(error.code) : null;
       setCheckoutError(offerPaymentError ? tOffer(offerPaymentError) : error instanceof Error ? error.message : tOffer('verifyUnavailable'));
     } finally {

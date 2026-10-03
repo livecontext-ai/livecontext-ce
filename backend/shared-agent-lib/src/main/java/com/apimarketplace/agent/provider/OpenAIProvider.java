@@ -146,6 +146,9 @@ public class OpenAIProvider extends AbstractLLMProvider {
             body.put("tool_choice", "auto");
         }
 
+        // LC-004: store=false on every request that reaches api.openai.com.
+        ProviderRequestPrivacyFlags.apply(getProviderName(), apiUrl, body);
+
         return body;
     }
 

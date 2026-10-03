@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.tools.websearch;
 
 import com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess;
 import com.apimarketplace.agent.cloud.CloudLlmRuntimeCredentials;
+import com.apimarketplace.agent.config.ToolAccessControl;
 import com.apimarketplace.agent.domain.ToolParameter;
 import com.apimarketplace.agent.registry.AgentToolDefinition;
 import com.apimarketplace.agent.registry.ToolCategory;
@@ -40,6 +41,24 @@ import static com.apimarketplace.agent.registry.ToolSchemaGenerator.stringParam;
  * <p>The search relay ({@link CloudRelayWebSearchToolsProvider}) keeps owning the
  * {@code web_search} tool; this provider owns a distinct {@code agent_browse} tool, so
  * the two never collide (tools are registered by name).
+ *
+ * <p><b>LC-029 parity with the cloud edition.</b> Because the capability is registered here
+ * under a DIFFERENT tool name, every control keyed on the tool name has to name it too, and
+ * none of them did:
+ * <ol>
+ *   <li>the synchronous user card, raised before execution by {@code ToolAuthorizationGuard}
+ *       from {@code ToolAuthorizationPolicy.SENSITIVE_ACTIONS}, which now carries an
+ *       {@code "agent_browse"} key;</li>
+ *   <li>the agent's read/write mode, checked in {@link #execute} through
+ *       {@code ToolAccessControl.checkWriteAccess} under the {@code "agent_browse"}
+ *       category;</li>
+ *   <li>the restricted-scope destination bound, which refuses a browse outright exactly as
+ *       {@link WebSearchToolsProvider} does.</li>
+ * </ol>
+ * The corresponding controls on {@link CloudRelayWebSearchToolsProvider} would be no-ops and
+ * are deliberately absent: that provider exposes only {@code search} and {@code help}, and
+ * {@code search} is classified READ under {@code web_search}, so
+ * {@code checkWriteAccess} short-circuits before it reads any mode.
  */
 @Slf4j
 @Component
@@ -69,8 +88,21 @@ public class CloudRelayBrowserAgentToolsProvider implements ToolsProvider {
             + "LLM source (only the user can set that up). Fall back to web_search instead, or "
             + "tell the user browser automation needs the cloud link.";
 
+    static final String RESTRICTED_BROWSE_MESSAGE =
+            "This run is treated as carrying restricted-scope data, so agent_browse is not "
+            + "available: a browser session navigates on its own and its destinations cannot be "
+            + "bounded in advance. Use web_search instead, or continue without browsing.";
+
     private final CloudLlmRuntimeAccess runtimeAccess;
     private final CloudBrowserAgentRelayClient relayClient;
+
+    /**
+     * Tenant-level restricted-scope evidence, shared with {@link WebSearchToolsProvider}.
+     * Field-injected and optional so a unit-constructed provider has no tenant evidence
+     * rather than an invented denial, and so the existing constructor keeps its shape.
+     */
+    @Autowired(required = false)
+    RestrictedScopeTenantDetector restrictedScopeTenantDetector;
 
     public CloudRelayBrowserAgentToolsProvider(
             @Autowired(required = false) CloudLlmRuntimeAccess runtimeAccess,
@@ -110,6 +142,34 @@ public class CloudRelayBrowserAgentToolsProvider implements ToolsProvider {
         if (!VALID_ACTIONS.contains(action)) {
             return ToolExecutionResult.failure(ToolErrorCode.VALIDATION_ERROR,
                     "Invalid action: " + action + ". Valid actions: " + String.join(", ", VALID_ACTIONS));
+        }
+
+        // LC-029, CE edition. The cloud edition gates the identical capability inside
+        // WebSearchToolsProvider; this provider is the CE twin and carried none of it, so a
+        // prompt-injected agent could drive a browser session against a model-chosen host with
+        // no access-mode check at all. Both checks below mirror WebSearchToolsProvider.execute
+        // one for one. 'help' is exempt for the same stated reason: it reaches nothing, costs
+        // nothing, and an agent that cannot read the contract cannot use the tool correctly.
+        // The third layer (the synchronous user card) is not applied here: it is raised BEFORE
+        // execution by ToolAuthorizationGuard, which matches this tool through the
+        // "agent_browse" entry of ToolAuthorizationPolicy.SENSITIVE_ACTIONS.
+        var accessDenied = ToolAccessControl.checkWriteAccess(
+                context != null ? context.credentials() : null, TOOL_NAME, action);
+        if (accessDenied.isPresent()) {
+            return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, accessDenied.get());
+        }
+
+        // Destination bound for an execution carrying restricted-scope content. A browser
+        // session navigates on its own after the first page, so like the cloud twin it is
+        // refused outright rather than allow-listed. Both evidence sources are read through
+        // the SAME helpers the cloud twin uses, so the two editions cannot answer differently:
+        // the explicit execution tag, and the tenant holding a restricted-scope credential
+        // (RestrictedScopeTenantDetector). The unbounded channel is refused on either, which
+        // is why this provider has no mode branch - there is nothing here to bound.
+        if (ACTION_AGENT_BROWSE.equals(action)
+                && (WebSearchToolsProvider.isRestrictedExecution(context)
+                    || WebSearchToolsProvider.isRestrictedScopeTenant(context, restrictedScopeTenantDetector))) {
+            return ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, RESTRICTED_BROWSE_MESSAGE);
         }
 
         String tenantId = context != null ? context.tenantId() : null;
@@ -301,7 +361,12 @@ public class CloudRelayBrowserAgentToolsProvider implements ToolsProvider {
 
         Map<String, Object> actions = new LinkedHashMap<>();
         actions.put("agent_browse", Map.of(
-                "summary", "Spawn an LLM-driven browser session and await its final result.",
+                "summary", "Spawn an LLM-driven browser session and await its final result. "
+                        + "Pauses for the user to approve the call in the general chat the user "
+                        + "is watching (not when you run as a configured agent, inside a workflow "
+                        + "run, as a scheduled task or as a sub-agent), and is unavailable "
+                        + "(PERMISSION_DENIED) whenever the workspace can reach restricted-scope "
+                        + "data such as a connected Gmail account.",
                 "params", Map.of(
                         "task", "required - natural-language goal. Be specific.",
                         "start_url", "optional - if omitted, the agent picks one from the task",
@@ -339,6 +404,21 @@ public class CloudRelayBrowserAgentToolsProvider implements ToolsProvider {
         concepts.put("live_view",
                 "A successful agent_browse returns cdp_ws_url + cdp_token for the live browser view. "
                 + "They are cloud-hosted - the frontend connects directly to that URL.");
+        concepts.put("approval_and_destinations",
+                "agent_browse drives a browser against a host you chose, so in the general chat "
+                + "the user is watching it pauses for the user to approve the call before it "
+                + "runs. That pause does NOT happen when you run as a configured agent, inside a "
+                + "workflow run, as a scheduled task or as a sub-agent: nobody is there to "
+                + "approve, so the call proceeds and the responsibility for the destination is "
+                + "yours. Approve requests are shown to the user, not to you: expect the call to "
+                + "take longer, and do not retry it in a loop. The browse_* session controls "
+                + "never pause - they address a session that was already approved. Separately, "
+                + "if your run is configured read-only for this tool, or the workspace can reach "
+                + "restricted-scope data (for example a connected Gmail account), agent_browse "
+                + "refuses with PERMISSION_DENIED. The second case applies to the whole "
+                + "workspace, not only to a turn that read a mailbox, so expect it on the first "
+                + "call. Treat that refusal as final: report it and answer from web_search "
+                + "results instead of retrying.");
         out.put("concepts", concepts);
         return out;
     }

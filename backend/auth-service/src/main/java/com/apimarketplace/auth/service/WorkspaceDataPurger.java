@@ -55,6 +55,14 @@ public class WorkspaceDataPurger {
     private KeycloakSamlIdentityProviderClient samlIdentityProviderClient;
 
     /**
+     * Snapshots the workspace credentials before the bulk delete below; they are revoked at their
+     * providers once the purge transaction commits (LC-065).
+     * Optional so hand-built purgers in tests keep working; absent means "not attempted".
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.credential.service.CredentialService credentialService;
+
+    /**
      * Every {@code auth.<table>} this purger deletes org-scoped rows from. The tables of the
      * other schemas are each follower's business now; see the {@code *PurgeFollower} classes
      * and their tests, which pin their own lists.
@@ -97,6 +105,7 @@ public class WorkspaceDataPurger {
         // must delete it explicitly here.
         nativeExec("DELETE FROM auth.org_resource_restrictions WHERE organization_id::text = ?", orgId, failures);
         nativeExec("DELETE FROM auth.org_member_quota_limit WHERE org_id = ?::uuid", orgId, failures);
+        revokeCredentialsAtProvider(orgId);
         nativeExec("DELETE FROM auth.credentials WHERE organization_id::text = ?", orgId, failures);
         // A deleted workspace keeps its org row, so its verified domains would keep the domain
         // locked (one verified owner per domain) and routable. Freeing them lets the rightful
@@ -151,6 +160,22 @@ public class WorkspaceDataPurger {
     /** Logs an ORG purge for the followers; see {@link #recordPurge} for where it must sit. */
     public void recordOrgPurge(String orgId, String source) {
         recordPurge("ORG", orgId, source);
+    }
+
+    /**
+     * Best-effort: a provider outage or a lookup failure must never abort the purge, whose
+     * SQL delete stays the source of truth. The lookup is SQL on the purge's connection, hence
+     * its own savepoint (see {@link PurgeSavepoint}).
+     */
+    private void revokeCredentialsAtProvider(String orgId) {
+        if (credentialService == null) {
+            return;
+        }
+        try {
+            PurgeSavepoint.run(em, () -> credentialService.revokeAllForWorkspacePurge(orgId, null));
+        } catch (RuntimeException e) {
+            logger.warn("Workspace purge {}: provider revocation skipped: {}", orgId, e.getClass().getSimpleName());
+        }
     }
 
     /**

@@ -525,12 +525,15 @@ public class ApiSubmissionOrchestrator {
             if (baseUrl.isEmpty()) {
                 baseUrl = "https://api.example.com";
             }
-            // SSRF format check at registration; full DNS+IP check at execution (HttpExecutionService)
+            // SSRF format check at registration; the full DNS+IP check runs on the FINAL url at
+            // execution (HttpExecutionService.validatedTarget). A shipped base url may carry a
+            // placeholder in its HOST ({region}.amazonaws.com), which only validateRegistrationUrl
+            // tolerates: validateUrl refuses a templated host since LC-007.
             String source = data.path("source").asText("");
             if ("custom".equals(source)) {
                 UrlSafetyValidator.validateUrlFormat(baseUrl);
             } else {
-                UrlSafetyValidator.validateUrl(baseUrl);
+                UrlSafetyValidator.validateRegistrationUrl(baseUrl);
             }
             api.setBaseUrl(baseUrl);
 
@@ -573,7 +576,7 @@ public class ApiSubmissionOrchestrator {
             if ("custom".equals(sourceAlt)) {
                 UrlSafetyValidator.validateUrlFormat(baseUrl);
             } else {
-                UrlSafetyValidator.validateUrl(baseUrl);
+                UrlSafetyValidator.validateRegistrationUrl(baseUrl);
             }
             api.setBaseUrl(baseUrl);
             api.setAuthType("none");

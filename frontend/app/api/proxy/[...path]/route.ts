@@ -13,7 +13,9 @@
  *
  * And `external-proxy` itself takes an early return that re-routes it to the local route before
  * reaching the gateway-forwarding block. So everything after that early return (header
- * filtering, `?token` promotion, binary handling) runs for NOTHING: it is dead. Two
+ * filtering, binary handling) runs for NOTHING: it is dead. The LOG LINE is the exception:
+ * `buildLoggedPath` runs BEFORE the branch and `external-proxy` logs through it, so its
+ * redaction (LC-067) is a control that runs in production. Two
  * consequences, both of which have already cost real time:
  *
  * 1. **A proxy bug fixed HERE ships nothing.** The live copy is `proxy.ts`. The `?token`
@@ -30,14 +32,37 @@ import { isJwtShapedToken } from '@/lib/utils/jwtShape';
 import { POST as externalProxyPost } from '@/app/api/external-proxy/route';
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_SPRING_BASE_URL || 'http://localhost:8080';
+/**
+ * Query parameter names whose VALUE is a credential, or unlocks one, and must never be written
+ * to a log line (LC-067). `sig`/`signature` are the HMAC of an anonymous signed URL (on
+ * `/api/files/proxy-signed` the signature IS the authorization, so a logged line would be a
+ * working download link), `key` is the tenant-namespaced storage key it authorizes and `exp`
+ * completes the signed tuple. The rest are the names integrations use for the same thing.
+ */
 const REDACTED_QUERY_KEYS = new Set([
+  'access_token',
+  'api_key',
+  'apikey',
   'authorization',
   'code',
+  'exp',
   'id_token',
+  'key',
+  'password',
   'refresh_token',
+  'secret',
+  'share_token',
+  'sig',
+  'signature',
   'token',
-  'access_token',
 ]);
+
+/**
+ * Paths whose query string is a capability IN ITS ENTIRETY (every parameter belongs to the
+ * signed tuple), so the query is dropped whole rather than redacted per parameter. Matched
+ * against the joined path segments, i.e. without the `/api/proxy/` prefix.
+ */
+const CAPABILITY_QUERY_PATHS = new Set(['files/proxy-signed']);
 
 // Next.js 15 App Router route segment config
 export const maxDuration = 60;
@@ -114,21 +139,16 @@ async function handleRequest(
     // Recuperer les parametres de requete
     const searchParams = new URLSearchParams(request.nextUrl.searchParams);
 
-    // Recuperer le token d'authentification depuis l'Authorization header
-    // Fallback: extraire depuis le query param 'token' (pour <img>, window.open, etc. qui ne peuvent pas envoyer de headers)
+    // Authentication comes from the Authorization header only (LC-044): a JWT-shaped
+    // `?token=` is no longer promoted to a bearer, here or in `proxy.ts`. An opaque RESOURCE
+    // token (invitation lookup, email verification, password reset) stays in the query.
     const authHeader = request.headers.get('authorization');
     // ShareToken is forwarded as-is; Bearer tokens are extracted
     const isShareToken = authHeader?.startsWith('ShareToken ') ?? false;
-    let accessToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
-    // Only hijack a `token` query param as auth when it is actually a JWT access token.
-    // Otherwise it is a RESOURCE token the backend itself reads from ?token= (the
-    // invitation-accept lookup, email verification, password reset, ...) and it MUST
-    // reach the gateway untouched. A raw access token is always a JWT; resource tokens
-    // are opaque/UUID, so this never strips them. (Without this guard the proxy deleted
-    // the invitation token, so /organizations/invitations/info?token= always 404'd.)
-    if (!accessToken && searchParams.has('token') && isJwtShapedToken(searchParams.get('token'))) {
-      accessToken = searchParams.get('token');
-      searchParams.delete('token'); // ne pas transmettre le token brut au Gateway
+    const accessToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+    // A JWT-shaped `?token=` is stripped, never promoted and never forwarded in the URL.
+    if (isJwtShapedToken(searchParams.get('token'))) {
+      searchParams.delete('token');
     }
 
     const queryString = searchParams.toString();
@@ -197,7 +217,11 @@ async function handleRequest(
     const skipHeaders = new Set(['content-encoding', 'content-length', 'transfer-encoding', 'x-request-id']);
     response.headers.forEach((value, key) => {
       const lk = key.toLowerCase();
-      if (!lk.startsWith('access-control-') && !skipHeaders.has(lk)) {
+      if (lk === 'set-cookie') {
+        // Several Set-Cookie headers are several cookies: `set` would keep only the last one
+        // (the OAuth connect relies on its per-flow binding cookie reaching the browser).
+        responseHeaders.append(key, value);
+      } else if (!lk.startsWith('access-control-') && !skipHeaders.has(lk)) {
         responseHeaders.set(key, value);
       }
     });
@@ -303,13 +327,10 @@ async function callExternalProxyLocally(
 
 function createResponseHeaders(requestId: string, contentType?: string): Headers {
   const responseHeaders = new Headers();
-  responseHeaders.set('Access-Control-Allow-Origin', '*');
-  responseHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  responseHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Request-Id, X-Active-Organization-ID');
-  // No Access-Control-Allow-Credentials: the wildcard origin above is invalid alongside
-  // credentialed CORS (browsers reject the pair), and auth is Bearer-token in the
-  // Authorization header, never an ambient cookie, so credentials mode is not needed.
-  responseHeaders.set('Access-Control-Expose-Headers', 'X-Request-Id');
+  // No CORS headers at all: this handler answers /api/proxy/external-proxy, an authenticated
+  // URL fetcher whose only callers are the app's own pages (tools-api.service, the MCP and
+  // developer "Test" tabs), all same-origin. A wildcard Access-Control-Allow-Origin let ANY
+  // site read its responses cross-origin; a same-origin caller needs no CORS header.
   responseHeaders.set('X-Request-Id', requestId);
   if (contentType) {
     responseHeaders.set('Content-Type', contentType);
@@ -318,6 +339,9 @@ function createResponseHeaders(requestId: string, contentType?: string): Headers
 }
 
 function buildLoggedPath(path: string, searchParams: URLSearchParams): string {
+  if (CAPABILITY_QUERY_PATHS.has(path)) {
+    return path;
+  }
   const sanitized = new URLSearchParams(searchParams);
   for (const key of Array.from(sanitized.keys())) {
     if (REDACTED_QUERY_KEYS.has(key.toLowerCase())) {

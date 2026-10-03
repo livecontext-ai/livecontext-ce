@@ -71,7 +71,7 @@ class AgentDelegationModuleAccessModeTest {
         assertThat(result.get().errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
         assertThat(result.get().error()).contains("read-only").contains("assign");
         verify(taskService, never())
-            .assignTask(anyString(), any(), any(), any(), anyBoolean());
+            .assignTask(anyString(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -98,7 +98,7 @@ class AgentDelegationModuleAccessModeTest {
         assertThat(result.get().errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
         assertThat(result.get().error()).contains("not in your allowed agents list");
         verify(taskService, never())
-            .assignTask(anyString(), any(), any(), any(), anyBoolean());
+            .assignTask(anyString(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -126,7 +126,7 @@ class AgentDelegationModuleAccessModeTest {
         assertThat(result.get().errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
         assertThat(result.get().error()).contains("reviewer_agent_id").contains("not in your allowed agents list");
         verify(taskService, never())
-            .assignTask(anyString(), any(), any(), any(), anyBoolean());
+            .assignTask(anyString(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -156,7 +156,7 @@ class AgentDelegationModuleAccessModeTest {
         assertThat(result.get().errorCode()).isEqualTo(ToolErrorCode.PERMISSION_DENIED);
         assertThat(result.get().error()).contains("not in your allowed agents list");
         verify(taskService, never())
-            .updateTask(anyString(), any(), any(), any(), any());
+            .updateTask(anyString(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -185,7 +185,7 @@ class AgentDelegationModuleAccessModeTest {
         updated.setTitle("Updated");
         updated.setPriority(AgentTaskEntity.PRIORITY_NORMAL);
         updated.setStatus(AgentTaskEntity.STATUS_PENDING);
-        when(taskService.updateTask(anyString(), any(), any(), any(), any()))
+        when(taskService.updateTask(anyString(), any(), any(), any(), any(), any()))
             .thenReturn(updated);
 
         Optional<ToolExecutionResult> result = module().execute("task_update",
@@ -199,7 +199,7 @@ class AgentDelegationModuleAccessModeTest {
         assertThat(result.get().success()).isTrue();
 
         ArgumentCaptor<UpdateTaskRequest> requestCaptor = ArgumentCaptor.forClass(UpdateTaskRequest.class);
-        verify(taskService).updateTask(eq(TENANT), eq(taskId), eq(callerAgentId), any(), requestCaptor.capture());
+        verify(taskService).updateTask(eq(TENANT), eq(taskId), eq(callerAgentId), any(), requestCaptor.capture(), any());
         assertThat(requestCaptor.getValue().agentId()).isEqualTo(allowedAgentId);
     }
 

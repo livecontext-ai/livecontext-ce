@@ -44,7 +44,8 @@ vi.mock('@/lib/api', () => ({
   },
 }));
 
-vi.mock('@/lib/api/error-utils', () => ({
+vi.mock('@/lib/api/error-utils', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/error-utils')>()),
   is402Error: () => false,
   is413StorageError: () => false,
 }));

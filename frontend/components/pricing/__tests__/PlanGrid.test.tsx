@@ -119,3 +119,68 @@ describe('PlanCardToggle', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
   });
 });
+
+describe('PlanGrid focus (a partner offer opens on the plan the partner chose)', () => {
+  it('opens on the focused card at once, then slides back to it on each new request', () => {
+    stubLayout({ rail: 1104, cardWidth: 316 });
+    const { rerender } = render(<PlanGrid groups={groups} focus={{ index: 3, nonce: 0 }} />);
+    const rail = screen.getByTestId('plan-grid');
+
+    // Team is card 3: 3 steps of 316px, with no animation on arrival.
+    expect(rail.scrollTo).toHaveBeenLastCalledWith({ left: 948, behavior: 'auto' });
+
+    rerender(<PlanGrid groups={groups} focus={{ index: 3, nonce: 1 }} />);
+    expect(rail.scrollTo).toHaveBeenLastCalledWith({ left: 948, behavior: 'smooth' });
+    expect(rail.scrollTo).toHaveBeenCalledTimes(2);
+  });
+
+  it('a render that changes neither the card nor the request does not scroll again', () => {
+    stubLayout({ rail: 1104, cardWidth: 316 });
+    const { rerender } = render(<PlanGrid groups={groups} focus={{ index: 1, nonce: 0 }} />);
+    const rail = screen.getByTestId('plan-grid');
+
+    rerender(<PlanGrid groups={groups} focus={{ index: 1, nonce: 0 }} />);
+
+    expect(rail.scrollTo).toHaveBeenCalledTimes(1);
+  });
+
+  it('without a focus, the rail stays where it is', () => {
+    stubLayout({ rail: 1104, cardWidth: 316 });
+    render(<PlanGrid groups={groups} />);
+
+    expect(screen.getByTestId('plan-grid').scrollTo).not.toHaveBeenCalled();
+  });
+});
+
+describe('PlanGrid fitThree (a partner offer shows three plans)', () => {
+  it('sizes the columns so three cards fill a wide rail, and keeps the landing sizing otherwise', () => {
+    const three = [{ key: 'offer', cards: ['Starter', 'Pro', 'Team'].map(card) }];
+    const { unmount } = render(<PlanGrid groups={three} fitThree />);
+    expect(screen.getByTestId('plan-grid').className).toContain('@min-[62rem]:auto-cols-[calc((100%-2.5rem)/3)]');
+    unmount();
+
+    render(<PlanGrid groups={three} />);
+    expect(screen.getByTestId('plan-grid').className).toContain('@min-[62rem]:auto-cols-[calc((100%-3.75rem)/3.3)]');
+  });
+});
+
+describe('PlanGrid measuring', () => {
+  it('regression: watches every card, so a card that grows after the first measure is not clipped (its button included)', () => {
+    const observed: Element[] = [];
+    class RecordingObserver {
+      observe(el: Element) { observed.push(el); }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', RecordingObserver);
+    try {
+      render(<PlanGrid groups={groups} />);
+
+      const cells = Array.from(document.querySelectorAll('[data-plan-cell]'));
+      expect(cells).toHaveLength(5);
+      for (const cell of cells) expect(observed).toContain(cell);
+    } finally {
+      vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    }
+  });
+});

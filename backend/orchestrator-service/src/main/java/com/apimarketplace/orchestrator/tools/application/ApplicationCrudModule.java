@@ -129,6 +129,14 @@ public class ApplicationCrudModule implements ToolModule {
                 context != null ? context.orgId() : null,
                 context != null ? context.orgRole() : null, "application", action);
         if (roleDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, roleDenied.get()));
+        // LC-066: create IS the application tool's publish (a PRIVATE marketplace listing whose
+        // snapshot copies the plan, its interfaces and its tables' rows), so a restricted
+        // execution cannot run it. acquire / uninstall / execute and the reads are unaffected.
+        if ("create".equals(action) && context != null && com.apimarketplace.common.classification.DataSensitivity
+                .fromCredentials(context.credentials()).isRestricted()) {
+            return Optional.of(ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                com.apimarketplace.common.classification.RestrictedDataPolicy.publishRefusalMessage("application")));
+        }
 
         return Optional.of(switch (action) {
             case "search" -> executeSearch(parameters, context);

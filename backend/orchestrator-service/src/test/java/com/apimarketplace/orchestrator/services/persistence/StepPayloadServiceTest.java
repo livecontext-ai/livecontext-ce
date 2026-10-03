@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.services.persistence;
 
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys;
 
 import com.apimarketplace.common.storage.exception.QuotaExceededException;
@@ -467,8 +468,14 @@ class StepPayloadServiceTest {
         @Test
         @DisplayName("Should persist skipped node payload")
         void shouldPersistSkippedNodePayload() {
+            // LC-066/CASA re-audit item 4: the legacy no-runId overload now always consults
+            // isRunRestricted(null) (false) and therefore always calls the 13-arg
+            // saveJsonWithContext overload with an explicit DataSensitivity.NORMAL tag, not the
+            // old bare 11-arg one - see StepPayloadServiceRestrictedDataTest for the
+            // restricted-run coverage of this same call.
             UUID expectedStorageId = UUID.randomUUID();
-            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(), any(), anyInt(), any(), any()))
+            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(),
+                    any(), anyInt(), anyInt(), any(), any(), eq(DataSensitivity.NORMAL)))
                     .thenReturn(expectedStorageId);
 
             Map<String, Object> skipPayload = Map.of(
@@ -479,13 +486,16 @@ class StepPayloadServiceTest {
             UUID storageId = service.persistSkippedNodePayload("tenant-1", skipPayload);
 
             assertEquals(expectedStorageId, storageId);
-            verify(storageService).saveJsonWithContext(eq("tenant-1"), eq(skipPayload), anyString(), isNull(), isNull(), isNull(), isNull(), isNull(), eq(0), isNull(), eq("SKIPPED_NODE"));
+            verify(storageService).saveJsonWithContext(eq("tenant-1"), eq(skipPayload), anyString(), isNull(),
+                    isNull(), isNull(), isNull(), isNull(), eq(0), eq(0), isNull(), eq("SKIPPED_NODE"),
+                    eq(DataSensitivity.NORMAL));
         }
 
         @Test
         @DisplayName("Should return null when storage throws exception")
         void shouldReturnNullWhenStorageThrowsException() {
-            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(), any(), anyInt(), any(), any()))
+            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(),
+                    any(), anyInt(), anyInt(), any(), any(), eq(DataSensitivity.NORMAL)))
                     .thenThrow(new RuntimeException("Storage error"));
 
             Map<String, Object> skipPayload = Map.of("status", "SKIPPED");

@@ -26,6 +26,22 @@ public final class AdminRoleGuard {
     }
 
     /**
+     * Constant-time check of an in-cluster admin token (the {@code X-Internal-Admin-Token} the
+     * catalog importer presents) against the configured secret. Deny by default: a blank configured
+     * secret matches nothing. Both sides are trimmed, so a trailing newline in a provisioned secret
+     * does not refuse every legitimate caller.
+     */
+    public static boolean isInternalAdminToken(String configuredToken, String presentedToken) {
+        if (configuredToken == null || presentedToken == null) return false;
+        String expected = configuredToken.trim();
+        String presented = presentedToken.trim();
+        if (expected.isEmpty() || presented.isEmpty()) return false;
+        return java.security.MessageDigest.isEqual(
+                expected.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                presented.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /**
      * Returns a 403 Forbidden response if not admin, or null if admin.
      * Usage: {@code var denied = AdminRoleGuard.denyIfNotAdmin(roles); if (denied != null) return denied;}
      */

@@ -9,6 +9,8 @@ import com.apimarketplace.interfaces.client.dto.InterfaceDto;
 import com.apimarketplace.interfaces.client.dto.InterfaceSnapshotDto;
 import com.apimarketplace.orchestrator.config.OrchestratorLimitsConfig;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
+import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan;
+import com.apimarketplace.orchestrator.services.interfaces.InterfacePlanExtractor;
 import com.apimarketplace.orchestrator.services.interfaces.InterfaceRenderer;
 import com.apimarketplace.orchestrator.services.interfaces.InterfaceTemplateDefaults;
 import com.apimarketplace.datasource.client.DataSourceClient;
@@ -498,6 +500,69 @@ public class InterfaceRenderService implements InterfaceRenderer {
     }
 
     /**
+     * CASA LC-037 follow-up: does the RUN's OWN workflow plan reference {@code interfaceId}?
+     *
+     * <p>{@link #render} (via {@code /api/interfaces/{id}/render}) is the ONE render endpoint an
+     * APPLICATION share token can reach (see the gateway/CE {@code SHARE_APPLICATION_GET_ALLOW}
+     * allow-list: {@code interfaces/{uuid}(/render)?} - {@code /items/{itemIndex}}, {@code
+     * /run-info}, {@code /items-count}, {@code /render-datasource} are NOT allow-listed).
+     * {@link #callerCanAccessRun} only proves the runId is the shared publication's own run
+     * (via {@link WorkflowControllerHelper#shareContextPermitsRun}); it says nothing about
+     * whether the {@code interfaceId} in the path is one that run's plan actually wires up. A
+     * share holder pairing the shared runId with ANY other interface UUID the owner has ever
+     * built would otherwise get it rendered (its template, its resolved run data) - same class
+     * of gap as gap 1 in {@code ShareContextResourceBinding}'s javadoc, one hop earlier.
+     *
+     * <p>Reuses {@link InterfacePlanExtractor#extractInterfaceIds}, the same derivation
+     * {@code InternalAccessController.isInterfaceReferencedByWorkflow} exposes to
+     * interface-service for the bare-GET gap - here read straight off the run's own
+     * {@code WorkflowEntity} (already loaded in this transaction via the run's lazy
+     * association) instead of a second HTTP round trip, since this service already lives in
+     * orchestrator-service.
+     *
+     * <p>Callers MUST gate this behind a share context (see {@code ShareContextResourceBinding}):
+     * a non-share caller (builder preview of a draft interface not yet saved into the plan,
+     * live testing before the plan round-trips, ...) legitimately renders an interface the
+     * CURRENT plan does not (yet) reference, and must not be broken by this check.
+     *
+     * <p><b>Round-3 audit fix:</b> reads the RUN's OWN frozen plan ({@code run.getPlan()}) first,
+     * falling back to the workflow's live plan only when the run carries no cached plan
+     * (null/empty - legacy/corrupt state). The prior version always read {@code workflow.getPlan()}
+     * (the live draft), so editing the plan after a run started - e.g. removing the interface node
+     * from the live plan, or moving the run's node behind an edit the run never executed - silently
+     * changed what a share holder could render for an ALREADY RUNNING/COMPLETED run, decoupled from
+     * what that run actually wired up. Same convention as {@code WorkflowResumeService
+     * #refreshPlanFromWorkflowDefinition}, {@code SignalResumeService#performDeferredReset}, and
+     * {@code StepRerunService#closeCycleAfterAutoExecution}: the run's cached plan is authoritative,
+     * the live workflow definition is only a last-resort fallback.
+     */
+    @Transactional(readOnly = true)
+    public boolean isInterfaceReferencedByRun(UUID interfaceId, String runId) {
+        if (interfaceId == null || runId == null || runId.isBlank()) {
+            return false;
+        }
+        return workflowRunRepository.findByRunIdPublic(runId)
+            .map(run -> {
+                var workflow = run.getWorkflow();
+                Map<String, Object> planMap = run.getPlan();
+                if (planMap == null || planMap.isEmpty()) {
+                    // No frozen plan cached on the run (legacy/corrupt state) - fall back to the
+                    // workflow's live plan, same convention as WorkflowResumeService /
+                    // SignalResumeService / StepRerunService.
+                    planMap = workflow != null ? workflow.getPlan() : null;
+                }
+                if (planMap == null || planMap.isEmpty()) {
+                    return false;
+                }
+                String workflowId = workflow != null ? workflow.getId().toString() : runId;
+                String tenantId = workflow != null ? workflow.getTenantId() : null;
+                WorkflowPlan plan = WorkflowPlan.fromMap(planMap, workflowId, tenantId);
+                return interfacePlanExtractor.extractInterfaceIds(plan).contains(interfaceId);
+            })
+            .orElse(false);
+    }
+
+    /**
      * Legacy personal-scope gate for authenticated render endpoints. New REST
      * callers should use {@link #callerCanAccessRun(String, String, String)}
      * so org-workspace teammates use the same strict-scope predicate as the
@@ -722,7 +787,8 @@ public class InterfaceRenderService implements InterfaceRenderer {
                 ? ReportedParams.WITHHELD_CREDENTIAL
                 : ReportedParams.valueFrom(mappings.get(name), entry.getValue());
             logger.info("[InterfaceRender] var {} = {}", name,
-                shown instanceof String text ? text : ResolvedValuePreview.describe(shown));
+                shown instanceof String text ? com.apimarketplace.common.logging.PayloadLogSafety.describeText(text, 200)
+                    : (com.apimarketplace.common.logging.PayloadLogSafety.isPayloadLoggingEnabled() ? ResolvedValuePreview.describe(shown) : com.apimarketplace.common.logging.PayloadLogSafety.describeAny(shown)));
         }
 
         Set<String> missing = new java.util.LinkedHashSet<>(mappings.keySet());

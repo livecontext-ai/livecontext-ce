@@ -18,7 +18,9 @@ const SelectTrigger = React.forwardRef<
     className={cn(
       // min-h-9 = the app-wide standard control height (h-auto lets multi-line
       // option descriptions still expand the trigger).
-      "flex h-auto min-h-9 w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-3.5 py-2 text-sm text-[var(--text-primary)] ring-offset-background placeholder:text-[var(--text-secondary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] focus:ring-offset-0 hover:bg-[var(--bg-secondary)] transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
+      // text-start: a button centres its text, and `line-clamp-1` stretches a value that does not
+      // fit to the whole trigger, so only the TRUNCATED values used to render centred.
+      "flex h-auto min-h-9 w-full items-center justify-between text-start rounded-xl border border-theme bg-[var(--bg-primary)] px-3.5 py-2 text-sm text-[var(--text-primary)] ring-offset-background placeholder:text-[var(--text-secondary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] focus:ring-offset-0 hover:bg-[var(--bg-secondary)] transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
       className
     )}
     {...props}

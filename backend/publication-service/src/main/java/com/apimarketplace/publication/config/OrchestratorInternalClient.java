@@ -1,5 +1,6 @@
 package com.apimarketplace.publication.config;
 
+import com.apimarketplace.common.publication.ShowcaseCaptureContract;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
@@ -387,6 +388,87 @@ public class OrchestratorInternalClient {
             return null;
         } catch (Exception e) {
             log.warn("Showcase run validation failed for {}: {}", runId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** LC-066: the orchestrator's answer about a showcase's source run. */
+    public enum RunRestriction {
+        /** The run holds Gmail or Google Drive data. */
+        RESTRICTED,
+        /** The run exists and holds none. */
+        NOT_RESTRICTED,
+        /** The run no longer exists: only the snapshot's own content can be judged. */
+        RUN_GONE,
+        /** No definite answer (error, timeout, or an orchestrator without this lookup). */
+        UNKNOWN
+    }
+
+    /**
+     * LC-066: whether a run holds Gmail or Google Drive data (RESTRICTED), or no longer exists.
+     *
+     * @return the orchestrator's definite answer, or {@link RunRestriction#UNKNOWN} when it could
+     *         not be obtained (the caller must then treat the run as possibly restricted). A reply
+     *         that does not say whether the run exists is UNKNOWN too: it comes from an
+     *         orchestrator that predates the run-existence answer.
+     */
+    public RunRestriction runRestriction(String runIdPublic) {
+        return runRestrictionAnswer(runIdPublic).status();
+    }
+
+    /**
+     * LC-066: the orchestrator's answer, with WHEN a restricted run became restricted (its first
+     * restricted payload), when the orchestrator knows it.
+     *
+     * @param status            as {@link #runRestriction}
+     * @param firstRestrictedAt for {@link RunRestriction#RESTRICTED} only: when the run's first
+     *                          restricted payload was written, or null when unknown (an
+     *                          orchestrator that predates it, or no restricted row written yet)
+     */
+    public record RunRestrictionAnswer(RunRestriction status, java.time.Instant firstRestrictedAt) {
+        public static RunRestrictionAnswer of(RunRestriction status) {
+            return new RunRestrictionAnswer(status, null);
+        }
+    }
+
+    /** {@link #runRestriction}, with the moment the run became restricted when it is known. */
+    public RunRestrictionAnswer runRestrictionAnswer(String runIdPublic) {
+        String url = baseUrl + "/api/internal/publication-support/runs/" + runIdPublic + "/restricted";
+        HttpEntity<Void> entity = new HttpEntity<>(buildHeaders(null));
+        try {
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+                    url, HttpMethod.GET, entity, new ParameterizedTypeReference<>() {});
+            Map<String, Object> body = response.getBody();
+            if (body == null) {
+                return RunRestrictionAnswer.of(RunRestriction.UNKNOWN);
+            }
+            Object exists = body.get(ShowcaseCaptureContract.RUN_EXISTS_KEY);
+            if (Boolean.FALSE.equals(exists)) {
+                return RunRestrictionAnswer.of(RunRestriction.RUN_GONE);
+            }
+            Object restricted = body.get(ShowcaseCaptureContract.RUN_RESTRICTED_KEY);
+            if (!Boolean.TRUE.equals(exists) || !(restricted instanceof Boolean b)) {
+                return RunRestrictionAnswer.of(RunRestriction.UNKNOWN);
+            }
+            if (!b) {
+                return RunRestrictionAnswer.of(RunRestriction.NOT_RESTRICTED);
+            }
+            return new RunRestrictionAnswer(RunRestriction.RESTRICTED,
+                    parseInstant(body.get(ShowcaseCaptureContract.FIRST_RESTRICTED_AT_KEY)));
+        } catch (Exception e) {
+            log.warn("Run restriction lookup failed for {}: {}", runIdPublic, e.getMessage());
+            return RunRestrictionAnswer.of(RunRestriction.UNKNOWN);
+        }
+    }
+
+    /** An ISO-8601 instant, or null when absent or unreadable (then treated as unknown). */
+    public static java.time.Instant parseInstant(Object value) {
+        if (!(value instanceof String text) || text.isBlank()) {
+            return null;
+        }
+        try {
+            return java.time.Instant.parse(text.trim());
+        } catch (java.time.format.DateTimeParseException e) {
             return null;
         }
     }

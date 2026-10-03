@@ -83,7 +83,9 @@ class VectorIndexLifecyclePostgresTest {
                     id BIGSERIAL PRIMARY KEY,
                     data JSONB,
                     priority INTEGER,
-                    created_at TIMESTAMPTZ DEFAULT now())
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    -- V538 (CASA LC-066): the vector search selects it.
+                    data_sensitivity VARCHAR(16) NOT NULL DEFAULT 'NORMAL')
                 """);
         jdbc.execute("""
                 CREATE TABLE data_source_vectors (

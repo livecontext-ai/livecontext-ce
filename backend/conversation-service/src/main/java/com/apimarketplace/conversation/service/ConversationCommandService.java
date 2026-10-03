@@ -338,6 +338,81 @@ public class ConversationCommandService {
         }
     }
 
+    /**
+     * CASA LC-066: the conversation a RESTRICTED delegated task's turns run in for one agent (the
+     * task's assignee or its reviewer), if it exists. Workspace-strict like the agent conversation.
+     */
+    public Optional<ConversationDto> findTaskConversation(String organizationId, String agentId, String taskId) {
+        TenantResolver.requireOrgId(organizationId);
+        requireTaskKey(agentId, taskId);
+        java.util.List<Conversation> hits = conversationRepository.findTaskConversations(organizationId, agentId, taskId);
+        return hits.isEmpty() ? Optional.empty() : Optional.of(conversationMapper.toDto(hits.get(0)));
+    }
+
+    /**
+     * CASA LC-066: find or create the conversation a RESTRICTED delegated task's turns run in for
+     * one agent, keyed by (agent, task) and owned by the same user and workspace as the agent's
+     * own conversation. A RESTRICTED task's prompt is stored RESTRICTED, and a conversation that
+     * holds one restricted message is restricted for good (every later turn re-sends it), so these
+     * turns must not land in the agent's main conversation, which would then refuse or tag every
+     * later task, schedule and chat of that agent. Stored with {@code memoryEnabled = false}, so it
+     * is never a candidate for the one-primary-conversation-per-agent indexes (V212), and the
+     * main-conversation lookup ignores it (task_id set).
+     */
+    public ConversationDto findOrCreateTaskConversation(String userId, String organizationId,
+                                                        String agentId, String taskId, String title) {
+        Optional<ConversationDto> existing = findTaskConversation(organizationId, agentId, taskId);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        try {
+            // Through the Spring proxy so REQUIRES_NEW applies: the INSERT commits (or hits the
+            // unique index) here, not at the outer commit, after this method has returned.
+            return self.insertTaskConversationInNewTransaction(userId, organizationId, agentId, taskId, title);
+        } catch (DataIntegrityViolationException e) {
+            // uq_conversations_task_per_agent (V565): a concurrent turn of the same task (an
+            // assignee retry racing a reviewer retry, another pod) created it first. Its insert
+            // is committed by now, and the outer transaction is clean (the failed insert ran in
+            // the suspended inner one): return the winner, so both callers share one conversation.
+            Optional<ConversationDto> winner = findTaskConversation(organizationId, agentId, taskId);
+            if (winner.isPresent()) {
+                logger.info("Lost the task conversation race for agent {} task {} (org {}); returning winner {}",
+                        agentId, taskId, organizationId, winner.get().getId());
+                return winner.get();
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * <b>Internal only.</b> The INSERT of {@link #findOrCreateTaskConversation}, in a fresh
+     * transaction so a unique-index violation (V565) surfaces at the call site. Public for the
+     * Spring proxy.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ConversationDto insertTaskConversationInNewTransaction(String userId, String organizationId,
+                                                                  String agentId, String taskId, String title) {
+        Conversation conversation = new Conversation(userId,
+                title == null || title.isBlank() ? "Agent Chat" : title, null, null);
+        conversation.setOrganizationId(organizationId);
+        conversation.setAgentId(agentId);
+        conversation.setTaskId(taskId);
+        conversation.setMemoryEnabled(false);
+        conversation.setActive(true);
+        conversation.setUpdatedAt(LocalDateTime.now());
+        // Flushed here so a V565 unique violation is raised (and translated) inside this method.
+        Conversation saved = conversationRepository.saveAndFlush(conversation);
+        logger.info("Created task conversation {} for agent {} task {} (org {})",
+                saved.getId(), agentId, taskId, organizationId);
+        return conversationMapper.toDto(saved);
+    }
+
+    private static void requireTaskKey(String agentId, String taskId) {
+        if (agentId == null || agentId.isBlank() || taskId == null || taskId.isBlank()) {
+            throw new IllegalArgumentException("agentId and taskId are required");
+        }
+    }
+
     public ConversationDto updateConversation(String conversationId, ConversationDto conversationDto) {
         logger.info("Updating conversation: {}", conversationId);
 

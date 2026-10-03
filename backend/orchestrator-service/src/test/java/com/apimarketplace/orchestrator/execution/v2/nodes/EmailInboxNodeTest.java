@@ -387,12 +387,36 @@ class EmailInboxNodeTest {
     @DisplayName("execute() - read mode error handling")
     class ReadErrorTests {
 
+        // These tests talk to a local server. The shared SSRF guard (LC-075) refuses every
+        // private address, and ALL of 127/8 with no opt-out, so the server is reached on a
+        // NON-loopback address of this machine, opted in as a /32: the same escape hatch a
+        // self-hosted install uses for its own mail server. Without it every test here would
+        // fail at the guard instead of reaching the mail-server path it is about.
+        private String localHost;
+
+        @BeforeEach
+        void allowThisMachinesAddress() throws java.net.SocketException {
+            java.net.InetAddress local = java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces()).stream()
+                    .filter(nic -> { try { return nic.isUp() && !nic.isLoopback(); } catch (java.net.SocketException e) { return false; } })
+                    .flatMap(nic -> java.util.Collections.list(nic.getInetAddresses()).stream())
+                    .filter(a -> a instanceof java.net.Inet4Address && !a.isLoopbackAddress() && !a.isLinkLocalAddress())
+                    .findFirst().orElse(null);
+            org.junit.jupiter.api.Assumptions.assumeTrue(local != null, "no non-loopback IPv4 address on this machine");
+            localHost = local.getHostAddress();
+            System.setProperty(com.apimarketplace.common.web.UrlSafetyValidator.PRIVATE_EGRESS_ALLOW_LIST_PROPERTY, localHost + "/32");
+        }
+
+        @org.junit.jupiter.api.AfterEach
+        void restoreEgressPolicy() {
+            System.clearProperty(com.apimarketplace.common.web.UrlSafetyValidator.PRIVATE_EGRESS_ALLOW_LIST_PROPERTY);
+        }
+
         @Test
         @DisplayName("Should fail gracefully when the IMAP server is unreachable")
         void shouldFailOnUnreachableServer() {
             // host:port that will not accept an IMAP connection -> connection error path
             Map<String, Object> cred = validImapCredentialData();
-            cred.put("host", "127.0.0.1");
+            cred.put("host", localHost);
             cred.put("port", 1);            // unused/closed port
             cred.put("use_ssl", "false");
             EmailInboxNode node = new EmailInboxNode("core:read", config("none", null, null));
@@ -424,7 +448,7 @@ class EmailInboxNodeTest {
                 });
                 imap.start();
                 Map<String, Object> cred = validImapCredentialData();
-                cred.put("host", "127.0.0.1");
+                cred.put("host", localHost);
                 cred.put("port", server.getLocalPort());
                 cred.put("use_ssl", "false");
                 EmailInboxNode node = new EmailInboxNode("core:read", config("none", null, null));
@@ -448,7 +472,7 @@ class EmailInboxNodeTest {
         @DisplayName("connection-level failure (nothing listening) keeps ERROR with its stack trace")
         void connectionFailureStaysErrorWithStackTrace() {
             Map<String, Object> cred = validImapCredentialData();
-            cred.put("host", "127.0.0.1");
+            cred.put("host", localHost);
             cred.put("port", 1);
             cred.put("use_ssl", "false");
             EmailInboxNode node = new EmailInboxNode("core:read", config("none", null, null));

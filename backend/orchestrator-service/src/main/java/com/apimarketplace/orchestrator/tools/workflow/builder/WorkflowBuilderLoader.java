@@ -600,7 +600,13 @@ public class WorkflowBuilderLoader {
         List<Map<String, Object>> notes = (List<Map<String, Object>>) plan.get("notes");
         if (notes != null) {
             for (Map<String, Object> note : notes) {
-                session.getNotes().add(new LinkedHashMap<>(note));
+                Map<String, Object> copy = new LinkedHashMap<>(note);
+                // A note anchored on an adopted node follows it, like the edges below.
+                if (copy.get(WorkflowBuilderSession.NOTE_ANCHOR_KEY) instanceof String anchor
+                        && adoptedGenerateKeys.containsKey(anchor)) {
+                    copy.put(WorkflowBuilderSession.NOTE_ANCHOR_KEY, adoptedGenerateKeys.get(anchor));
+                }
+                session.getNotes().add(copy);
             }
         }
 
@@ -861,7 +867,7 @@ public class WorkflowBuilderLoader {
                     planMap.get("edges") instanceof List<?> edges ? edges.size() : 0,
                     planMap.get("triggers") instanceof List<?> triggers ? triggers.size() : 0);
             if (savedCores != null && !savedCores.isEmpty()) {
-                log.info("📦 [SAVE] Cores: {}", savedCores);
+                log.info("📦 [SAVE] Cores: {}", com.apimarketplace.common.logging.PayloadLogSafety.describeAny(savedCores));
             }
 
             // Convert to WorkflowPlan and save

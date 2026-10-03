@@ -139,6 +139,49 @@ class TablePublishModuleTest {
     class PublishTests {
 
         @Test
+        @DisplayName("regression (budget): a table over the row limit is an INVALID_PARAMETER_VALUE naming the table, with the trim action")
+        void tooLargeTableIsAnActionableRefusal() {
+            String reason = "Table 'Orders' has more than 5000 rows (max 5000 rows per published table).";
+            when(publicationClient.publishResource(any(), eq(TENANT), isNull())).thenThrow(
+                    new com.apimarketplace.publication.client.PublicationValidationException(
+                            "PUBLICATION_SNAPSHOT_TOO_LARGE", reason + " Delete rows from the table, then publish again.",
+                            Map.of("reason", reason, "maxTableRows", 5000, "breakdown",
+                                    List.of(Map.of("type", "datasource", "id", "42", "name", "Orders"))),
+                            null));
+            Map<String, Object> params = new HashMap<>();
+            params.put("table_id", 42);
+            params.put("title", "T");
+            params.put("interface_id", INTERFACE_ID.toString());
+
+            ToolExecutionResult result = module.execute("publish", params, TENANT, ctx()).orElseThrow();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.errorCode()).isEqualTo(ToolErrorCode.INVALID_PARAMETER_VALUE);
+            // One reason, one fix (in this tool's actions), no share-modal sentence, no "Heaviest" list.
+            assertThat(result.error()).isEqualTo("Publish refused: " + reason + " Fix: delete rows with "
+                    + "table(action='delete_rows', table_id=42, where={...}), then call publish again.");
+        }
+
+        @Test
+        @DisplayName("a transient copy failure is a retryable EXTERNAL_SERVICE_ERROR carrying the service's sentence")
+        void tableCopyFailureIsRetryable() {
+            when(publicationClient.publishResource(any(), eq(TENANT), isNull())).thenThrow(
+                    new com.apimarketplace.publication.client.PublicationValidationException(
+                            "TABLE_COPY_FAILED", "The rows of table 'Orders' (id 42) could not be read just now, "
+                                    + "so nothing was published. This is temporary: publish again in a moment.",
+                            Map.of("retryable", true), null));
+            Map<String, Object> params = new HashMap<>();
+            params.put("table_id", 42);
+            params.put("title", "T");
+            params.put("interface_id", INTERFACE_ID.toString());
+
+            ToolExecutionResult result = module.execute("publish", params, TENANT, ctx()).orElseThrow();
+
+            assertThat(result.errorCode()).isEqualTo(ToolErrorCode.EXTERNAL_SERVICE_ERROR);
+            assertThat(result.error()).startsWith("Publish failed: The rows of table 'Orders' (id 42)");
+        }
+
+        @Test
         @DisplayName("Accepts numeric table_id and stringifies it for resourceId")
         void publishCoercesNumericIdToString() {
             when(publicationClient.publishResource(any(), eq(TENANT), isNull()))
@@ -190,6 +233,56 @@ class TablePublishModuleTest {
                     Map.of("table_id", "1", "title", "X"), TENANT, ctx()).orElseThrow();
             assertThat(result.success()).isFalse();
             assertThat(result.error()).contains("interface_id is required");
+        }
+    }
+
+    @Nested
+    @DisplayName("restricted calling context (LC-066)")
+    class RestrictedContextTests {
+
+        private final Map<String, Object> restricted = Map.of(
+                com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY,
+                com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+
+        private Map<String, Object> publishParams() {
+            return Map.of("table_id", "42", "title", "T", "interface_id", INTERFACE_ID.toString());
+        }
+
+        @Test
+        @DisplayName("regression: publish from a conversation that read Gmail / Drive is refused before publication-service")
+        void restrictedPublishIsRefused() {
+            ToolExecutionResult result = module.execute("publish", publishParams(), TENANT, ctx(restricted)).orElseThrow();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error())
+                    .startsWith(com.apimarketplace.common.classification.RestrictedDataPolicy.REFUSAL_CODE)
+                    .contains("no table can be published");
+            verifyNoInteractions(publicationClient);
+        }
+
+        @Test
+        @DisplayName("unpublish still works from a restricted conversation")
+        void restrictedUnpublishStillWorks() {
+            when(publicationClient.isResourcePublished("TABLE", "42")).thenReturn(true);
+
+            ToolExecutionResult result = module.execute("unpublish", Map.of("table_id", 42), TENANT, ctx(restricted))
+                    .orElseThrow();
+
+            assertThat(result.success()).isTrue();
+            verify(publicationClient).unpublishResource(eq("TABLE"), eq("42"), eq(TENANT), isNull());
+        }
+
+        @Test
+        @DisplayName("an explicit NORMAL tag is not a refusal (no over-refusal)")
+        void normalTagPublishes() {
+            when(publicationClient.publishResource(any(), eq(TENANT), isNull())).thenReturn(Map.of("id", PUB_ID.toString()));
+
+            ToolExecutionResult result = module.execute("publish", publishParams(), TENANT,
+                    ctx(Map.of(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "NORMAL")))
+                    .orElseThrow();
+
+            assertThat(result.success()).isTrue();
+            verify(publicationClient).publishResource(any(), eq(TENANT), isNull());
         }
     }
 

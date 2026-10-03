@@ -40,6 +40,8 @@ vi.mock('@/lib/providers/smart-providers', () => ({
 
 vi.mock('@/lib/edition', () => ({ IS_CE: false }));
 
+vi.mock('@/hooks/usePartnerSpace', () => ({ useHasPartnerSpace: () => false }));
+
 vi.mock('@/hooks/useAppVersion', () => ({
   useAppVersion: () => ({ version: null, isLoading: false, isError: false }),
 }));

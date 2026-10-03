@@ -127,7 +127,8 @@ public class SetNode extends BaseNode {
                     String preview = shown == null ? "null" : String.valueOf(shown);
                     if (preview.length() > 120) preview = preview.substring(0, 120) + "...";
                     logger.info("Set resolved field: nodeId={}, name={}, type={}, rawTemplate={}, resolved={}",
-                        nodeId, assignment.name(), assignment.type(), assignment.value(), preview);
+                        nodeId, assignment.name(), assignment.type(), assignment.value(),
+                        com.apimarketplace.common.logging.PayloadLogSafety.describeText(preview, 120));
                 }
             }
 

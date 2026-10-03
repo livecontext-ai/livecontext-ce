@@ -27,6 +27,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -113,7 +114,10 @@ class WorkflowCrudControllerOrgAccessWebMvcTest {
         when(workflowManagementService.getWorkflow(id)).thenReturn(Optional.of(workflow));
         when(orgAccessGuard.canAccess(CALLER_ORG, CALLER_TENANT, "workflow", id.toString(), "MEMBER"))
                 .thenReturn(true);
-        when(triggerClient.getTokensForWorkflow(any())).thenReturn(Map.of());
+        // Webhook tokens are fetched only for callers allowed to run the workflow (LC-012,
+        // MayExposeWebhookTokensTest pins that rule); this test is about the org read gate, so the
+        // token lookup may or may not happen and must not fail the test either way.
+        lenient().when(triggerClient.getTokensForWorkflow(any())).thenReturn(Map.of());
 
         mockMvc.perform(get("/api/v2/workflows/dag/" + id)
                         .header("X-User-ID", CALLER_TENANT)
@@ -187,6 +191,8 @@ class WorkflowCrudControllerOrgAccessWebMvcTest {
                         .header("X-Organization-ID", CALLER_ORG))
                 .andExpect(status().isBadRequest());
     }
+
+    // ===== CASA LC-037 round-3: defense-in-depth ShareContextResourceBinding gate =====
 
     @Test
     @DisplayName("POST /dag threads X-Organization-Role into the write-gate and maps its denial to 403 (not 500)")

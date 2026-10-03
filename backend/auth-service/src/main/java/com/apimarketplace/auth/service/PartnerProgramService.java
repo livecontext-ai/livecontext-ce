@@ -18,6 +18,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.YearMonth;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -44,6 +47,8 @@ public class PartnerProgramService {
 
     /** How many of the partner's latest commission lines the dashboard lists. */
     static final int DASHBOARD_LINES = 50;
+    /** How many calendar months of earnings the dashboard charts, the current one included. */
+    static final int DASHBOARD_MONTHS = 12;
     static final int MAX_COMPANY = 120;
     static final int MAX_WEBSITE = 255;
     static final int MAX_AUDIENCE = 500;
@@ -76,6 +81,13 @@ public class PartnerProgramService {
                        String status, Instant dueAt, Instant paidAt) {}
 
     /**
+     * What the partner earned in one calendar month (UTC, {@code yyyy-MM}), per currency: the
+     * commissions of the invoices paid that month, voided ones excluded, whatever their payout
+     * state. A month with nothing earned has an empty map.
+     */
+    public record Month(String month, Map<String, Long> commissions) {}
+
+    /**
      * What the partner dashboard shows. {@code state} is one of {@code none} (never applied),
      * {@code pending}, {@code rejected}, {@code active} (live code) or {@code inactive} (code
      * disabled or expired). The code block is present only once a code exists, and with it the
@@ -86,7 +98,7 @@ public class PartnerProgramService {
     public record Dashboard(String state, Terms terms, PartnerApplication application, RewardCode code,
                             long redemptions, long payingCustomers, Amounts commissions, List<Line> lines,
                             PartnerTierService.Standing standing, Double commissionPercent,
-                            PartnerTermsService.Status agreement) {}
+                            PartnerTermsService.Status agreement, List<Month> months) {}
 
     private final PartnerProgramAdminService adminService;
     private final PartnerApplicationRepository applicationRepository;
@@ -110,6 +122,25 @@ public class PartnerProgramService {
         this.userRepository = userRepository;
         this.tierService = tierService;
         this.termsService = termsService;
+    }
+
+    /** What a partner link offers a visitor: the code, and the credits a new account gets with it. */
+    public record CodeOffer(String code, int credits) {}
+
+    /**
+     * The offer behind a partner code, for the page a partner's link opens: only for a PARTNER
+     * code that can be redeemed right now, and never who owns it. Empty for anything else
+     * (unknown, a creator or referral code, disabled, expired, used up), so the page promises
+     * nothing the code would not give.
+     */
+    @Transactional(readOnly = true)
+    public Optional<CodeOffer> codeOffer(String rawCode) {
+        String code = rawCode == null ? "" : rawCode.trim();
+        if (code.isEmpty() || code.length() > 64) return Optional.empty();
+        Instant now = Instant.now();
+        return codeRepository.findByCodeIgnoreCase(code)
+                .filter(c -> c.isLivePartnerCode(now))
+                .map(c -> new CodeOffer(c.getCode(), c.getBenefitAmount()));
     }
 
     /** The terms every new partner code starts from (the {@code reward.partner.*} defaults) and the tiers above it. */
@@ -145,7 +176,7 @@ public class PartnerProgramService {
                     // the partner can apply again rather than being stuck on a dead state.
                     : application.getStatus() == PartnerApplication.Status.REJECTED ? "rejected" : "none";
             return new Dashboard(state, terms, application, null, 0, 0, null, List.of(), null, null,
-                    termsService.status(userId));
+                    termsService.status(userId), List.of());
         }
         RewardCode c = code.get();
         Instant now = Instant.now();
@@ -164,7 +195,29 @@ public class PartnerProgramService {
         return new Dashboard(state, terms, application, c, c.getCurrentRedemptions(), paying,
                 PartnerProgramAdminService.totals(all, now), lines, standing,
                 tierService.effectiveRateBps(c.getPayoutBps(), standing.tier()) / 100.0,
-                termsService.status(userId));
+                termsService.status(userId), months(all, now));
+    }
+
+    /**
+     * The last {@link #DASHBOARD_MONTHS} calendar months, oldest first, each with what its paid
+     * invoices earned. Built from every line of the code (the line list is capped at the latest
+     * 50), so a busy partner's chart is not cut to the last few weeks.
+     */
+    static List<Month> months(List<PartnerCommission> all, Instant now) {
+        YearMonth current = YearMonth.from(now.atZone(ZoneOffset.UTC));
+        YearMonth first = current.minusMonths(DASHBOARD_MONTHS - 1L);
+        Map<YearMonth, Map<String, Long>> byMonth = new HashMap<>();
+        for (PartnerCommission l : all) {
+            if (l.getStatus() == PartnerCommission.Status.VOID || l.getInvoicePaidAt() == null) continue;
+            YearMonth m = YearMonth.from(l.getInvoicePaidAt().atZone(ZoneOffset.UTC));
+            if (m.isBefore(first) || m.isAfter(current)) continue;
+            byMonth.computeIfAbsent(m, k -> new HashMap<>()).merge(l.getCurrency(), l.getCommissionMinor(), Long::sum);
+        }
+        List<Month> out = new ArrayList<>(DASHBOARD_MONTHS);
+        for (YearMonth m = first; !m.isAfter(current); m = m.plusMonths(1)) {
+            out.add(new Month(m.toString(), Map.copyOf(byMonth.getOrDefault(m, Map.of()))));
+        }
+        return out;
     }
 
     /**

@@ -122,3 +122,32 @@ describe('MarketplacePreviewPage - authed fallback for a deleted/acquired public
     expect(svc.getPublicationById).not.toHaveBeenCalled(); // no local authed fallback for a cloud id
   });
 });
+
+describe('MarketplacePreviewPage - LC-066 showcase withheld for Gmail/Drive data', () => {
+  it('says the preview is withheld for Gmail/Drive data instead of mounting a preview that can only 404', async () => {
+    svc.getPublicationByIdPublic.mockResolvedValue({ ...WORKFLOW_PUB, showcaseWithheld: 'RESTRICTED_DATA' });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('previewWithheldRestrictedData')).toBeTruthy());
+    expect(screen.queryByTestId('preview-shell')).toBeNull();
+  });
+
+  it('shows the generic unavailable text for a transient withheld state', async () => {
+    svc.getPublicationByIdPublic.mockResolvedValue({ ...WORKFLOW_PUB, showcaseWithheld: 'UNVERIFIED' });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('previewUnavailable')).toBeTruthy());
+    expect(screen.queryByTestId('preview-shell')).toBeNull();
+  });
+
+  it('mounts the preview as before when nothing is withheld', async () => {
+    svc.getPublicationByIdPublic.mockResolvedValue({ ...WORKFLOW_PUB, showcaseWithheld: null });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('preview-shell')).toBeTruthy());
+    expect(screen.queryByText('previewWithheldRestrictedData')).toBeNull();
+  });
+});

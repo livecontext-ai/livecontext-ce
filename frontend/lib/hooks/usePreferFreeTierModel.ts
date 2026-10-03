@@ -29,7 +29,7 @@ export function resetFreeTierOpeningForTests(): void {
  * Open the composer on the free tier's best-ranked model, on the Free plan.
  *
  * <p><b>The rule.</b> A Free account always OPENS on the best-ranked model opened to
- * the free tier (the admin's ranking, restricted to covered models). Not the catalogue
+ * the free tier (the free tier's own ranking, see {@code freeTierFirst}). Not the catalogue
  * default, which is the admin's global #1 and may be a model the Free plan cannot pay
  * for, and not whatever the browser remembered.
  *

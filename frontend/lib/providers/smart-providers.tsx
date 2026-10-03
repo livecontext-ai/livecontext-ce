@@ -11,6 +11,17 @@ import { usePathname } from 'next/navigation';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useAuth as useOidcAuth } from 'react-oidc-context';
 import { useEmbeddedAuth } from './embedded-auth-provider';
+import { accessTokenAction } from '../auth/tokenFreshness';
+import {
+  OIDC_REFRESH_LEASE_KEY,
+  OIDC_REFRESH_LOCK_NAME,
+  OIDC_REFRESH_MAX_HOLD_MS,
+  OIDC_REQUEST_TIMEOUT_SECONDS,
+  withCrossTabLock,
+} from '../auth/crossTabLock';
+import { refreshWithTransientRetry } from '../auth/refreshRetry';
+import { OidcUserManagerContext } from '../auth/oidcUserManager';
+import type { User, UserManager } from 'oidc-client-ts';
 
 import { useSetCurrentRoute } from '../stores/app-store';
 import {
@@ -24,6 +35,7 @@ import {
 import { getClientLocale, toIdpUiLocale } from '../utils/locale';
 import { clearDisplayTimeZone } from '../utils/timezone';
 import { clearStoredAgendaTimezone } from '@/hooks/useAgendaPreferences';
+import { clearSiteSessionHint } from '@/lib/auth/siteSessionHint';
 import { apiClient } from '../api/api-client';
 import { WebSocketProvider } from '../websocket/ws-provider';
 import LoadingSpinner from '../../components/LoadingSpinner';
@@ -36,6 +48,8 @@ import { SessionGate } from '../../components/auth/SessionGate';
 import { IS_CE } from '@/lib/edition';
 import { resetAnalytics, track } from '@/lib/analytics/analytics';
 import { isPublicMarketingPath } from './publicMarketingPath';
+import { safeReturnPath } from '@/lib/security/safeReturnPath';
+import { stripAppLocale } from '../../components/security/appRouteAuth';
 
 // CE deployments use embedded auth; cloud uses OIDC. Single source of truth from
 // `lib/edition` (built-in build-time resolution + dual-read shim, see edition.ts).
@@ -152,6 +166,11 @@ export function signedInWithin(
  * and surface the Session-expired UI. Stale entries outside the window are
  * pruned. Fails OPEN (returns true) when storage is unavailable so a storage
  * error never blocks a real sign-in.
+ *
+ * A refusal KEEPS the log: the next automatic redirect inside the window is refused too. Clearing
+ * it handed the very next path a fresh budget (the page-load recovery was refused, the guard sent
+ * the person to /login, and the login page redirected anyway). Only an explicit user sign-in
+ * ({@link decideLoginRedirect} with resetLoopGuards) or a successful Keycloak callback clears it.
  */
 export function recordLoginRedirect(
   storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null | undefined,
@@ -162,7 +181,6 @@ export function recordLoginRedirect(
     const log = JSON.parse(storage.getItem(LOGIN_REDIRECT_LOG_KEY) || '[]') as number[];
     const recent = log.filter((ts) => now - ts < LOGIN_REDIRECT_LOOP_WINDOW_MS);
     if (recent.length >= MAX_LOGIN_REDIRECTS) {
-      storage.removeItem(LOGIN_REDIRECT_LOG_KEY);
       return false;
     }
     recent.push(now);
@@ -182,6 +200,25 @@ function clearLoginRedirectLog(
   } catch {
     /* ignore - storage unavailable */
   }
+}
+
+/**
+ * Where an automatic redirect to the sign-in page brings the person back once signed in: the
+ * page they are on (a deep link, a bookmark, an email link), or, on the login and register pages,
+ * the `returnTo` they were already carrying. Keycloak sends the browser back to the redirect_uri
+ * itself, so this path IS the callback page; it goes through the shared open-redirect validator
+ * (only a same-origin relative path survives) and falls back to `fallback`. The fragment is
+ * dropped: a redirect_uri must not carry one (OIDC core).
+ */
+export function loginReturnPath(
+  location: Pick<Location, 'pathname' | 'search'>,
+  fallback = '/app/',
+): string {
+  const page = stripAppLocale(location.pathname);
+  if (page === '/login' || page === '/register') {
+    return safeReturnPath(new URLSearchParams(location.search).get('returnTo'), fallback);
+  }
+  return safeReturnPath(`${location.pathname}${location.search}`, fallback);
 }
 
 export type LoginRedirectAction = 'redirect' | 'stop';
@@ -214,6 +251,111 @@ export function decideLoginRedirect(
     return 'stop';
   }
   return recordLoginRedirect(storage, now) ? 'redirect' : 'stop';
+}
+
+/**
+ * How long the page-load recovery of an expired session gives its refresh, counted from the moment
+ * this tab holds the cross-tab refresh lock. At least the lock's own hold bound: a refresh may
+ * legitimately use all of it (discovery, then /token, each given the request timeout), and a
+ * shorter recovery clock signed the user out while that refresh could still succeed.
+ */
+export const AUTO_RECOVERY_TIMEOUT_MS = OIDC_REFRESH_MAX_HOLD_MS;
+
+/**
+ * Whether the page-load recovery of an expired stored cloud session is still deciding, which the
+ * provider reports as auth LOADING (spinner, `isLoading`, `isAuthChecking`).
+ *
+ * A browser reopened after the 15-minute access token died finds an expired stored user whose
+ * refresh token may still be good: OIDC is done loading, nobody is authenticated yet, and the
+ * recovery refresh is in flight. Reported as "not loading", that state let FirstLoginGuard send
+ * the person to /login, whose page then started the Keycloak password form while the refresh that
+ * would have kept them signed in was still running. (react-oidc-context's own signinSilent used to
+ * flip its isLoading for the duration; the refresh now calls the UserManager directly, which does
+ * not.) Read during render, not set by the recovery effect: children's effects (the guard's
+ * redirect) run before the provider's.
+ *
+ * Cloud only: CE's embedded auth refreshes an expired stored session inside its own loading
+ * phase. A refresh in the middle of a session never matches: the user is still authenticated
+ * there (react-oidc-context only re-evaluates expiry when a user is loaded), so the app stays
+ * mounted.
+ */
+export function isRecoveringStoredSession(state: {
+  embeddedAuth: boolean;
+  oidcLoading: boolean;
+  authenticated: boolean;
+  sessionExpired: boolean;
+  storedUserExpired: boolean;
+  recoverySettled: boolean;
+}): boolean {
+  return !state.embeddedAuth
+    && !state.oidcLoading
+    && !state.authenticated
+    && !state.sessionExpired
+    && state.storedUserExpired
+    && !state.recoverySettled;
+}
+
+/**
+ * One cloud token refresh, the only place the cloud session's refresh token is spent.
+ *
+ * Keycloak rotates refresh tokens (configure-keycloak.sh): each one is spent on use, and past its
+ * one tolerated reuse Keycloak ends the session's tokens in EVERY tab. All tabs share the stored
+ * session (localStorage), so tabs refreshing together (several tabs restored at once with an
+ * expired token) would present the same token. The cross-tab lock makes them take turns, and
+ * oidc-client-ts reads the stored refresh token when the refresh starts, so each tab presents the
+ * one the previous tab stored. `onLockGranted` runs once this tab holds the lock, right before the
+ * refresh starts (callers that time the refresh start their clock there).
+ *
+ * Bounded twice: the refresh request times out (oidc-client-ts has no timeout of its own, and
+ * signinSilent() without this argument drops the configured one for the refresh-token request),
+ * and the lock is released after OIDC_REFRESH_MAX_HOLD_MS even if the refresh never settles, so
+ * a hung /token never keeps the other tabs waiting.
+ *
+ * It calls the UserManager itself, never useAuth().signinSilent: react-oidc-context turns every
+ * failure of that one into a resolved null, so a refused refresh token (invalid_grant) read as
+ * "no token" instead of ending the session, and a timeout was never retried. The manager rejects
+ * with the real error (refreshWithTransientRetry tells a refusal from a slow network), and a
+ * success still reaches the auth context through the manager's userLoaded event.
+ */
+export function refreshCloudSession(
+  userManager: Pick<UserManager, 'signinSilent'> | null,
+  onLockGranted?: () => void,
+): Promise<User | null> {
+  return withCrossTabLock<User | null>(OIDC_REFRESH_LOCK_NAME, OIDC_REFRESH_LEASE_KEY, () => {
+    onLockGranted?.();
+    if (!userManager) {
+      return Promise.reject(new Error('The OIDC UserManager is not available'));
+    }
+    return userManager.signinSilent({ silentRequestTimeoutInSeconds: OIDC_REQUEST_TIMEOUT_SECONDS });
+  }, { maxHoldMs: OIDC_REFRESH_MAX_HOLD_MS });
+}
+
+/**
+ * Runs `run` and rejects with `message` when it has not settled `timeoutMs` after it called
+ * `started`. The clock starts at `started`, not at the call: a refresh first waits its turn for the
+ * cross-tab refresh lock (another tab's refresh, a dead tab's lease), and that wait must not eat
+ * the time the refresh itself is given. Until `started` is called nothing times out.
+ */
+export function withTimeoutFromStart<T>(
+  run: (started: () => void) => Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const started = () => {
+      if (timer === undefined) timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    };
+    const settle = <V,>(done: (value: V) => void) => (value: V) => {
+      clearTimeout(timer);
+      done(value);
+    };
+    try {
+      run(started).then(settle(resolve), settle(reject));
+    } catch (error) {
+      settle(reject)(error);
+    }
+  });
 }
 
 function consumeSsoRequestedOrgId(): string | null {
@@ -443,6 +585,7 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
   const pathname = usePathname();
   // Use unified auth (OIDC or embedded depending on NEXT_PUBLIC_AUTH_MODE)
   const oidc = useUnifiedAuth();
+  const oidcUserManager = useContext(OidcUserManagerContext);
   const [initializationComplete, setInitializationComplete] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [isReady, setIsReady] = useState(false);
@@ -462,9 +605,9 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
   // Deduplicate silent refresh: single in-flight promise shared by all callers
   const refreshPromiseRef = useRef<Promise<string> | null>(null);
   const refreshFailedRef = useRef(false);
-  // Count silent renew errors before giving up (allow transient failures)
-  const silentRenewErrorCountRef = useRef(0);
-  const MAX_SILENT_RENEW_RETRIES = 3;
+  // True while the page-load recovery of an expired stored session is refreshing: the access-token
+  // expired event (raised for that same expired token) must not start a second refresh then.
+  const storedSessionRecoveryInFlightRef = useRef(false);
 
   const configuredOidcStorageKey = getConfiguredOidcStorageKey();
   const persistedOidcUserMissing = isPersistedOidcUserMissing(
@@ -479,11 +622,36 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
   const user = effectiveSessionExpired ? null : oidc.user?.profile;
   const isAuthenticated = oidc.isAuthenticated && !effectiveSessionExpired;
   const isLoading = oidc.isLoading;
+  // Set once the page-load recovery of an expired stored session has decided (it never is when
+  // that recovery is leaving for the login page: the redirect keeps OIDC loading until the page
+  // unloads). Until then the provider reports auth as loading (isRecoveringStoredSession).
+  const [storedSessionRecoverySettled, setStoredSessionRecoverySettled] = useState(false);
+  const recoveringStoredSession = isRecoveringStoredSession({
+    embeddedAuth: IS_EMBEDDED_AUTH,
+    oidcLoading: isLoading,
+    authenticated: isAuthenticated,
+    sessionExpired: effectiveSessionExpired,
+    storedUserExpired: oidc.user?.expired === true,
+    recoverySettled: storedSessionRecoverySettled,
+  });
+  // What guards and pages see as "auth still loading": OIDC's own loading, or that recovery.
+  const authLoading = isLoading || recoveringStoredSession;
 
   // Stable ref for oidc - avoids recreating getAccessToken on every render
   // (oidc from useAuth() is a new object reference each render)
   const oidcRef = useRef(oidc);
   useEffect(() => { oidcRef.current = oidc; }, [oidc]);
+  const oidcUserManagerRef = useRef(oidcUserManager);
+  useEffect(() => { oidcUserManagerRef.current = oidcUserManager; }, [oidcUserManager]);
+
+  // Every silent refresh goes through here: the cloud one under the cross-tab lock, on the
+  // UserManager itself (refreshCloudSession says why both). CE's embedded auth takes its own lock
+  // inside its signinSilent. A refresh that fails or is cut short rejects: the caller handles it
+  // like any failed refresh.
+  const refreshSession = useCallback((onLockGranted?: () => void): Promise<{ access_token?: string } | null> => {
+    if (IS_EMBEDDED_AUTH) return oidcRef.current.signinSilent();
+    return refreshCloudSession(oidcUserManagerRef.current, onLockGranted);
+  }, []);
 
   const markSessionExpired = useCallback(() => {
     setSessionExpired(true);
@@ -504,6 +672,8 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
     clearDisplayTimeZone();
     // The agenda keeps its own copy of the zone in localStorage, which outlives the cookie.
     clearStoredAgendaTimezone();
+    // And the docs subdomain's hint that someone is signed in here (lib/auth/siteSessionHint).
+    clearSiteSessionHint();
   }, []);
 
   const expireMissingPersistedOidcUser = useCallback((reason: string) => {
@@ -608,15 +778,31 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
   //   If 3+ happen, something unexpected is looping - stop.
   //
   // ALL redirect-to-login paths MUST go through this function. No raw signinRedirect().
-  const safeRedirectToLogin = useCallback(async (reason: string) => {
+  //
+  // A refusal by either layer ends the session in THIS tab only (markSessionExpired: the
+  // Session-expired UI, whose explicit "Sign in" starts from a clean budget). It never removes the
+  // stored user: that entry is shared by every tab (localStorage), so removing it signed out all of
+  // them, e.g. after one transient 401 right after a sign-in. Marking the tab expired also keeps a
+  // refused page-load recovery from settling into the guard's /login redirect, which would start
+  // the very sign-in the breaker just refused.
+  //
+  // `sessionInvalid`: the session itself is over (the server refused the refresh token, or the
+  // refresh failed with the token in hand already expired). Only then may a failed redirect remove
+  // the stored user; a 401 from the API alone says nothing about the other tabs' session.
+  //
+  // `returnTo`: where the person lands after signing in (loginReturnPath: the current page, or the
+  // login page's own returnTo), so a deep link survives the round trip through Keycloak.
+  const safeRedirectToLogin = useCallback(async (
+    reason: string,
+    options?: { sessionInvalid?: boolean; returnTo?: string },
+  ) => {
     if (refreshFailedRef.current) return;
 
     // Layer 1: just signed in - backend is the problem, not auth
     if (signedInWithin(typeof window !== 'undefined' ? window.sessionStorage : null, Date.now())) {
       console.error(`[Auth] 401 within 30s of successful signin (reason: ${reason}) - not redirecting (backend issue)`);
-      refreshFailedRef.current = true;
-      // Force isAuthenticated=false so the error UI renders instead of a broken app shell
-      try { await oidcRef.current.removeUser(); } catch { /* ignore */ }
+      // Show the Session-expired UI instead of a broken app shell, in this tab only.
+      markSessionExpired();
       return;
     }
 
@@ -624,8 +810,7 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
     // every "redirect to login" path draws from the same 3-in-60s budget.
     if (!recordLoginRedirect(typeof window !== 'undefined' ? window.sessionStorage : null, Date.now())) {
       console.error(`[Auth] Redirect loop detected (reason: ${reason}) - stopping`);
-      refreshFailedRef.current = true;
-      try { await oidcRef.current.removeUser(); } catch { /* ignore */ }
+      markSessionExpired();
       return;
     }
 
@@ -634,13 +819,16 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
 
     try {
       await oidcRef.current.signinRedirect({
-        redirect_uri: `${window.location.origin}/app/`,
+        // Validated again here: the one place that turns the path into the host-relative URL.
+        redirect_uri: `${window.location.origin}${safeReturnPath(options?.returnTo ?? loginReturnPath(window.location), '/app/')}`,
       });
     } catch {
-      try { await oidcRef.current.removeUser(); } catch { /* ignore */ }
+      if (options?.sessionInvalid) {
+        try { await oidcRef.current.removeUser(); } catch { /* ignore */ }
+      }
       window.location.href = '/app/';
     }
-  }, []);
+  }, [markSessionExpired]);
 
   // Stable ref for safeRedirectToLogin - used in getAccessToken closure
   const safeRedirectToLoginRef = useRef(safeRedirectToLogin);
@@ -650,7 +838,7 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
   // Deduplicates: all concurrent callers share one signinSilent() call.
   // If refresh token is also expired (400 from Keycloak), redirect to login once.
   // Uses oidcRef so the function identity is STABLE (no [oidc] dependency).
-  const getAccessToken = useCallback(async (): Promise<string> => {
+  const getAccessToken = useCallback(async (options?: { forceRefresh?: boolean }): Promise<string> => {
     const currentOidc = oidcRef.current;
 
     // If refresh already failed in this tab, don't retry - redirect is in progress
@@ -658,22 +846,39 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
       return '';
     }
 
-    // Token still valid - return directly
-    if (!currentOidc.user?.expired) {
+    // With 15-minute access tokens the old "strictly expired" test sent tokens that died in
+    // flight; accessTokenAction refreshes in the last 60 s. forceRefresh is the apiClient 401
+    // path: the server refused this token, so hand back a NEW one or none, never the same one.
+    const action = accessTokenAction(currentOidc.user, options?.forceRefresh === true);
+    if (action === 'none') {
+      return '';
+    }
+    if (action === 'cached') {
       return currentOidc.user?.access_token || '';
     }
 
-    // Token expired - deduplicate the refresh call (within this tab)
+    // Near expiry, expired or refused - deduplicate the refresh call (within this tab).
+    // A slow network is not a dead session: a timeout or network error is retried once, then the
+    // token in hand is kept while still valid; only a refusal by the server (invalid_grant, 4xx)
+    // or a failed retry with an expired token signs the user out (lib/auth/refreshRetry.ts).
     if (!refreshPromiseRef.current) {
+      const forceRefresh = options?.forceRefresh === true;
       refreshPromiseRef.current = (async () => {
         try {
-          const refreshed = await currentOidc.signinSilent();
-          silentRenewErrorCountRef.current = 0; // Reset error counter on success
-          return refreshed?.access_token || '';
-        } catch (error) {
-          // Use safeRedirectToLogin via ref to avoid stale closure
-          await safeRedirectToLoginRef.current('Silent refresh failed, session expired');
-          return '';
+          const decision = await refreshWithTransientRetry({
+            refresh: () => refreshSession(),
+            current: () => {
+              const user = oidcRef.current.user;
+              return user?.access_token ? { token: user.access_token, expired: user.expired === true } : null;
+            },
+            forceRefresh,
+          });
+          if (decision.kind === 'redirect') {
+            // Use safeRedirectToLogin via ref to avoid stale closure
+            await safeRedirectToLoginRef.current(decision.reason, { sessionInvalid: true });
+            return '';
+          }
+          return decision.token;
         } finally {
           refreshPromiseRef.current = null;
         }
@@ -681,7 +886,7 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
     }
 
     return refreshPromiseRef.current;
-  }, []); // Stable - always reads latest oidc via oidcRef
+  }, [refreshSession]); // Stable - always reads latest oidc via oidcRef (refreshSession is stable too)
 
   // Fetch avatar binary with auth and create a blob URL for <img> tags
   const fetchAvatarAsBlob = useCallback(async (userId: string | number, accessToken: string): Promise<string | null> => {
@@ -737,7 +942,7 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
   useEffect(() => { getAccessTokenRef.current = getAccessToken; }, [getAccessToken]);
 
   // Proactive token refresh when tab becomes visible again
-  // Browser throttles timers in background tabs, so automaticSilentRenew may not fire.
+  // Browser throttles timers in background tabs, so the access-token expired event may not fire.
   // This ensures the token is refreshed as soon as the user returns.
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -751,7 +956,7 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
       const expiresIn = (currentOidc.user.expires_at ?? 0) - Math.floor(Date.now() / 1000);
       if (expiresIn < 60) {
         try {
-          await currentOidc.signinSilent();
+          await refreshSession();
         } catch {
           // signinSilent failed - getAccessToken will handle redirect on next API call
         }
@@ -760,59 +965,27 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, refreshSession]);
 
-  // Handle silent renew errors - redirect to login instead of infinite loading
+  // Refresh once when the access token expires. There is no silent-renew-error handler: the
+  // UserManager runs with automaticSilentRenew off (app/providers.tsx), so it never raises that
+  // event; a failed refresh is handled where a token is next needed (getAccessToken).
   useEffect(() => {
     if (!oidc.events) return;
 
-    const handleSilentRenewError = async () => {
-      if (refreshFailedRef.current) return;
-
-      silentRenewErrorCountRef.current += 1;
-      const attempt = silentRenewErrorCountRef.current;
-      console.warn(`[Auth] Silent renew error (attempt ${attempt}/${MAX_SILENT_RENEW_RETRIES})`);
-
-      // Allow transient failures - only redirect after MAX retries
-      if (attempt < MAX_SILENT_RENEW_RETRIES) {
-        // Wait a bit then let automaticSilentRenew retry on its own
-        setTimeout(async () => {
-          try {
-            const refreshed = await oidcRef.current.signinSilent();
-            if (refreshed?.access_token) {
-              console.log('[Auth] Silent renew recovered on retry', attempt);
-              silentRenewErrorCountRef.current = 0; // Reset counter on success
-            }
-          } catch {
-            // Will trigger another silentRenewError event → increments counter
-          }
-        }, 2000 * attempt); // 2s, 4s backoff
-        return;
-      }
-
-      // All retries exhausted - redirect to login
-      try { oidcRef.current.stopSilentRenew(); } catch { /* ignore */ }
-      await safeRedirectToLoginRef.current('Silent renew failed after retries');
-    };
-
     const handleAccessTokenExpired = async () => {
-      if (refreshFailedRef.current) return;
-      // Try one refresh immediately
+      // During the page-load recovery the event fires for the very token that recovery is
+      // refreshing: a second refresh would only wait for the lock and spend one more refresh token.
+      if (refreshFailedRef.current || storedSessionRecoveryInFlightRef.current) return;
       try {
-        await oidcRef.current.signinSilent();
+        await refreshSession();
       } catch {
-        // signinSilent failed - let handleSilentRenewError take over
+        // getAccessToken handles a failed refresh on the next API call
       }
     };
 
-    const unsubRenewError = oidc.events.addSilentRenewError(handleSilentRenewError);
-    const unsubExpired = oidc.events.addAccessTokenExpired(handleAccessTokenExpired);
-
-    return () => {
-      unsubRenewError();
-      unsubExpired();
-    };
-  }, [oidc.events]);
+    return oidc.events.addAccessTokenExpired(handleAccessTokenExpired);
+  }, [oidc.events, refreshSession]);
 
   // Auto-recover expired sessions: when OIDC finishes loading and finds an expired
   // user (access token expired but refresh token may still be valid), attempt a
@@ -827,27 +1000,51 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
     if (!oidcUser || !oidcUser.expired) return;
 
     autoRecoverAttemptedRef.current = true;
-
-    const RECOVERY_TIMEOUT_MS = 15_000;
+    storedSessionRecoveryInFlightRef.current = true;
 
     (async () => {
-      try {
-        const refreshed = await Promise.race([
-          oidcRef.current.signinSilent(),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('signinSilent timeout')), RECOVERY_TIMEOUT_MS),
-          ),
-        ]);
-        if (refreshed?.access_token) {
-          console.log('[Auth] Auto-recovered expired session via silent refresh');
-        }
-        // On success, oidc state updates → isAuthenticated becomes true → normal init runs
-      } catch {
-        // Refresh token also expired or timed out - redirect to login
-        await safeRedirectToLoginRef.current('Auto-recovery failed - session fully expired');
+      // Same rule as getAccessToken: the server refusing the refresh token ends the session at
+      // once, a slow network gets one retry first (the token in hand has expired, so a second
+      // failure ends it too).
+      const decision = await refreshWithTransientRetry({
+        // The timeout covers the refresh, not the wait for the cross-tab lock (several tabs
+        // restored at once take turns), and is never shorter than the lock's own hold bound.
+        // CE's signinSilent takes its own lock out of sight, so its clock starts at once.
+        refresh: () => withTimeoutFromStart((started) => {
+          if (IS_EMBEDDED_AUTH) started();
+          return refreshSession(started);
+        }, AUTO_RECOVERY_TIMEOUT_MS, 'signinSilent timeout'),
+        current: () => {
+          const user = oidcRef.current.user;
+          return user?.access_token ? { token: user.access_token, expired: user.expired === true } : null;
+        },
+        forceRefresh: false,
+      });
+      // The refresh is over either way: the access-token expired event may refresh again from here.
+      storedSessionRecoveryInFlightRef.current = false;
+      // A redirect to the login page that starts never settles (oidc-client-ts resolves it only
+      // when the page comes back), and OIDC reports loading meanwhile, so the spinner stays while
+      // the browser leaves and no guard starts a second sign-in. One refused by the loop guards
+      // marks the session expired (the Session-expired UI); one that failed settles, and the
+      // guards take it from there. Signing in again brings the person back to this page (a deep
+      // link, or the login page's own returnTo), not to the app's home.
+      if (decision.kind === 'redirect') {
+        await safeRedirectToLoginRef.current(`Auto-recovery failed: ${decision.reason}`, {
+          sessionInvalid: true,
+          returnTo: loginReturnPath(window.location),
+        });
+        setStoredSessionRecoverySettled(true);
+        return;
       }
+      if (decision.token) {
+        console.log('[Auth] Auto-recovered expired session via silent refresh');
+      }
+      // On success, oidc state updates → isAuthenticated becomes true → normal init runs (the
+      // manager stored the user and raised userLoaded before this refresh resolved). Without a
+      // token the person is still signed out, and the guards send them to sign in.
+      setStoredSessionRecoverySettled(true);
     })();
-  }, [isLoading, isAuthenticated]);
+  }, [isLoading, isAuthenticated, refreshSession]);
 
   // Centralized initialization of all data (fusion AuthProvider + ResourceManagerProvider)
   useEffect(() => {
@@ -901,10 +1098,11 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
           if (accessToken) {
             // Configure token provider for API services
             // Uses getAccessTokenRef to always call the latest version (avoids stale closure)
-            const tokenProvider = async () => {
+            // forceRefresh comes from apiClient after a 401: never answer with the refused token.
+            const tokenProvider = async (options?: { forceRefresh?: boolean }) => {
               if (refreshFailedRef.current) return null;
               try {
-                const token = await getAccessTokenRef.current();
+                const token = await getAccessTokenRef.current(options);
                 return token || null;
               } catch (error) {
                 return null;
@@ -975,8 +1173,8 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
             }
 
             // If auth failed during the parallel fetch (e.g. 401 triggered onAuthFailure
-            // → safeRedirectToLogin → removeUser), don't mark as ready - the error UI
-            // will render once isAuthenticated flips to false.
+            // → safeRedirectToLogin, which redirects or marks the session expired), don't
+            // mark as ready - the error UI will render once isAuthenticated flips to false.
             if (refreshFailedRef.current) {
               setInitializationComplete(true);
               return;
@@ -1036,12 +1234,11 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
     if (opts?.resetLoopGuards) {
       setSessionExpired(false);
       refreshFailedRef.current = false;
-      silentRenewErrorCountRef.current = 0;
     }
     await oidc.signinRedirect({
-      redirect_uri: opts?.appState?.returnTo
-        ? `${window.location.origin}${opts.appState.returnTo}`
-        : `${window.location.origin}/app/`,
+      // The return path is appended to the origin, so it must be a same-origin relative path:
+      // `@evil.example` or `.evil.example` would otherwise extend the HOST (open-redirect guard).
+      redirect_uri: `${window.location.origin}${safeReturnPath(opts?.appState?.returnTo, '/app/')}`,
       // `ui_locales` (OIDC core) asks the identity provider to render its pages in the language
       // the app is being read in. It is what the login and password-reset forms have to go on
       // BEFORE there is an account: the person's stored language reaches Keycloak as a user
@@ -1075,6 +1272,8 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
     // test that was supposed to keep the two paths in step counted occurrences across the whole
     // file, so two-in-one-place read the same as one-in-each. Sign out is the path people take.
     clearStoredAgendaTimezone();
+    // The docs header would otherwise keep showing the account (lib/auth/siteSessionHint).
+    clearSiteSessionHint();
     await oidc.signoutRedirect({
       post_logout_redirect_uri: opts?.logoutParams?.returnTo || `${window.location.origin}/app/`,
     });
@@ -1082,12 +1281,12 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
 
   // Utility methods
   const requireAuth = useCallback((): boolean => {
-    if (!isAuthenticated && !isLoading) {
+    if (!isAuthenticated && !authLoading) {
       loginWithRedirect();
       return false;
     }
     return true;
-  }, [isAuthenticated, isLoading, loginWithRedirect]);
+  }, [isAuthenticated, authLoading, loginWithRedirect]);
 
   const hasRole = useCallback((role: string): boolean => {
     // Single source of truth = auth-service /users/status. JWT claims (Keycloak
@@ -1107,7 +1306,8 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
 
   // Expose Auth context (merged with AuthProvider)
   // isLoading must be true while OIDC checks auth OR while token isn't ready
-  // isAuthChecking is only the native OIDC loading (for faster UI rendering)
+  // isAuthChecking is only the auth check itself (for faster UI rendering): OIDC's own loading,
+  // plus the page-load recovery of an expired stored session (isRecoveringStoredSession)
   const updateAvatarUrl = useCallback((url: string) => setAvatarUrl(url), []);
 
   const authValue = useMemo<AuthContextType>(() => ({
@@ -1116,8 +1316,8 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
     user,
     token,
     numericUserId,
-    isLoading: isLoading || (isAuthenticated && !isReady),
-    isAuthChecking: isLoading, // OIDC native loading only - faster UI rendering
+    isLoading: authLoading || (isAuthenticated && !isReady),
+    isAuthChecking: authLoading,
     avatarUrl,
     updateAvatarUrl,
     // Auth methods
@@ -1130,7 +1330,7 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
     hasRole,
     hasPermission,
   }), [
-    isAuthenticated, isReady, user, token, numericUserId, isLoading, avatarUrl,
+    isAuthenticated, isReady, user, token, numericUserId, authLoading, avatarUrl,
     updateAvatarUrl, loginWithRedirect, logout, getAccessToken,
     requireAuth, hasRole, hasPermission,
   ]);
@@ -1151,20 +1351,24 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
 
   if (!publicMarketingPage && (effectiveSessionExpired || (!isAuthenticated && initializationComplete))) {
     // `effectiveSessionExpired` is the ONLY signal that a previously-valid session
-    // ended (cross-tab logout, the persisted OIDC user vanished, or the
-    // login-redirect loop breaker tripped) - so it alone drives the "session
-    // expired" wording. The other path that opens this gate,
+    // ended (cross-tab logout, the persisted OIDC user vanished, or a
+    // login-redirect loop guard refused an automatic redirect) - so it alone drives
+    // the "session expired" wording. The other path that opens this gate,
     // `!isAuthenticated && initializationComplete`, fires for a cold first visit
-    // (fresh e2e slot / CE with no prior login) or a transient post-signin backend
-    // 401, neither of which is an expiry, so SessionGate shows the neutral "sign in
-    // to continue" copy there instead of falsely claiming a session expired.
+    // (fresh e2e slot / CE with no prior login), which is not an expiry, so
+    // SessionGate shows the neutral "sign in to continue" copy there instead of
+    // falsely claiming a session expired.
     return (
       <AuthContext.Provider value={authValue}>
         <div className="fixed inset-0 z-[9999]">
           <AuthLayout>
             <SessionGate
               sessionExpired={effectiveSessionExpired}
-              onSignIn={() => loginWithRedirect({ resetLoopGuards: true })}
+              onSignIn={() => loginWithRedirect({
+                resetLoopGuards: true,
+                // Back to this page (or the login page's own returnTo) once signed in.
+                appState: { returnTo: loginReturnPath(window.location) },
+              })}
             />
           </AuthLayout>
         </div>
@@ -1172,8 +1376,9 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
     );
   }
 
-  // Show a full-screen spinner while OIDC is loading (e.g. redirect back from Keycloak)
-  if (!publicMarketingPage && isLoading) {
+  // Show a full-screen spinner while OIDC is loading (e.g. redirect back from Keycloak) or while
+  // an expired stored session is being recovered (the app stays unmounted until it is decided)
+  if (!publicMarketingPage && authLoading) {
     return (
       <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[var(--bg-primary)]">
         <LoadingSpinner size="lg" />

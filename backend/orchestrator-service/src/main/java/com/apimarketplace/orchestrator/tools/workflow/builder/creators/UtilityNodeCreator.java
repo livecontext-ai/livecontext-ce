@@ -4,6 +4,7 @@ import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.orchestrator.domain.NodeTypeDocumentationEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.execution.v2.nodes.MediaNode;
+import com.apimarketplace.orchestrator.execution.v2.split.SplitNodeExecutor;
 import com.apimarketplace.orchestrator.repository.WorkflowRepository;
 import com.apimarketplace.orchestrator.service.NodeLibraryService;
 import com.apimarketplace.orchestrator.tools.workflow.builder.ResponseOptimizer;
@@ -901,13 +902,27 @@ public class UtilityNodeCreator extends CreatorBase {
                 "The expression must start with {{ and reference a step's output array.");
         }
 
-        // 3. Parse maxItems (default: 100, range: 1-1000)
+        // 3. Parse maxItems (default: 100).
+        //
+        // The upper bound is the SERVER fan-out ceiling, not a creator-local number. It used to
+        // be a flat 1000, which agreed with nothing: a plan arriving through set_plan or a value
+        // set afterwards through modify could carry any number, and the run refuses a fan-out
+        // above the ceiling instead of truncating it. Three surfaces holding three different
+        // bounds is how an author ends up with a limit that passes here and is refused at run
+        // time (LC-064), so they all read the same constant now.
         Integer maxItems = getInt(parameters, "maxItems", "max_items");
         if (maxItems == null) {
             maxItems = 100;
         }
-        if (maxItems < 1 || maxItems > 1000) {
-            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, "max_items must be between 1 and 1000");
+        if (maxItems < 1) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "maxItems must be at least 1. Omit it to use the default of 100 items.");
+        }
+        if (maxItems > SplitNodeExecutor.SPLIT_HARD_CEILING) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "Split '" + label + "': " + SplitNodeExecutor.maxItemsAboveCeilingReason(maxItems)
+                + " Retry this call with maxItems set to " + SplitNodeExecutor.SPLIT_HARD_CEILING
+                + " or less, or omit it to use the default of 100 items.");
         }
 
         // 4. Split strategy is always "continue-anyway" (not configurable by LLM)
@@ -2762,15 +2777,11 @@ public class UtilityNodeCreator extends CreatorBase {
         config.put("maxDepth", maxDepth);
         keepTemplate(config, "maxDepth", parameters, "maxDepth", "max_depth");
 
-        // Resolve workflow name for frontend display
-        if (workflowId != null) {
-            try {
-                UUID wfUuid = UUID.fromString(workflowId);
-                workflowRepository.findById(wfUuid)
-                    .ifPresent(wf -> config.put("workflowName", wf.getName()));
-            } catch (IllegalArgumentException e) {
-                // Invalid UUID - skip name resolution
-            }
+        // Resolve workflow name for frontend display - only when the target is in the
+        // caller's own workspace (LC-043).
+        String displayName = resolveWorkflowNameForDisplay(session, workflowId);
+        if (displayName != null) {
+            config.put("workflowName", displayName);
         }
 
         Map<String, Object> node = new LinkedHashMap<>();
@@ -2792,6 +2803,59 @@ public class UtilityNodeCreator extends CreatorBase {
                        + "s) and fails instead of returning a half-done result." + timeoutNote,
                    "access_result", "{{core:" + normalizedLabel + ".output.result}}"),
             config);
+    }
+
+    /**
+     * The target workflow's name, for display on the sub-workflow node, or {@code null}
+     * when it must not be shown (LC-043, security audit 2026-08-13).
+     *
+     * <p>The lookup used to be a bare {@code findById}, so passing ANY workflow UUID wrote
+     * that workflow's name into the caller's plan: a name is small, but it is another
+     * tenant's, and the builder happily echoed it back. {@code SubWorkflowNode} already
+     * refuses to EXECUTE such a target; this closes the same hole on the BUILD side.
+     *
+     * <p>Returning {@code null} rather than an error is deliberate: this is display
+     * metadata. An unresolvable or out-of-workspace target still produces a valid node
+     * (the id the author typed is kept), it simply carries no name, exactly as it does
+     * when the id is malformed or the workflow does not exist. Refusing here would also
+     * leak the same fact the check exists to hide - that the id names a real workflow.
+     */
+    @com.apimarketplace.common.scope.TolerantScope(reason =
+        "Builder session: the session's org is set by the org-aware create() overload, but "
+        + "sessions created through the legacy overload carry none, and for those the only "
+        + "workspace signal left is ownership. Strict scope on a null caller org would refuse "
+        + "the author their OWN workflows' names, so the org-less branch falls back to "
+        + "isInOwnerOrOrgScope, which with a null caller org reduces to an owner match. What "
+        + "stays refused in both branches is the property this guard exists for: a workflow id "
+        + "the caller neither owns nor shares a workspace with.")
+    private String resolveWorkflowNameForDisplay(WorkflowBuilderSession session, String workflowId) {
+        if (workflowId == null || session == null) {
+            return null;
+        }
+        UUID wfUuid;
+        try {
+            wfUuid = UUID.fromString(workflowId);
+        } catch (IllegalArgumentException e) {
+            return null; // Invalid UUID - skip name resolution
+        }
+        WorkflowEntity target = workflowRepository.findById(wfUuid).orElse(null);
+        if (target == null) {
+            return null;
+        }
+        String callerTenant = session.getTenantId();
+        String callerOrg = session.getOrgId();
+        boolean sameWorkspace = callerOrg != null && !callerOrg.isBlank()
+            ? com.apimarketplace.common.scope.ScopeGuard.isInStrictScope(
+                callerTenant, callerOrg, target.getTenantId(), target.getOrganizationId())
+            : com.apimarketplace.common.scope.ScopeGuard.isInOwnerOrOrgScope(
+                callerTenant, callerOrg, target.getTenantId(), target.getOrganizationId());
+        if (!sameWorkspace) {
+            log.warn("[SCOPE] sub_workflow name lookup refused: caller(tenant={}, org={}) -> "
+                    + "workflow {} (tenant={}, org={}) - node created without workflowName",
+                callerTenant, callerOrg, wfUuid, target.getTenantId(), target.getOrganizationId());
+            return null;
+        }
+        return target.getName();
     }
 
     // ==================== RespondToWebhook ====================

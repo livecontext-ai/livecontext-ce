@@ -197,6 +197,46 @@ class ResourcePublicationServiceTest {
     }
 
     @Test
+    @DisplayName("regression (budget): a TABLE listing whose table is over the row limit is refused, named, before anything is saved")
+    void publishResourceRefusesATableOverTheRowLimit() {
+        String tableId = "44";
+        java.util.List<Map<String, Object>> rows = new java.util.ArrayList<>();
+        for (int i = 0; i < 4; i++) rows.add(Map.of("data", Map.of("n", i)));
+        Map<String, Object> resourceSnapshot = new LinkedHashMap<>(Map.of(
+                "name", "Orders", "sourceType", "INLINE", "mappingSpec", Map.of(), "items", rows));
+
+        ResourcePublicationService service = newTableService();
+        service.snapshotBudget = new PublicationSnapshotBudget(new ObjectMapper(),
+                PublicationSnapshotBudget.DEFAULT_MAX_BYTES, 3);
+        when(publicationRepository.findByPublicationTypeAndResourceId(PublicationType.TABLE, tableId))
+                .thenReturn(Optional.empty());
+        when(strategy.fetchOwnedResource(tableId, TENANT_ID))
+                .thenReturn(new ResourceMetadata("Orders", "Orders table"));
+        when(workflowPublicationService.isCallerInOwnerScope(
+                any(WorkflowPublicationEntity.class), eq(TENANT_ID), eq(ORGANIZATION_ID)))
+                .thenReturn(true);
+        when(strategy.buildSnapshot(tableId, TENANT_ID)).thenReturn(resourceSnapshot);
+        UUID landingInterfaceId = UUID.randomUUID();
+        when(landingInterfaceSnapshotter.parseInterfaceId(landingInterfaceId.toString()))
+                .thenReturn(landingInterfaceId);
+        when(landingInterfaceSnapshotter.buildSnapshot(landingInterfaceId, TENANT_ID, ORGANIZATION_ID))
+                .thenReturn(Map.of("interfaceId", landingInterfaceId.toString()));
+
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("interfaceId", landingInterfaceId.toString());
+        request.put("type", "TABLE");
+        request.put("resourceId", tableId);
+        request.put("title", "Orders");
+
+        assertThatThrownBy(() -> service.publishResource(request, TENANT_ID, ORGANIZATION_ID))
+                .isInstanceOfSatisfying(PublicationValidationException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(PublicationValidationException.PUBLICATION_SNAPSHOT_TOO_LARGE);
+                    assertThat(e.getMessage()).contains("'Orders'").contains("4 rows").contains("max 3");
+                });
+        verify(publicationRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("unpublishResource throws IllegalStateException (→409 at the controller) for a pending-review resource")
     void unpublishResourcePendingReviewThrowsIllegalState() {
         String skillId = UUID.randomUUID().toString();

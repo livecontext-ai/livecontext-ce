@@ -2110,8 +2110,10 @@ public class AgentService {
         if (maxTokens != null && maxTokens <= 0) {
             throw new IllegalArgumentException("maxTokens must be positive");
         }
-        if (maxIterations != null && (maxIterations < 1 || maxIterations > 1000)) {
-            throw new IllegalArgumentException("max_iterations must be between 1 and 1000");
+        if (maxIterations != null && (maxIterations < 1
+                || maxIterations > com.apimarketplace.agent.client.dto.execution.AgentExecutionRequestDto.MAX_ITERATIONS_LIMIT)) {
+            throw new IllegalArgumentException("max_iterations must be between 1 and "
+                + com.apimarketplace.agent.client.dto.execution.AgentExecutionRequestDto.MAX_ITERATIONS_LIMIT);
         }
         if (executionTimeout != null && (executionTimeout < 10 || executionTimeout > 7200)) {
             throw new IllegalArgumentException("execution_timeout must be between 10 and 7200 (seconds)");

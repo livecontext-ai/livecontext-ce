@@ -181,6 +181,31 @@ public class DataSourceItemQueryRepository {
         return jdbcTemplate.query(sql, new DataSourceItemRowMapper(), params.toArray());
     }
 
+    /**
+     * Stored {@code data_sensitivity} of each row, keyed by id (CASA LC-066); an id that is not
+     * found is absent. Read so the row events of the table UI carry it, as the tool writes do.
+     */
+    public Map<Long, String> sensitivityByIds(Long dataSourceId, String tenantId, List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Map.of();
+        }
+        String placeholders = ids.stream().map(id -> "?").collect(Collectors.joining(","));
+        String sql = """
+            SELECT id, data_sensitivity
+            FROM data_source_items
+            WHERE data_source_id = ? AND tenant_id = ? AND id IN (%s)
+            """.formatted(placeholders);
+        List<Object> params = new ArrayList<>();
+        params.add(dataSourceId);
+        params.add(tenantId);
+        params.addAll(ids);
+        Map<Long, String> out = new HashMap<>();
+        jdbcTemplate.query(sql, (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+            out.put(rs.getLong("id"), rs.getString("data_sensitivity"));
+        }, params.toArray());
+        return out;
+    }
+
     // Helper methods for query building
 
     private void appendFilterCriteria(StringBuilder sql, List<Object> params, Map<String, Object> filter) {

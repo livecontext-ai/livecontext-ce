@@ -41,6 +41,13 @@ public class JwtTokenProvider {
     @Value("${auth.jwt.issuer:livecontext}")
     private String issuer;
 
+    /**
+     * {@code aud} of every token this provider mints (CASA LC-083). The CE filter requires it,
+     * so a token the same key signed for another audience is refused.
+     */
+    @Value("${auth.jwt.audience:livecontext}")
+    private String audience;
+
     @Autowired(required = false)
     private JwtKeyPairManager keyPairManager;
 
@@ -67,15 +74,29 @@ public class JwtTokenProvider {
     }
 
     public String generateAccessToken(User user, OrganizationClaims organizationClaims) {
-        return generateToken(user, accessTokenExpirationMs, "access", organizationClaims);
+        return generateAccessToken(user, organizationClaims, null);
+    }
+
+    /**
+     * @param sessionId the id of the refresh-token row (login session) this access token belongs
+     *                  to, carried as the {@code sid} claim so the CE filter can refuse the token
+     *                  once that session is revoked (logout, password change, reuse detection).
+     *                  CASA LC-015. Null omits the claim.
+     */
+    public String generateAccessToken(User user, OrganizationClaims organizationClaims, String sessionId) {
+        return generateToken(user, accessTokenExpirationMs, "access", organizationClaims, sessionId);
     }
 
     public String generateRefreshToken(User user) {
-        return generateToken(user, refreshTokenExpirationMs, "refresh", null);
+        return generateToken(user, refreshTokenExpirationMs, "refresh", null, null);
     }
 
-    private String generateToken(User user, long expirationMs, String tokenType, OrganizationClaims organizationClaims) {
+    private String generateToken(User user, long expirationMs, String tokenType, OrganizationClaims organizationClaims,
+                                 String sessionId) {
         Map<String, Object> claims = new HashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) {
+            claims.put("sid", sessionId);
+        }
         claims.put("userId", user.getId());
         claims.put("email", user.getEmail());
         if (user.getAuthProvider() != null) {
@@ -93,6 +114,7 @@ public class JwtTokenProvider {
                 .setClaims(claims)
                 .setSubject(subjectFor(user))
                 .setIssuer(issuer)
+                .setAudience(audience)
                 .setIssuedAt(new Date(System.currentTimeMillis()))
                 .setExpiration(new Date(System.currentTimeMillis() + expirationMs))
                 .signWith(getSigningKey(), getAlgorithm());

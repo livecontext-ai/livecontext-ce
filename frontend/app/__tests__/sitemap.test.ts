@@ -127,6 +127,23 @@ describe('sitemap - cloud edition', () => {
     }
   });
 
+  it('regression: lists the partner page in six languages with reciprocal alternates (it was one English URL)', async () => {
+    vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
+    mockMarketplace();
+    mockIntegrations();
+    mockVideos();
+    const { default: sitemap } = await import('../sitemap');
+    const entries = (await sitemap()).filter((entry) => /^https:\/\/livecontext\.ai(\/[a-z]{2})?\/partners$/.test(entry.url));
+
+    expect(entries.map((entry) => entry.url).sort()).toEqual(
+      ['', '/de', '/es', '/fr', '/pt', '/zh'].map((prefix) => `${SITE}${prefix}/partners`).sort(),
+    );
+    const english = entries.find((entry) => entry.url === `${SITE}/partners`);
+    expect(english?.alternates?.languages?.['x-default']).toBe(`${SITE}/partners`);
+    expect(english?.alternates?.languages?.zh).toBe(`${SITE}/zh/partners`);
+    for (const entry of entries) expect(entry.alternates).toEqual(english?.alternates);
+  });
+
   it('emits one entry per live docs page, with the Overview at a higher priority', async () => {
     vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
     mockMarketplace();

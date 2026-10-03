@@ -24,8 +24,9 @@ public class PricingSnapshotConfig {
 
     @Bean
     public PricingSnapshotClient pricingSnapshotClient(
-            @Value("${services.auth-service.url:http://localhost:8083}") String authServiceUrl) {
-        PricingSnapshotClient client = new PricingSnapshotClient(authServiceUrl);
+            @Value("${services.auth-service.url:http://localhost:8083}") String authServiceUrl,
+            @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
+        PricingSnapshotClient client = new PricingSnapshotClient(authServiceUrl, gatewaySecretKey);
         try {
             client.refresh();
         } catch (Exception e) {

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -13,6 +14,9 @@ from app.services.crawl_client import cancel_pending_tasks
 from app.services.minio_client import init_minio
 from app.services.browser_client import close_browsers
 from app.services.redis_client import get_redis
+from app.config import settings
+from app.services.crawl_filter import callback_origin_warnings
+from app.services.egress_guard_proxy import ensure_egress_guard, stop_egress_guard
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -45,6 +49,21 @@ async def _purge_stale_browser_concurrent_slots() -> None:
         logger.warning("Failed to purge stale concurrent-session LISTs", exc_info=True)
 
 
+async def _start_egress_guard() -> None:
+    """Start the browsers' egress guard proxy before serving requests.
+
+    Starting it waits for its thread to bind; doing that here (off the event
+    loop) keeps the first crawl or browser-agent request from blocking the
+    loop. Best-effort: on failure every browser launch retries it and
+    refuses to browse while it cannot start (fail closed).
+    """
+    try:
+        await asyncio.to_thread(ensure_egress_guard)
+    except Exception:
+        logger.error("Egress guard proxy could not start at boot; browsers stay "
+                     "disabled until it can", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle: initialize shared clients, shutdown gracefully."""
@@ -52,9 +71,14 @@ async def lifespan(app: FastAPI):
     await init_redis()
     await init_minio()
     await _purge_stale_browser_concurrent_slots()
+    for warning in callback_origin_warnings(settings.callback_allowed_origins):
+        logger.warning(warning)
+    await _start_egress_guard()
     yield
     await cancel_pending_tasks()
     await close_browsers()
+    # Off the event loop: stopping joins the guard thread (up to ~10 s).
+    await asyncio.to_thread(stop_egress_guard)
     await close_redis()
     await close_clients()
 

@@ -14,6 +14,7 @@ import {
   Lock,
 } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { numberDecimals as sanitizeDecimals, NUMBER_CONFIG_MAX_DECIMALS } from '@/components/data-table/cells/NumberCell';
 import { ModalStepIndicator } from '@/components/ui/ModalStepIndicator';
 
 const TOTAL_STEPS = 2;
@@ -212,9 +213,9 @@ export const NumberFormatConfig: React.FC<NumberFormatConfigProps> = ({ format, 
         <Input
           type="number"
           min={0}
-          max={6}
+          max={NUMBER_CONFIG_MAX_DECIMALS}
           value={decimals}
-          onChange={(e) => onDecimalsChange(Math.max(0, Number(e.target.value) || 0))}
+          onChange={(e) => onDecimalsChange(sanitizeDecimals(e.target.value, NUMBER_CONFIG_MAX_DECIMALS))}
           className="w-20"
         />
       </div>
@@ -246,7 +247,7 @@ export const ProgressConfig: React.FC<ProgressConfigProps> = ({ max, onChange, l
       type="number"
       min={1}
       value={max}
-      onChange={(e) => onChange(Math.max(1, Number(e.target.value) || 100))}
+      onChange={(e) => onChange(Math.max(1, Math.trunc(Number(e.target.value)) || 100))}
       className="w-32"
     />
   </div>

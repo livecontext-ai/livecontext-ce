@@ -61,6 +61,25 @@ class MonolithFileControllerSignedTest {
     }
 
     @Test
+    @DisplayName("LC-016 (CE twin): a signed .html key is served with nosniff and a script-free sandbox policy")
+    void signedHtmlIsSandboxed() {
+        long exp = Instant.now().getEpochSecond() + 3600;
+        String key = "tenant-1/general/x/page.html";
+        String sig = signer.sign(key, exp, "inline");
+        when(mimeTypeRegistry.resolve("page.html")).thenReturn("text/html");
+        byte[] bytes = "<script>".getBytes();
+        when(fileStorageService.openStream(key))
+                .thenReturn(Optional.of(new DownloadStream(new ByteArrayInputStream(bytes), bytes.length, "text/html")));
+
+        ResponseEntity<StreamingResponseBody> response = controller.proxySignedDownload(key, exp, "inline", sig, null);
+
+        // main's SignedProxyHeaders: an HTML report shared by public link still renders, but can
+        // never run script on the app origin.
+        assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+        assertThat(response.getHeaders().getFirst("Content-Security-Policy")).isEqualTo("sandbox");
+    }
+
+    @Test
     @DisplayName("Valid signed URL streams the bytes with Cache-Control: private and the resolved Content-Type")
     void validSignedUrlStreams() throws Exception {
         // 4h of link life left (the real default TTL of both minting sites), so the 900s

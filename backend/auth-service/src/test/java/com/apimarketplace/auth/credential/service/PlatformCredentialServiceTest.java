@@ -1216,6 +1216,34 @@ class PlatformCredentialServiceTest {
             assertThat(deleted).isTrue();
             verify(repository).deleteByIntegrationName("airtable", "tenant-1", "org-1");
         }
+
+        @Test
+        @DisplayName("LC-065 (item 3): ownedClientId returns the client id of the owned row, for scoping the revoke cascade")
+        void ownedClientId_returnsClientIdOfOwnedRow() {
+            PlatformCredential owned = buildCredential("gmail", "cid-owned", "secret", null, true);
+            when(repository.findOwnedRow("gmail", "tenant-1", "org-1")).thenReturn(Optional.of(owned));
+
+            String clientId = service.ownedClientId("gmail", "tenant-1", "org-1");
+
+            assertThat(clientId).isEqualTo("cid-owned");
+        }
+
+        @Test
+        @DisplayName("ownedClientId returns null when the tenant owns no such row (nothing to scope, no filtering applied)")
+        void ownedClientId_nullWhenNoOwnedRow() {
+            when(repository.findOwnedRow("gmail", "tenant-1", "org-1")).thenReturn(Optional.empty());
+
+            assertThat(service.ownedClientId("gmail", "tenant-1", "org-1")).isNull();
+        }
+
+        @Test
+        @DisplayName("ownedClientId returns null (not blank) when the owned row has no client id (API-key style BYOK)")
+        void ownedClientId_nullWhenClientIdBlank() {
+            PlatformCredential apiKeyRow = buildCredential("stripe", "", "secret", "api-key-value", true);
+            when(repository.findOwnedRow("stripe", "tenant-1", null)).thenReturn(Optional.of(apiKeyRow));
+
+            assertThat(service.ownedClientId("stripe", "tenant-1", null)).isNull();
+        }
     }
 
     // ========== Helpers ==========

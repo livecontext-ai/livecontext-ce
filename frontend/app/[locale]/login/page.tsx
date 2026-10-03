@@ -14,14 +14,17 @@ import { apiClient } from '@/lib/api';
 import { CE_STATUS_API_PATH } from '@/components/security/onboardingStatus';
 import { isCeFirstRun, type CeFirstRunStatus } from '@/lib/auth/ceFirstRun';
 import { track } from '@/lib/analytics/analytics';
+import { safeReturnPath } from '@/lib/security/safeReturnPath';
 
 export default function LoginPage() {
   const t = useTranslations('auth.login');
+  const tErrors = useTranslations('errors');
   const locale = useLocale();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isAuthenticated, isLoading: isAuthLoading, loginWithRedirect } = useAuth();
-  const returnTo = searchParams.get('returnTo') || `/${locale}/app/chat`;
+  // Untrusted query value: only a same-origin relative path survives (open-redirect guard).
+  const returnTo = safeReturnPath(searchParams.get('returnTo'), `/${locale}/app/chat`);
   const registerHref = `/${locale}/register?returnTo=${encodeURIComponent(returnTo)}`;
 
   const [email, setEmail] = useState('');
@@ -29,6 +32,16 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const redirectStartedRef = useRef(false);
+
+  // Cloud: the page only hands over to Keycloak. A redirect that leaves the page never settles, so
+  // one that SETTLES, resolved or rejected, did not leave: react-oidc-context swallows a failed
+  // redirect (offline, discovery unreachable) into a resolved null, and a Back from Keycloak resolves
+  // it on pageshow. Either way the person is still here: show the error and a retry instead of an
+  // endless spinner. The retry is an explicit action, so it starts from a clean loop budget.
+  const startCloudSignIn = useCallback((explicit: boolean) => {
+    const notLeft = () => setError(tErrors('signInUnreachable'));
+    loginWithRedirect({ appState: { returnTo }, resetLoopGuards: explicit }).then(notLeft, notLeft);
+  }, [loginWithRedirect, returnTo, t]);
 
   useEffect(() => {
     if (!IS_CLOUD || isAuthLoading || redirectStartedRef.current) return;
@@ -38,11 +51,8 @@ export default function LoginPage() {
       return;
     }
     redirectStartedRef.current = true;
-    loginWithRedirect({ appState: { returnTo } }).catch(() => {
-      redirectStartedRef.current = false;
-      setError(t('error'));
-    });
-  }, [isAuthenticated, isAuthLoading, loginWithRedirect, returnTo, router, t]);
+    startCloudSignIn(false);
+  }, [isAuthenticated, isAuthLoading, returnTo, router, startCloudSignIn]);
 
   useEffect(() => {
     // CE first-run: a virgin install has no account to sign into, so a
@@ -90,8 +100,17 @@ export default function LoginPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[var(--bg-primary)] px-4">
         {error ? (
-          <div className="w-full max-w-sm rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3">
-            <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+          <div className="w-full max-w-sm space-y-3">
+            <div role="alert" className="rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3">
+              <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => { setError(''); startCloudSignIn(true); }}
+              className="inline-flex h-9 w-full items-center justify-center rounded-md border border-[var(--accent-primary)] bg-[var(--accent-primary)] px-4 text-sm font-medium text-[var(--accent-foreground)] transition-opacity hover:opacity-90"
+            >
+              {tErrors('retry')}
+            </button>
           </div>
         ) : (
           <LoadingSpinner size="lg" />

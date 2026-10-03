@@ -20,8 +20,27 @@ public record GuardrailRequestDto(
     Double temperature,
     Integer maxTokens,
     String tenantId,
-    String agentEntityId
+    String agentEntityId,
+    /**
+     * {@code RESTRICTED} when the content carries Google restricted-scope data (Gmail, Drive).
+     * agent-service then refuses to run it on a provider outside the restricted-data allow-list,
+     * including when a model execution link would move it there. Null means NORMAL.
+     */
+    String dataSensitivity
 ) {
+    /** Pre-classification shape: NORMAL content. */
+    public GuardrailRequestDto(String content, String prompt, List<RuleDto> rules, String action, String provider,
+                               String model, Double temperature, Integer maxTokens, String tenantId,
+                               String agentEntityId) {
+        this(content, prompt, rules, action, provider, model, temperature, maxTokens, tenantId, agentEntityId, null);
+    }
+
+    /** Same request, tagged with a sensitivity. */
+    public GuardrailRequestDto withDataSensitivity(String sensitivity) {
+        return new GuardrailRequestDto(content, prompt, rules, action, provider, model, temperature, maxTokens,
+            tenantId, agentEntityId, sensitivity);
+    }
+
 
     /**
      * The prompt as an instruction SEPARATE from the content, or {@code null} when there is none.

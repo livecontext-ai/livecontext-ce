@@ -179,6 +179,7 @@ public class S3FileStorageService implements FileStorageService {
     public FileRef uploadGeneric(String tenantId, String category, String fileName, String mimeType,
                                  InputStream content, long size) {
         validateQuota(tenantId, size);
+        category = sanitizeCategory(category);
         String key = buildGenericKey(tenantId, category, fileName);
         FileRef ref = doUpload(key, fileName, mimeType, RequestBody.fromInputStream(content, size), size);
         UUID id = indexGenericUpload(tenantId, category, key, fileName, mimeType, size);
@@ -191,6 +192,7 @@ public class S3FileStorageService implements FileStorageService {
     public FileRef uploadGeneric(String tenantId, String category, String fileName, String mimeType,
                                  InputStream content, long size, UUID parentFolderId) {
         validateQuota(tenantId, size);
+        category = sanitizeCategory(category);
         String key = buildGenericKey(tenantId, category, fileName);
         FileRef ref = doUpload(key, fileName, mimeType, RequestBody.fromInputStream(content, size), size);
         UUID id = indexGenericUpload(tenantId, category, key, fileName, mimeType, size, parentFolderId);
@@ -573,6 +575,27 @@ public class S3FileStorageService implements FileStorageService {
         String uniquePrefix = UUID.randomUUID().toString().substring(0, 8);
         return String.format("%s/general/%s/%s_%s",
             tenantId, category, uniquePrefix, safeFileName);
+    }
+
+    /** Longest category kept in a key; generous for every real caller ("avatar", "chat-attachments"). */
+    static final int MAX_CATEGORY_LENGTH = 64;
+
+    /**
+     * The generic-upload {@code category} is a client-supplied form field that becomes a PATH
+     * segment of the object key ({@code {tenant}/general/{category}/...}). Unsanitized,
+     * {@code ../../<otherTenant>} or a slash rewrites the key outside the caller's namespace while
+     * the key still starts with the caller's own tenant prefix (LC-063). Allow-list: letters,
+     * digits, {@code _} and {@code -}; anything else becomes {@code _}, and a blank value falls
+     * back to {@code general} (the endpoint's own default). Applied before BOTH the key and the
+     * index row, so the stored category and the key segment never disagree (avatar eligibility
+     * reads the category).
+     */
+    static String sanitizeCategory(String category) {
+        if (category == null || category.isBlank()) {
+            return "general";
+        }
+        String safe = category.trim().replaceAll("[^A-Za-z0-9_-]", "_");
+        return safe.length() > MAX_CATEGORY_LENGTH ? safe.substring(0, MAX_CATEGORY_LENGTH) : safe;
     }
 
     private String sanitizeFileName(String fileName) {

@@ -22,11 +22,15 @@ vi.mock('@/hooks/useAuthGuard', () => ({
 }));
 vi.mock('@/lib/providers/smart-providers', () => ({
   useAuth: () => ({ loginWithRedirect: vi.fn() }),
+  // The offer apps picker reads the account optionally.
+  useOptionalAuth: () => ({ isAuthenticated: true, isReady: true, isLoading: false, numericUserId: 42 }),
 }));
 vi.mock('@/lib/api/services/partner-program-api.service', () => ({
   PARTNER_DASHBOARD_QUERY_KEY: ['partner-program', 'me'],
+  PARTNER_OFFERS_QUERY_KEY: ['partner-program', 'offers'],
   partnerProgramApi: {
     me: () => me(),
+    offers: async () => ({ offers: [] }),
     apply: (body: unknown) => apply(body),
     acceptTerms: (version: string) => acceptTerms(version),
   },
@@ -81,7 +85,7 @@ describe('Settings > Partner program', () => {
     expect(me).not.toHaveBeenCalled();
   });
 
-  it('never applied: shows the live terms and the application form', async () => {
+  it('never applied: what the program pays and a way to the form on /partners, and no form here', async () => {
     me.mockResolvedValue(dashboard({ state: 'none' }));
     renderPage();
 
@@ -89,42 +93,26 @@ describe('Settings > Partner program', () => {
     expect(screen.getByText('50% of every paid invoice')).toBeTruthy();
     expect(screen.getByText('For 12 months per customer')).toBeTruthy();
     expect(screen.getByText('10,000 free credits for each client you bring')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Submit my application/ })).toBeTruthy();
+    expect(screen.getByTestId('partner-join').textContent).toContain('Earn up to 50% of every invoice your clients pay');
+    const cta = screen.getByTestId('partner-join-apply');
+    expect(cta.textContent).toBe('Apply');
+    expect(cta.getAttribute('href')).toBe('/partners#apply');
+    // /partners holds the only application form.
+    expect(screen.queryByLabelText('Company or brand')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Submit my application/ })).toBeNull();
+    expect(apply).not.toHaveBeenCalled();
   });
 
-  it('submitting the form sends the application and refreshes into the pending state', async () => {
-    me.mockResolvedValueOnce(dashboard({ state: 'none' }))
-      .mockResolvedValueOnce(dashboard({ state: 'pending', application: APPLICATION }));
-    apply.mockResolvedValue({ success: true, application: APPLICATION });
+  it('with tiers, the band headlines the top rate and lays out the three tiers with their thresholds', async () => {
+    me.mockResolvedValue(dashboard({ state: 'none', terms: { ...TERMS, commission_percent: 30, tiers: TIERS } }));
     renderPage();
 
-    await waitFor(() => expect(screen.getByLabelText('Company or brand')).toBeTruthy());
-    fireEvent.change(screen.getByLabelText('Company or brand'), { target: { value: '  Acme Automation ' } });
-    fireEvent.change(screen.getByLabelText('Website'), { target: { value: 'https://acme.io' } });
-    fireEvent.click(screen.getByTestId('partner-terms-checkbox'));
-    fireEvent.click(screen.getByRole('button', { name: /Submit my application/ }));
-
-    await waitFor(() => expect(apply).toHaveBeenCalledWith({
-      company_name: 'Acme Automation', website: 'https://acme.io', audience: undefined, message: undefined,
-      terms_version: PARTNER_TERMS_VERSION,
-    }));
-    await waitFor(() => expect(screen.getByTestId('partner-pending')).toBeTruthy());
-    expect(screen.getByText(/We are reviewing the application for Acme Automation/)).toBeTruthy();
-  });
-
-  it('a refused application shows the translated reason, not a raw token', async () => {
-    me.mockResolvedValue(dashboard({ state: 'none' }));
-    const { ApiError } = await import('@/lib/api/api-client');
-    apply.mockRejectedValue(new ApiError('conflict', 409, 'already_pending'));
-    renderPage();
-
-    await waitFor(() => expect(screen.getByLabelText('Company or brand')).toBeTruthy());
-    fireEvent.change(screen.getByLabelText('Company or brand'), { target: { value: 'Acme' } });
-    fireEvent.click(screen.getByTestId('partner-terms-checkbox'));
-    fireEvent.click(screen.getByRole('button', { name: /Submit my application/ }));
-
-    await waitFor(() => expect(screen.getByRole('alert').textContent)
-      .toBe('You already have an application under review.'));
+    const tiers = await screen.findByTestId('partner-join-tiers');
+    expect(screen.getByTestId('partner-join').textContent).toContain('Earn up to 50% of every invoice your clients pay');
+    expect(tiers.querySelectorAll('li')).toHaveLength(3);
+    expect(tiers.textContent).toContain('SilverFrom day one30%');
+    expect(tiers.textContent).toContain('GoldFrom $5,000 in client revenue40%');
+    expect(tiers.textContent).toContain('PlatinumFrom $25,000 in client revenue50%');
   });
 
   describe('V557 Partner Program Terms on the partner page', () => {
@@ -196,16 +184,6 @@ describe('Settings > Partner program', () => {
     });
   });
 
-  it('the submit button stays disabled until a company is entered', async () => {
-    me.mockResolvedValue(dashboard({ state: 'none' }));
-    renderPage();
-
-    const submit = await screen.findByRole('button', { name: /Submit my application/ });
-    expect((submit as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText('Company or brand'), { target: { value: '   ' } });
-    expect((submit as HTMLButtonElement).disabled).toBe(true);
-  });
-
   it('V556: with tiers, the terms state the range from the entry rate to the top tier', async () => {
     me.mockResolvedValue(dashboard({ state: 'none', terms: { ...TERMS, commission_percent: 30, tiers: TIERS } }));
     renderPage();
@@ -220,7 +198,7 @@ describe('Settings > Partner program', () => {
     await waitFor(() => expect(screen.getByText('12.5% of every paid invoice')).toBeTruthy());
   });
 
-  it('rejected: shows the admin note and lets the user apply again', async () => {
+  it('rejected: shows the admin note and sends the user back to the form on /partners', async () => {
     me.mockResolvedValue(dashboard({
       state: 'rejected',
       application: { ...APPLICATION, status: 'rejected', decision_note: 'Come back with a first client' },
@@ -229,7 +207,25 @@ describe('Settings > Partner program', () => {
 
     await waitFor(() => expect(screen.getByTestId('partner-rejected')).toBeTruthy());
     expect(screen.getByText('Our note: Come back with a first client')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Submit my application/ })).toBeTruthy();
+    expect(screen.getByText('You can apply again whenever you like: tell us what has changed since.')).toBeTruthy();
+    const cta = screen.getByTestId('partner-join-apply');
+    expect(cta.textContent).toBe('Apply again');
+    expect(cta.getAttribute('href')).toBe('/partners#apply');
+    expect(screen.queryByLabelText('Company or brand')).toBeNull();
+  });
+
+  it('pending: the review as a track, the current step marked, and no form', async () => {
+    me.mockResolvedValue(dashboard({ state: 'pending', application: APPLICATION }));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('partner-pending')).toBeTruthy());
+    expect(screen.getByText(/We are reviewing the application for Acme Automation/)).toBeTruthy();
+    const steps = screen.getByTestId('partner-pending-steps').querySelectorAll('li');
+    expect([...steps].map((li) => li.querySelector('.font-semibold')?.textContent))
+      .toEqual(['Application sent', 'Under review', 'Answer by e-mail']);
+    expect(steps[1].getAttribute('aria-current')).toBe('step');
+    expect(steps[0].textContent).toContain('Submitted on');
+    expect(screen.queryByTestId('partner-join-apply')).toBeNull();
   });
 
   it('active partner: link, per-partner rate, counters and commission lines, and no form', async () => {
@@ -239,6 +235,11 @@ describe('Settings > Partner program', () => {
         code: 'ACME', commission_percent: 40, commission_months: 12, hold_days: 14, audience_credits: 10000,
         valid_until: '2027-06-30T00:00:00Z', max_uses: 25, redemptions: 5, paying_customers: 2,
         commissions: { on_hold: { usd: 800 }, payable: { usd: 1200 }, paid: { usd: 300 }, voided: {} },
+        months: [
+          { month: '2026-08', commissions: {} },
+          { month: '2026-09', commissions: { usd: 2000 } },
+          { month: '2026-10', commissions: { usd: 800 } },
+        ],
         lines: [
           { invoice_paid_at: '2026-09-01T10:00:00Z', currency: 'usd', base_amount_minor: 2000, commission_minor: 800,
             status: 'on_hold', due_at: '2026-09-15T10:00:00Z', paid_at: null },
@@ -263,6 +264,14 @@ describe('Settings > Partner program', () => {
     expect(screen.getByText('Voided (refund or dispute)')).toBeTruthy();
     expect(screen.getByRole('img', { name: 'Official partner' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Submit my application/ })).toBeNull();
+    // The hero: what this month earned, what is ready to be paid, and the year as a chart.
+    expect(screen.getByTestId('partner-month-earned').textContent).toBe('$8.00');
+    expect(screen.getByTestId('partner-hero-payable').textContent).toBe('Ready to be paid: $12.00');
+    expect(screen.getByTestId('partner-earnings-total').textContent).toBe('$28.00 over 12 months');
+    expect(screen.getByRole('img', { name: 'Your commission each month, from Aug 26 to Oct 26' })).toBeTruthy();
+    expect(screen.queryByTestId('partner-earnings-empty')).toBeNull();
+    expect(screen.getAllByTestId('partner-line').map((row) => row.querySelector('[data-status]')?.getAttribute('data-status')))
+      .toEqual(['on_hold', 'void']);
   });
 
   it('inactive partner: warns that sign-ups are no longer attributed and hides the badge', async () => {

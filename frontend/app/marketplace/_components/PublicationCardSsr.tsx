@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { Package, Star } from 'lucide-react';
 import type { PublicPublicationSummary } from '@/lib/marketplace/publicPublications';
@@ -42,6 +43,7 @@ export default function PublicationCardSsr({
   publisherPartner = false,
   publisherAvatarSrc,
   badgeLabel,
+  cover: coverOverride,
 }: {
   publication: PublicPublicationSummary;
   /**
@@ -51,6 +53,11 @@ export default function PublicationCardSsr({
   publisherAvatarSrc?: string | null;
   /** Translated accessible name of the partner badge, when the caller has a translator. */
   badgeLabel?: string;
+  /**
+   * A picture of the app drawn in place of the integration glyphs, for the illustrative card of
+   * the /partners page (its fictional app has no showcase to run). Real listings leave it out.
+   */
+  cover?: ReactNode;
   /**
    * Whether this listing's author carries the verified badge. Passed in rather
    * than resolved here: the page already knows every author it is about to
@@ -93,7 +100,7 @@ export default function PublicationCardSsr({
   // when the backend computed them, a neutral package mark otherwise. It is
   // what a crawler, a JS-less visitor and a listing with no frozen showcase all
   // see, so it has to be a real thumbnail rather than a grey placeholder.
-  const cover = (
+  const cover = coverOverride ?? (
     <div className="relative grid h-full w-full place-items-center bg-[var(--bg-secondary)]">
       <div
         aria-hidden

@@ -40,8 +40,24 @@ public record CrudResponse(
         Integer offset,
 
         // Coercion warnings
-        List<String> warnings
-    ) {}
+        List<String> warnings,
+
+        // LC-066/LC-011 re-audit item 2: "RESTRICTED" or "NORMAL", see CrudResult.ResultData.
+        String dataSensitivity
+    ) {
+        /**
+         * The shape before dataSensitivity existed. Kept so every caller/test fixture built
+         * without it still compiles: adding a component to a record is otherwise a breaking
+         * change to code that has nothing to do with restricted-data tagging.
+         */
+        public ResultData(List<Map<String, Object>> rows, Integer rowCount, List<Long> insertedIds,
+                          Integer insertedCount, Integer affectedRows, Integer deletedRows,
+                          List<String> createdColumns, Boolean hasMore, Integer offset,
+                          List<String> warnings) {
+            this(rows, rowCount, insertedIds, insertedCount, affectedRows, deletedRows,
+                    createdColumns, hasMore, offset, warnings, null);
+        }
+    }
 
     /**
      * Create from domain CrudResult.
@@ -60,7 +76,8 @@ public record CrudResponse(
                 domainData.createdColumns(),
                 domainData.hasMore(),
                 domainData.offset(),
-                domainData.warnings()
+                domainData.warnings(),
+                domainData.dataSensitivity()
             );
         }
         return new CrudResponse(

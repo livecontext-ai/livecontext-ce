@@ -633,6 +633,48 @@ class StorageRepositoryIntegrationTest {
         }
     }
 
+    @Nested
+    @DisplayName("StorageRepository - LC-066 restricted since / restricted epochs")
+    class RestrictedSinceTests {
+
+        private StorageEntity row(String runId, int epoch, String sensitivity, java.time.Instant createdAt) {
+            StorageEntity entity = createJsonEntity(TENANT_1, Map.of("k", "v"));
+            entity.setRunId(runId);
+            entity.setEpoch(epoch);
+            entity.setDataSensitivity(sensitivity);
+            entity.setCreatedAt(createdAt);
+            return storageRepository.save(entity);
+        }
+
+        @Test
+        @DisplayName("the first restricted moment is the oldest RESTRICTED row of the run; NORMAL rows and other runs do not count")
+        void firstRestrictedCreatedAt() {
+            java.time.Instant t0 = java.time.Instant.parse("2026-09-01T00:00:00Z");
+            row("run-r", 0, "NORMAL", t0);
+            row("run-r", 1, "RESTRICTED", t0.plusSeconds(3600));
+            row("run-r", 2, "RESTRICTED", t0.plusSeconds(7200));
+            row("run-other", 0, "RESTRICTED", t0.minusSeconds(3600));
+            entityManager.flush();
+
+            assertThat(storageRepository.findFirstRestrictedCreatedAt("run-r")).isEqualTo(t0.plusSeconds(3600));
+            assertThat(storageRepository.findFirstRestrictedCreatedAt("run-clean")).isNull();
+        }
+
+        @Test
+        @DisplayName("the epoch check sees only the given epochs' RESTRICTED rows")
+        void restrictedEpochs() {
+            java.time.Instant t0 = java.time.Instant.parse("2026-09-01T00:00:00Z");
+            row("run-e", 1, "NORMAL", t0);
+            row("run-e", 2, "RESTRICTED", t0.plusSeconds(60));
+            entityManager.flush();
+
+            assertThat(storageRepository.existsByRunIdAndDataSensitivityAndEpochIn("run-e", "RESTRICTED", List.of(1, 0)))
+                    .isFalse();
+            assertThat(storageRepository.existsByRunIdAndDataSensitivityAndEpochIn("run-e", "RESTRICTED", List.of(2, 0)))
+                    .isTrue();
+        }
+    }
+
     // ========== Helper Methods ==========
 
     private StorageEntity createJsonEntity(String tenantId, Map<String, Object> data) {

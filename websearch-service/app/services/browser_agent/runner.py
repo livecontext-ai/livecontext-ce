@@ -11,7 +11,8 @@ Lifecycle:
      touching the orchestrator-facing contract.
   3. Around each step:
      - drain the control LIST (PAUSE / RESUME / ABORT / INTERVENE)
-     - SSRF-check the next URL via `crawl_filter.is_url_safe_for_navigation`
+     - SSRF-check every browser request via the CDP Fetch request guard
+       (`browser_request_guard`, predicate `crawl_filter.is_request_url_allowed`)
      - XADD a step event with eval/memory/goal/action/screenshot_key
   4. On completion: push the final result to `agent:result:{job_id}` (LIST)
      so the Java orchestrator's BLPOP returns. Also XADD a `final` event
@@ -20,8 +21,9 @@ Lifecycle:
 Safety:
   - Hard wallclock cap (default 600s).
   - Hard step cap (default 50).
-  - SSRF re-check on every navigation target (post-redirect handled by
-    browser-use's own action layer).
+  - SSRF check on every request Chromium makes (redirect hops, frames,
+    workers) through a browser-level CDP Fetch interceptor installed before
+    step 1; the session refuses to browse if it cannot be installed.
   - Stop reasons map to shared-contract enum values for observability
     (MAX_STEPS → MAX_ITERATIONS, USER_TAKEOVER → STOPPED_BY_USER, etc.)
 """
@@ -34,12 +36,22 @@ import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import redis.asyncio as aioredis
 
 from app.config import browser_agent_budget, settings
-from app.services.crawl_filter import is_url_safe_for_navigation
+from app.services.browser_request_guard import (
+    BlockedRequest,
+    RequestGuard,
+    install_on_cdp_use,
+)
+from app.services.crawl_filter import is_unresolvable_reason, is_url_safe_for_navigation
+from app.services.egress_guard_proxy import (
+    CHROME_EGRESS_ARGS,
+    egress_guard_alive,
+    ensure_egress_guard,
+)
 
 from .budget_gate import (
     BudgetExhaustedError,
@@ -520,7 +532,10 @@ async def _run_loop(
     start_url = parameters.get("start_url")
     if start_url:
         safe, reason = is_url_safe_for_navigation(start_url)
-        if not safe:
+        # A start_url whose host does not resolve (typo'd or dead domain) is
+        # not a blocked domain: the browser opens it and shows Chrome's DNS
+        # error, which the agent can see and recover from.
+        if not safe and not is_unresolvable_reason(reason):
             return _build_result(
                 session, started, stop_reason="DOMAIN_BLOCKED",
                 final_result=f"start_url rejected: {reason}",
@@ -676,6 +691,22 @@ async def _drive_browser_use(
     start_url = parameters.get("start_url")
     agent_task = _task_with_start_url(task, start_url)
 
+    # Connect-time SSRF check: Chromium reaches the network only through the
+    # local egress guard (SOCKS5, remote DNS), which resolves each name once
+    # and dials the address it checked, so a DNS answer that changes after
+    # the CDP request guard's check (rebinding) cannot reach an internal
+    # host. Fail closed: no guard, no browser.
+    try:
+        # Off the event loop: (re)starting the guard waits for its thread.
+        egress_proxy = await asyncio.to_thread(ensure_egress_guard)
+    except Exception as e:
+        logger.error("browser_agent egress guard could not start (session=%s): %s: %s",
+                     session.session_id, type(e).__name__, e)
+        return {
+            "stop_reason": "DOMAIN_BLOCKED",
+            "final_result": "browser network guard could not be started; refusing to browse",
+        }
+
     try:
         from browser_use import BrowserProfile  # type: ignore
         # 1920×1080 viewport: the agent sees a typical desktop-wide
@@ -699,6 +730,8 @@ async def _drive_browser_use(
             "headless": True,
             "window_size": {"width": 1920, "height": 1080},
             "viewport": {"width": 1920, "height": 1080},
+            "proxy": {"server": egress_proxy},
+            "args": list(CHROME_EGRESS_ARGS),
         }
         try:
             profile = BrowserProfile(keep_alive=True, **profile_kwargs)
@@ -711,12 +744,17 @@ async def _drive_browser_use(
             profile = BrowserProfile(**profile_kwargs)
         agent = Agent(task=agent_task, llm=llm, browser_profile=profile,
                       calculate_cost=False)
-    except (ImportError, TypeError):
+    except (ImportError, TypeError) as e:
         # browser-use < 0.12 didn't expose BrowserProfile or used a different
-        # kwarg name. Fall back to a plain Agent so we don't crash existing
-        # local installs (the user sees the large Chromium window on those
-        # versions). agent_task already carries the start_url navigation step.
-        agent = Agent(task=agent_task, llm=llm, calculate_cost=False)
+        # kwarg name. A plain Agent would launch Chromium WITHOUT the egress
+        # guard proxy, so refuse instead (fail closed); the pinned 0.12.6
+        # never takes this path.
+        logger.error("browser_agent: BrowserProfile unavailable (%s: %s); refusing to "
+                     "browse without the egress guard", type(e).__name__, e)
+        return {
+            "stop_reason": "DOMAIN_BLOCKED",
+            "final_result": "browser network guard could not be applied; refusing to browse",
+        }
 
     # browser-use 0.12.x setup is done internally by `Agent.run()`. Direct
     # `Agent.step()` calls fail on the bubus event handler chain because
@@ -731,7 +769,28 @@ async def _drive_browser_use(
 
     guardrails_installed = False
     cdp_captured = False
-    nav_filter_installed = False
+    # Which root CDP client carries the SSRF request guard. browser-use
+    # replaces that client on a reconnect and Chrome drops the old
+    # connection's Fetch interception with it, so "installed once" is not
+    # enough: the guard follows the client (see `_guard_current_client`).
+    guard_binding = _GuardBinding()
+    guard_at_connect = _take_over_proxy_auth_setup(agent, session, guard_binding)
+
+    async def _guardrails_before_first_page() -> None:
+        # The pre-loop navigation loads the first page before step 1: inject
+        # the DOM guardrails first so that page carries them too.
+        nonlocal guardrails_installed
+        if not guardrails_installed and settings.browser_agent_guardrails_enabled:
+            guardrails_installed = await _install_guardrails(agent)
+
+    # browser-use opens the task's URL before step 1. With the guard armed
+    # at connect, that navigation is guarded like any other and saves the
+    # LLM step the model would spend re-opening it; otherwise (no hook on
+    # this browser-use build) it is disabled and step 1 opens the URL.
+    if not (guard_at_connect and _guard_pre_loop_navigation(
+        agent, session, guard_binding, before_navigation=_guardrails_before_first_page,
+    )):
+        _disable_pre_loop_navigation(agent)
 
     class _StopAgent(Exception):
         """Raised in on_step_* to break out of agent.run() early.
@@ -743,13 +802,43 @@ async def _drive_browser_use(
             self.reason = reason
             self.message = message
 
+    async def _require_request_guard(running_agent: Any) -> None:
+        """Fail closed unless the egress guard this Chromium was launched
+        behind still listens AND the CURRENT root CDP client carries the
+        request guard."""
+        if not egress_guard_alive(egress_proxy):
+            # Chromium's only way out is the proxy it was launched with: a
+            # dead (or replaced) guard means every load fails, and a
+            # restarted guard listens on a NEW port this browser never knew.
+            logger.error("browser_agent egress guard %s is down (session=%s); stopping",
+                         egress_proxy, session.session_id)
+            raise _StopAgent(
+                "DOMAIN_BLOCKED",
+                "browser network guard stopped during the session; refusing to browse. "
+                "Run the task again to start a new browser",
+            )
+        if guard_binding.lost or not await _install_navigation_filter(
+            running_agent, session, guard_binding
+        ):
+            raise _StopAgent(
+                "DOMAIN_BLOCKED",
+                "browser network guard could not be installed; refusing to browse",
+            )
+
     async def on_step_start(running_agent: Any) -> None:
-        nonlocal guardrails_installed, cdp_captured, nav_filter_installed
+        nonlocal guardrails_installed, cdp_captured
         # Drain pending control commands first so PAUSE/ABORT are honoured
         # before we burn another LLM call.
         await _drain_control(session, redis)
         if session.aborted:
             raise _StopAgent("CANCELLED", "Session aborted by user")
+
+        # SSRF request guard FIRST: before the live view is advertised (a
+        # user takeover can navigate) and before step 1 acts. Re-checked at
+        # every step: a no-op while the root CDP client is unchanged, a
+        # re-install when browser-use reconnected on a new one. Fail closed:
+        # without the guard the session does not browse at all.
+        await _require_request_guard(running_agent)
 
         # CDP endpoint capture happens BEFORE the pause-check so a
         # PAUSE-before-step-1 (manual mode, supervised mode, user takeover
@@ -853,6 +942,10 @@ async def _drive_browser_use(
                             session.session_id)
                 session.paused = False
 
+        # A pause can last minutes (user takeover): re-check that the client
+        # the step is about to drive still carries the guard.
+        await _require_request_guard(running_agent)
+
         # Per-user daily steps budget (one increment per step start).
         try:
             await increment_daily_steps(redis, user_id)
@@ -870,21 +963,14 @@ async def _drive_browser_use(
                 guardrails_installed = await _install_guardrails(running_agent)
             except Exception:
                 logger.debug("guardrails on_step_start retry failed", exc_info=True)
-        # Install the post-redirect SSRF filter ONCE on the live CDP
-        # session. The handler runs inside browser-use's CDP loop and
-        # marks `session.aborted` when a frame navigates to a blocked
-        # URL - the next on_step_start call will raise _StopAgent and
-        # short-circuit the run.
-        if not nav_filter_installed:
-            try:
-                nav_filter_installed = await _install_navigation_filter(
-                    running_agent, session
-                )
-            except Exception:
-                logger.debug("nav-filter on_step_start install failed", exc_info=True)
-        # Honour DOMAIN_BLOCKED set by the nav filter.
-        if session.last_eval and session.last_eval.startswith("navigation blocked:"):
-            raise _StopAgent("DOMAIN_BLOCKED", session.last_eval)
+        # Honour DOMAIN_BLOCKED set by the request guard (a TOP-LEVEL
+        # navigation it refused since the previous step boundary). A refused
+        # iframe only fails that frame's load; the run goes on.
+        _settle_blocked_navigations(running_agent, session, final=True)
+        if session.navigation_blocked:
+            raise _StopAgent(
+                "DOMAIN_BLOCKED", f"navigation blocked: {session.navigation_blocked}"
+            )
 
     async def on_step_end(running_agent: Any) -> None:
         # browser-use exposes the latest history entry on the agent's
@@ -1477,9 +1563,9 @@ def _task_with_start_url(task: str, start_url: Any) -> str:
 def _make_on_navigation_callback(session: BrowserAgentSession):
     """Return a navigation hook that SSRF-checks the target before each go-to.
 
-    Returns (allow, reason). Used by `_install_navigation_filter` to mark
-    the session aborted when a frame navigates to a blocked URL - the
-    next on_step_start raises _StopAgent("DOMAIN_BLOCKED").
+    Returns (allow, reason). Handed to `_drive_browser_use` as the
+    `on_navigation` seam; the in-browser enforcement itself is the CDP
+    Fetch request guard installed by `_install_navigation_filter`.
 
     Defined as a separate factory so tests can stub the predicate without
     touching `is_url_safe_for_navigation` (which is unit-tested separately).
@@ -1487,117 +1573,267 @@ def _make_on_navigation_callback(session: BrowserAgentSession):
     def _cb(target_url: str) -> tuple[bool, str]:
         safe, reason = is_url_safe_for_navigation(target_url)
         if not safe:
-            session.last_eval = f"navigation blocked: {reason}"
+            verb = "failed" if is_unresolvable_reason(reason) else "blocked"
+            session.last_eval = f"navigation {verb}: {reason}"
         return safe, reason
     return _cb
 
 
-async def _install_navigation_filter(agent: Any, session: BrowserAgentSession) -> bool:
-    """Wire `is_url_safe_for_navigation` into the live CDP session.
+# Refused frame navigations kept until the next step boundary decides
+# whether they were top-level (see `_settle_blocked_navigations`).
+_MAX_PENDING_FRAME_BLOCKS = 64
 
-    Subscribes to `Page.frameNavigated` on the BrowserSession's CDP client.
-    Each navigation event calls the same predicate `is_url_safe_for_navigation`
-    used at the start_url gate. When the target is blocked, the handler:
 
-      1. Sets `session.last_eval = "navigation blocked: <reason>"` so the
-         next `on_step_start` raises `_StopAgent("DOMAIN_BLOCKED", ...)`
-         and short-circuits the run.
-      2. Best-effort issues a `Page.stopLoading` to halt the in-progress
-         load before the LLM sees the blocked page content.
+def _page_target_ids(agent: Any) -> Optional[set[str]]:
+    """Target ids of browser-use's page/tab targets, or None when unknown.
 
-    This closes the post-redirect SSRF gap: a 302 from an allowed start_url
-    to an internal IP (e.g. 169.254.169.254 IMDS) is now caught at the
-    Chromium layer, NOT just at the orchestrator-side allowlist.
-
-    Returns True if the listener landed, False otherwise. Never raises.
+    A tab's main frame id IS its target id, so a refused navigation whose
+    frame id is one of these was top-level; any other frame is an iframe
+    (same-process iframes are not targets, out-of-process ones are
+    `iframe` targets, never `page`/`tab`).
     """
-    on_nav = _make_on_navigation_callback(session)
+    manager = _safe_get(_safe_get(agent, "browser_session"), "session_manager")
+    get_pages = _safe_get(manager, "get_all_page_targets")
+    if not callable(get_pages):
+        return None
+    try:
+        return {str(_safe_get(target, "target_id") or "") for target in get_pages()}
+    except Exception:
+        logger.debug("browser_agent: page targets unavailable", exc_info=True)
+        return None
 
+
+def _settle_blocked_navigations(agent: Any, session: BrowserAgentSession, final: bool) -> None:
+    """Turn refused frame navigations into a run stop only when top-level.
+
+    A blocked top-level navigation (or redirect hop) means the page the
+    agent is driving is gone: `session.navigation_blocked` is set and the
+    next step boundary stops the run with DOMAIN_BLOCKED. A blocked iframe
+    only fails that frame's request (the page around it stays usable), so it
+    must not end the run. The decision waits for browser-use to know the
+    target: a popup's first navigation can be refused before browser-use
+    has attached its tab, so a frame not yet known as a tab stays pending
+    and is only ruled an iframe at the next step boundary (`final`). When
+    browser-use's targets cannot be read at all, the block counts as
+    top-level (the run stops, as before).
+    """
+    pending = session.blocked_frame_navigations
+    if not pending:
+        return
+    pages = _page_target_ids(agent)
+    for frame_id, reason in list(pending.items()):
+        if pages is None or not frame_id or frame_id in pages:
+            session.navigation_blocked = reason
+            session.last_eval = f"navigation blocked: {reason}"
+            pending.clear()
+            return
+    if final:
+        logger.info("browser_agent: %d refused iframe navigation(s) ignored (session=%s)",
+                    len(pending), session.session_id)
+        pending.clear()
+
+
+class _GuardBinding:
+    """The root CDP client the SSRF request guard is installed on.
+
+    `lost` is set when a re-install after a browser reconnect failed; the
+    next step boundary then stops the run (fail closed).
+    """
+
+    __slots__ = ("client", "lost")
+
+    def __init__(self) -> None:
+        self.client: Any = None
+        self.lost: str = ""
+
+
+def _proxy_credentials(browser_session: Any) -> Optional[tuple[str, str]]:
+    """(username, password) of the browser profile's proxy, if it has both."""
+    proxy = _safe_get(_safe_get(browser_session, "browser_profile"), "proxy")
+    username = _safe_get(proxy, "username")
+    password = _safe_get(proxy, "password")
+    if username and password:
+        return str(username), str(password)
+    return None
+
+
+async def _install_navigation_filter(
+    agent: Any, session: BrowserAgentSession, binding: Optional[_GuardBinding] = None,
+) -> bool:
+    """Install the browser-wide SSRF request guard on browser-use's Chromium.
+
+    Enables CDP `Fetch` interception on browser-use's ROOT CDP client (the
+    browser target), so every request Chromium makes, in every tab, frame,
+    worker and redirect hop, is paused and released only when
+    `crawl_filter.is_request_url_allowed` accepts it. A refused request
+    never leaves the browser (it fails with BlockedByClient), unlike the
+    previous `Page.frameNavigated` listener that could only react after the
+    request to e.g. 169.254.169.254 had been sent.
+
+    With a `binding`, a call is a no-op while the root client is the one
+    the guard was installed on, and a re-install when browser-use replaced
+    it (`BrowserSession.reconnect()` builds a new client; Chrome dropped
+    the old connection's interception). Proxy credentials on the browser
+    profile are handled by the guard's own registration (see
+    `install_on_cdp_use`), so browser-use's proxy-auth handler never
+    replaces the guard's.
+
+    A refused TOP-LEVEL navigation (a tab's main frame, redirect hops
+    included) also records `session.navigation_blocked`; the next
+    `on_step_start` stops the run with DOMAIN_BLOCKED. A refused iframe only
+    fails that frame (see `_settle_blocked_navigations`).
+
+    Returns True once interception is active on the current client, False
+    otherwise (the caller must then refuse to browse). Never raises.
+    """
     browser_session = _safe_get(agent, "browser_session")
-    if browser_session is None:
+    cdp_client = _safe_get(browser_session, "cdp_client") if browser_session is not None else None
+    if cdp_client is None:
+        logger.error(
+            "browser_agent request guard: no root CDP client on the browser "
+            "session (session=%s)", session.session_id,
+        )
         return False
-    if not hasattr(browser_session, "get_or_create_cdp_session"):
+    if binding is not None and binding.client is cdp_client:
+        return True
+
+    def _on_blocked(blocked: BlockedRequest) -> None:
+        if not blocked.is_document:
+            return  # a subresource: failing the request is the whole answer
+        if blocked.is_unresolvable:
+            # A typo'd or dead domain (or a popup to one): the tab shows
+            # Chrome's ordinary DNS error page and the agent can recover;
+            # it is not a blocked domain and must not end the run.
+            return
+        pending = session.blocked_frame_navigations
+        if blocked.frame_id not in pending and len(pending) >= _MAX_PENDING_FRAME_BLOCKS:
+            # Flooded with refused frames: settle the backlog now.
+            _settle_blocked_navigations(agent, session, final=True)
+        pending[blocked.frame_id] = blocked.reason
+        _settle_blocked_navigations(agent, session, final=False)
+
+    reinstall = binding is not None and binding.client is not None
+    try:
+        await install_on_cdp_use(
+            cdp_client, RequestGuard(on_blocked=_on_blocked),
+            proxy_credentials=_proxy_credentials(browser_session),
+        )
+    except Exception as e:
+        logger.error(
+            "browser_agent request guard install failed (session=%s): %s: %s",
+            session.session_id, type(e).__name__, e,
+        )
         return False
+    if binding is not None:
+        binding.client = cdp_client
+    logger.info(
+        "browser_agent SSRF request guard %s via CDP Fetch (session=%s)",
+        "re-installed on a new CDP client" if reinstall else "installed",
+        session.session_id,
+    )
+    return True
+
+
+def _take_over_proxy_auth_setup(
+    agent: Any, session: BrowserAgentSession, binding: _GuardBinding,
+) -> bool:
+    """Run the guard install where browser-use runs its proxy-auth setup.
+
+    browser-use 0.12.6 calls `BrowserSession._setup_proxy_auth()` at the end
+    of `connect()` and of `reconnect()`, on the new root client, before the
+    actions waiting for the reconnect resume. Replacing it on this session
+    instance (1) re-arms the guard on a reconnected client without waiting
+    for the next step boundary, and (2) keeps browser-use's own proxy-auth
+    `requestPaused` handler (which continues every request) from replacing
+    the guard's: the guard's registration handles proxy auth itself.
+
+    If the re-install fails the reconnect raises (browser-use treats it as a
+    failed attempt) and `binding.lost` makes the next step boundary stop the
+    run. Best effort: when the hook cannot be set, the per-step check in
+    `on_step_start` still re-installs on a changed client.
+    """
+    browser_session = _safe_get(agent, "browser_session")
+    if browser_session is None or not callable(_safe_get(browser_session, "_setup_proxy_auth")):
+        return False
+
+    async def _guarded_setup(*_args: Any, **_kwargs: Any) -> None:
+        if not await _install_navigation_filter(agent, session, binding):
+            binding.lost = "request guard could not be installed on the reconnected browser"
+            raise RuntimeError(binding.lost)
 
     try:
-        cdp_session = await browser_session.get_or_create_cdp_session()
-        cdp_client = _safe_get(cdp_session, "cdp_client")
-        cdp_session_id = _safe_get(cdp_session, "session_id")
-        if cdp_client is None or cdp_session_id is None:
-            return False
-
-        async def _on_frame_navigated(event: dict) -> None:
-            frame = (event or {}).get("frame") or {}
-            url = frame.get("url") or ""
-            if not url or not url.startswith(("http://", "https://")):
-                return
-            # Only top-level frames update the address bar; sub-frame
-            # (iframe) navigations would otherwise overwrite `last_url`
-            # with an ad/widget URL that isn't what the user is on.
-            # Top-level frames have no `parentId` per the CDP spec.
-            if not frame.get("parentId"):
-                # Mirror Chromium navigations into session.last_url so
-                # the live-view address bar (polled by the frontend via
-                # /agent/sessions/{id}/status) reflects the page the
-                # agent is on RIGHT NOW, not the URL of whichever step
-                # last completed. Without this, the address bar stays
-                # empty until step 1's history callback fires (~5-30 s
-                # after the session starts).
-                session.last_url = url
-            safe, reason = on_nav(url)
-            if not safe:
-                logger.warning(
-                    "browser_agent navigation blocked: session=%s url=%s reason=%s",
-                    session.session_id, url, reason,
-                )
-                # Best-effort halt the in-progress load.
-                try:
-                    await cdp_client.send.Page.stopLoading(session_id=cdp_session_id)
-                except Exception:
-                    logger.debug("Page.stopLoading failed", exc_info=True)
-                # Mark aborted; next step boundary picks it up.
-                session.aborted = True
-
-        # CDP event subscription. browser-use's cdp-use client supports
-        # `cdp_client.on('Page.frameNavigated', handler, session_id=...)`.
-        register = _safe_get(cdp_client, "on") or _safe_get(cdp_client, "register_event_handler")
-        if not callable(register):
-            logger.info(
-                "browser_agent navigation filter: cdp_client has no event-subscription "
-                "binding - relying on start_url gate only (session=%s)",
-                session.session_id,
-            )
-            return False
-        try:
-            res = register("Page.frameNavigated", _on_frame_navigated, session_id=cdp_session_id)
-            if asyncio.iscoroutine(res):
-                await res
-        except TypeError:
-            # Fallback signature without session_id kw.
-            res = register("Page.frameNavigated", _on_frame_navigated)
-            if asyncio.iscoroutine(res):
-                await res
-
-        # Enable the Page domain so the event actually fires.
-        try:
-            await cdp_client.send.Page.enable(session_id=cdp_session_id)
-        except Exception:
-            logger.debug("Page.enable failed (likely already enabled)", exc_info=True)
-
-        logger.info(
-            "browser_agent navigation filter installed via CDP "
-            "Page.frameNavigated (session=%s)",
-            session.session_id,
-        )
-        return True
-    except Exception as e:
-        logger.warning(
-            "browser_agent navigation filter install failed: %s - "
-            "post-redirect SSRF NOT enforced for session=%s "
-            "(start_url gate is still active)",
-            e, session.session_id,
-        )
+        # BrowserSession is a pydantic model (validate_assignment, extra=forbid):
+        # set the instance attribute directly, as an instance-level override.
+        object.__setattr__(browser_session, "_setup_proxy_auth", _guarded_setup)
+    except Exception:
+        logger.warning("browser_agent: could not hook browser-use proxy-auth setup; "
+                       "the request guard is re-checked at each step only", exc_info=True)
         return False
+    return True
+
+
+def _guard_pre_loop_navigation(
+    agent: Any,
+    session: BrowserAgentSession,
+    binding: _GuardBinding,
+    before_navigation: Optional[Callable[[], Awaitable[None]]] = None,
+) -> bool:
+    """Let browser-use's pre-loop navigation run, behind the request guard.
+
+    browser-use extracts the URL from the task and opens it before step 1
+    (`directly_open_url` -> `initial_actions`, run by
+    `Agent._execute_initial_actions` once the browser has started). With
+    the guard armed at connect (`_take_over_proxy_auth_setup`) that
+    navigation is guarded, and keeping it saves the LLM step the model
+    would otherwise spend opening the URL. This wraps it on the agent
+    instance so it only runs once the CURRENT root CDP client carries the
+    guard (installing it there if connect did not); if the guard cannot be
+    installed the navigation is skipped and step 1 stops the run (fail
+    closed). `before_navigation` runs first (DOM guardrails for the first
+    page) and never blocks the navigation.
+
+    Returns False when the hook cannot be set; the caller then disables the
+    pre-loop navigation (`_disable_pre_loop_navigation`).
+    """
+    original = _safe_get(agent, "_execute_initial_actions")
+    if not callable(original):
+        return False
+
+    async def _guarded_initial_actions(*args: Any, **kwargs: Any) -> Any:
+        if binding.lost or not await _install_navigation_filter(agent, session, binding):
+            logger.error("browser_agent: request guard missing before the pre-loop navigation; "
+                         "skipping it (session=%s)", session.session_id)
+            return None
+        if before_navigation is not None:
+            try:
+                await before_navigation()
+            except Exception:
+                logger.debug("browser_agent: pre-navigation setup failed", exc_info=True)
+        return await original(*args, **kwargs)
+
+    try:
+        setattr(agent, "_execute_initial_actions", _guarded_initial_actions)
+    except Exception:
+        logger.warning("browser_agent: could not hook the pre-loop navigation; disabling it",
+                       exc_info=True)
+        return False
+    return True
+
+
+def _disable_pre_loop_navigation(agent: Any) -> None:
+    """Stop browser-use from opening a URL before step 1.
+
+    Fallback when the guard is not known to be armed before browser-use's
+    pre-loop navigation (`_guard_pre_loop_navigation` could not hook it):
+    clearing `initial_actions` makes every navigation happen inside a
+    guarded step; the task text already tells the model to open the start
+    URL first.
+    """
+    for attr in ("initial_actions", "initial_url"):
+        try:
+            setattr(agent, attr, None)
+        except Exception:
+            logger.debug("could not clear agent.%s", attr, exc_info=True)
 
 
 async def _install_guardrails(agent: Any) -> bool:

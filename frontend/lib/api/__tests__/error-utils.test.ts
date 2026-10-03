@@ -5,10 +5,90 @@ import {
   isCreditExhaustedFailure,
   isInsufficientCloudCreditError,
   isModelNotSupportedError,
+  isRestrictedDataRefusal,
   isPlanLimitError,
 } from '@/lib/api/error-utils';
 import { ApiError } from '@/lib/api/api-client';
 import { cloudSourceErrorKey } from '@/lib/api/cloud-link.service';
+
+const REFUSAL =
+  "RESTRICTED_DATA_PROVIDER_NOT_ALLOWED: Data from Gmail or Google Drive cannot be sent to the model provider 'deepseek'.";
+
+/**
+ * The restricted-data refusal reaches the UI in five shapes (stream error, persisted
+ * "[Error] ..." message, 403 JSON body, nested HTTP-client error, node error message); the
+ * detector must key on the machine token in all of them and nowhere else.
+ */
+describe('isRestrictedDataRefusal', () => {
+  it('matches the raw refusal string', () => {
+    expect(isRestrictedDataRefusal(REFUSAL)).toBe(true);
+  });
+
+  it('matches the chat stream wrapper "Agent execution error: ..."', () => {
+    expect(isRestrictedDataRefusal(`Agent execution error: ${REFUSAL}`)).toBe(true);
+  });
+
+  it('matches a persisted "[Error] ..." assistant message', () => {
+    expect(isRestrictedDataRefusal(`[Error] ${REFUSAL}`)).toBe(true);
+  });
+
+  it('matches an Error instance', () => {
+    expect(isRestrictedDataRefusal(new Error(REFUSAL))).toBe(true);
+  });
+
+  it('matches the 403 body by its code field alone', () => {
+    expect(isRestrictedDataRefusal({
+      code: 'RESTRICTED_DATA_PROVIDER_NOT_ALLOWED', message: 'Forbidden', provider: 'deepseek',
+    })).toBe(true);
+  });
+
+  it('matches an object with an error field', () => {
+    expect(isRestrictedDataRefusal({ error: REFUSAL })).toBe(true);
+  });
+
+  it('matches a body field carrying the JSON payload', () => {
+    expect(isRestrictedDataRefusal({
+      status: 403, body: '{"code":"RESTRICTED_DATA_PROVIDER_NOT_ALLOWED","provider":"deepseek"}',
+    })).toBe(true);
+  });
+
+  it('matches the payload nested under response.data', () => {
+    expect(isRestrictedDataRefusal({
+      message: 'Request failed with status code 403',
+      response: { status: 403, data: { code: 'RESTRICTED_DATA_PROVIDER_NOT_ALLOWED', provider: 'deepseek' } },
+    })).toBe(true);
+  });
+
+  it('matches an Error subclass whose code (not message) carries the token', () => {
+    const err = Object.assign(new Error('Forbidden'), { code: 'RESTRICTED_DATA_PROVIDER_NOT_ALLOWED' });
+    expect(isRestrictedDataRefusal(err)).toBe(true);
+  });
+
+  it('is case-sensitive', () => {
+    expect(isRestrictedDataRefusal('restricted_data_provider_not_allowed')).toBe(false);
+  });
+
+  it('rejects empty and unrelated values', () => {
+    expect(isRestrictedDataRefusal(null)).toBe(false);
+    expect(isRestrictedDataRefusal(undefined)).toBe(false);
+    expect(isRestrictedDataRefusal('')).toBe(false);
+    expect(isRestrictedDataRefusal(403)).toBe(false);
+    expect(isRestrictedDataRefusal({})).toBe(false);
+    expect(isRestrictedDataRefusal('Agent execution error: Provider not configured')).toBe(false);
+    expect(isRestrictedDataRefusal({ status: 403, code: 'FORBIDDEN', message: 'Access denied' })).toBe(false);
+    expect(isRestrictedDataRefusal(new Error('INSUFFICIENT_CREDITS'))).toBe(false);
+  });
+
+  it('ignores the token in fields that are not error carriers', () => {
+    expect(isRestrictedDataRefusal({ provider: 'RESTRICTED_DATA_PROVIDER_NOT_ALLOWED' })).toBe(false);
+  });
+
+  it('does not loop on a self-referencing error object', () => {
+    const cyclic: Record<string, unknown> = { message: 'boom' };
+    cyclic.error = cyclic;
+    expect(isRestrictedDataRefusal(cyclic)).toBe(false);
+  });
+});
 
 /**
  * The CE cloud-relay detectors match a stable machine token the cloud relay emits

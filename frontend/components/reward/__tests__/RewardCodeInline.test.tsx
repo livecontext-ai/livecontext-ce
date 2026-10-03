@@ -167,6 +167,13 @@ describe('RewardCodeInline', () => {
     expect(screen.queryByRole('button', { name: 'changeCode' })).toBeNull();
   });
 
+  it('a checkout still being created reads as one in progress, never as "applied"', () => {
+    offer.current = { offerId: 42, status: 'CHECKOUT_CREATING', expiresAt: '2026-09-01T00:00:00Z' };
+    render(<RewardCodeInline subscriptionCheckout />);
+    expect(screen.getByRole('status')).toHaveTextContent('errors.checkoutActive');
+    expect(screen.getByRole('status')).not.toHaveTextContent('appliedUntil');
+  });
+
   it('shows the Stripe reservation deadline rather than a past marketing expiry', () => {
     offer.current = { offerId: 42, status: 'CHECKOUT_OPEN',
       expiresAt: '2026-09-01T00:00:00Z', sessionExpiresAt: '2026-10-01T00:00:00Z' };
@@ -190,13 +197,34 @@ describe('placement: every component that starts a Stripe checkout offers the co
     });
   }
 
+  // A partner's offer page carries its own code and applies it before the checkout opens: a field
+  // for another code there would let the client swap out the partner who sent them.
+  it("components/partner/offer/PartnerOfferView.tsx applies the offer's own code before its checkout", () => {
+    const src = fs.readFileSync(path.join(root, 'components/partner/offer/PartnerOfferView.tsx'), 'utf-8');
+    expect(src).toContain('<PendingRewardCodeRedeemer');
+    expect(src).toContain('rememberPendingRewardCode(window, offer.code)');
+  });
+
+  // A personal offer's page pays with that offer attached, and only with it: a code field there
+  // would trade the one first purchase the bonus depends on for another reward.
+  it('components/billing/personal-offer/PersonalOfferView.tsx pays with its own offer attached, or not at all', () => {
+    const src = fs.readFileSync(path.join(root, 'components/billing/personal-offer/PersonalOfferView.tsx'), 'utf-8');
+    expect(src).toContain('personalOfferId: preview.offerId');
+    expect(src).toContain('hasAttachedPersonalOfferCheckout(result)');
+    expect(src).not.toContain('<RewardCodeInline');
+  });
+
   it('no other component creates a Stripe checkout without it (a new checkout site must add the line)', () => {
-    // The two checkout hooks; any component calling them must be one of the four above.
+    // The two checkout hooks; any component calling them must be one of the four above, the
+    // partner offer page, which applies its own code instead, or the personal offer page, which
+    // attaches its own offer.
     const allowed = new Set([
       'components/pricing/PricingPageContent.tsx',
       'components/billing/TopUpModal.tsx',
       'components/billing/InsufficientCreditsModal.tsx',
       'components/billing/InsufficientStorageModal.tsx',
+      'components/partner/offer/PartnerOfferView.tsx',
+      'components/billing/personal-offer/PersonalOfferView.tsx',
     ]);
     const offenders: string[] = [];
     const walk = (dir: string) => {

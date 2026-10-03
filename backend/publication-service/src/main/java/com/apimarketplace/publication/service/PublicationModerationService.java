@@ -105,7 +105,11 @@ public class PublicationModerationService {
         }
 
         // Current live source data (what exists now in the original resource)
-        Map<String, Object> currentSource = fetchCurrentSource(publication, isAgent);
+        // Review mode: the live side rebuilds snapshots with the publish builders, but a table copy
+        // that fails reads as empty (as it always did) and the size budget is not enforced, so the
+        // reviewer still sees the source instead of a publish refusal.
+        Map<String, Object> currentSource = PublicationTableCopies.forReview(
+                () -> fetchCurrentSource(publication, isAgent));
 
         // Normalize DataInput file paths to filename-only so storage-path differences don't create false diffs
         if (isAgent) {

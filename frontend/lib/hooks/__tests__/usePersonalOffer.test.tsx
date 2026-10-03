@@ -10,6 +10,13 @@ const mocks = vi.hoisted(() => ({
   userId: 7 as number | null,
   current: vi.fn(),
   preview: vi.fn(),
+  isCe: false,
+}));
+
+vi.mock('@/lib/edition', () => ({
+  get IS_CE() {
+    return mocks.isCe;
+  },
 }));
 
 vi.mock('@/lib/providers/smart-providers', () => ({
@@ -36,6 +43,7 @@ beforeEach(() => {
   sessionStorage.clear();
   history.replaceState(null, '', '/en/app/settings/pricing');
   mocks.userId = 7;
+  mocks.isCe = false;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   mocks.current.mockReset().mockResolvedValue({ status: 'AVAILABLE', offerId: 12, offerVersion: 3 });
   mocks.preview.mockReset().mockImplementation(async (input) => ({
@@ -76,6 +84,13 @@ describe('usePersonalOffer', () => {
     expect(result.current.preview?.monthlyCredits).toBe(50000);
   });
 
+  it('a checkout still being created is read again on its own until it settles', async () => {
+    mocks.current.mockReset().mockResolvedValue({ status: 'CHECKOUT_CREATING', offerId: 19, offerVersion: 1 });
+    renderHook(() => usePersonalOffer(0, 'monthly'), { wrapper });
+
+    await waitFor(() => expect(mocks.current.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 5_000 });
+  }, 8_000);
+
   it('drops a pending code when the authenticated account changes', async () => {
     history.replaceState(null, '', '/en/app/settings/pricing?lc_offer=OFFER123');
     mocks.preview.mockImplementation(() => new Promise(() => {}));
@@ -91,5 +106,40 @@ describe('usePersonalOffer', () => {
     mocks.current.mockRejectedValue(new Error('network'));
     const { result } = renderHook(() => usePersonalOffer(0, 'monthly'), { wrapper });
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+
+  // Regression: the insufficient-credits and insufficient-storage modals mount on every CE app
+  // page and called the hook with the default `enabled`, so each page load asked a self-hosted
+  // install for /billing/offers/current, which only the cloud's Stripe billing controller serves.
+  it('never asks a self-hosted (CE) install for an offer, even when the caller requests it and a link carries a code', async () => {
+    mocks.isCe = true;
+    history.replaceState(null, '', '/en/app/settings/pricing?lc_offer=OFFER123');
+    const { result } = renderHook(() => usePersonalOffer(0, 'monthly', true), { wrapper });
+
+    // Give an (incorrectly) enabled query or capture effect the ticks it would need before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mocks.current).not.toHaveBeenCalled();
+    expect(mocks.preview).not.toHaveBeenCalled();
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isError).toBe(false);
+    // A code nobody can verify is not surfaced either: the modals would treat it as an offer still
+    // being checked and refuse every plan button with "verification unavailable".
+    expect(result.current.candidateCode).toBeNull();
+    expect(sessionStorage.getItem(PENDING_PERSONAL_OFFER_KEY)).toBeNull();
+  });
+
+  it('never surfaces a code left in session storage by an earlier visit on a self-hosted (CE) install', async () => {
+    mocks.isCe = true;
+    sessionStorage.setItem(PENDING_PERSONAL_OFFER_KEY, JSON.stringify({ code: 'OFFER123', savedAt: Date.now() }));
+    const { result } = renderHook(() => usePersonalOffer(0, 'monthly'), { wrapper });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(result.current.candidateCode).toBeNull();
+    expect(mocks.preview).not.toHaveBeenCalled();
+  });
+
+  it('still asks for the current offer on the cloud edition when the caller leaves the default', async () => {
+    const { result } = renderHook(() => usePersonalOffer(0, 'monthly'), { wrapper });
+    await waitFor(() => expect(result.current.current?.offerId).toBe(12));
+    expect(mocks.current).toHaveBeenCalledTimes(1);
   });
 });

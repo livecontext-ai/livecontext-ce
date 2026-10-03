@@ -7,6 +7,8 @@ import com.apimarketplace.auth.client.dto.PublisherProfileDto;
 import com.apimarketplace.auth.client.entitlement.EntitlementGuard;
 import com.apimarketplace.common.storage.service.StorageBreakdownService;
 import com.apimarketplace.datasource.client.DataSourceClient;
+import com.apimarketplace.datasource.client.dto.DataSourceDto;
+import com.apimarketplace.datasource.client.dto.DataSourceItemDto;
 import com.apimarketplace.interfaces.client.InterfaceClient;
 import com.apimarketplace.publication.config.CatalogInternalClient;
 import com.apimarketplace.publication.config.OrchestratorInternalClient;
@@ -222,6 +224,78 @@ class WorkflowPublicationServiceCustomApiGuardTest {
         // once on the enriched plan (agent tool grants and sub-workflow plans only exist
         // after enrichment). Both must be consulted for the gate to be complete.
         verify(catalogInternalClient, times(2)).findCustomApiRefs(any(), any(), any());
+    }
+
+    // ==================== snapshot size budget ====================
+
+    @Test
+    @DisplayName("regression (budget): a workflow whose table is over the row limit is refused, named, before anything is saved")
+    void workflowWithATableOverTheRowLimitIsRefused() {
+        Map<String, Object> plan = planUsingCustomApi();
+        plan.put("mcps", new ArrayList<>());
+        plan.put("tables", new ArrayList<>(List.of(new HashMap<>(Map.of("dataSourceId", 9, "label", "Find orders")))));
+        stubWorkflowWithPlan(plan);
+        when(dataSourceClient.bulkFind(any(), eq(TENANT_ID), any())).thenReturn(List.of(new DataSourceDto(
+                9L, TENANT_ID, "Orders", "Order book", null, null, null, null, null, null, null, null, null,
+                null, null, null)));
+        List<DataSourceItemDto> rows = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            rows.add(new DataSourceItemDto((long) i, 9L, TENANT_ID, Map.of("n", i), 0, null));
+        }
+        when(dataSourceClient.copyAllItems(eq(9L), eq(TENANT_ID), any())).thenReturn(rows);
+        service.snapshotBudget = new PublicationSnapshotBudget(new ObjectMapper(),
+                PublicationSnapshotBudget.DEFAULT_MAX_BYTES, 3);
+
+        assertThatThrownBy(() -> publish(PublicationVisibility.PRIVATE, null))
+                .isInstanceOfSatisfying(PublicationValidationException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(PublicationValidationException.PUBLICATION_SNAPSHOT_TOO_LARGE);
+                    assertThat(e.getMessage()).contains("'Orders'").contains("4 rows").contains("max 3");
+                });
+        verify(publicationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("regression (silent empty publish): a workflow whose table copy fails is refused (retryable), not published empty")
+    void workflowWhoseTableCopyFailsIsRefused() {
+        Map<String, Object> plan = planUsingCustomApi();
+        plan.put("mcps", new ArrayList<>());
+        plan.put("tables", new ArrayList<>(List.of(new HashMap<>(Map.of("dataSourceId", 9, "label", "Find orders")))));
+        stubWorkflowWithPlan(plan);
+        when(dataSourceClient.bulkFind(any(), eq(TENANT_ID), any())).thenReturn(List.of(new DataSourceDto(
+                9L, TENANT_ID, "Orders", "Order book", null, null, null, null, null, null, null, null, null,
+                null, null, null)));
+        when(dataSourceClient.copyAllItems(eq(9L), eq(TENANT_ID), any()))
+                .thenThrow(new com.apimarketplace.datasource.client.TableCopyException(9L, "down", null));
+
+        assertThatThrownBy(() -> publish(PublicationVisibility.PRIVATE, null))
+                .isInstanceOfSatisfying(PublicationValidationException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(PublicationValidationException.TABLE_COPY_FAILED);
+                    assertThat(e.getMessage()).contains("'Orders' (id 9)");
+                });
+        verify(publicationRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("a workflow whose table is exactly at the row limit publishes")
+    void workflowWithATableAtTheRowLimitPublishes() {
+        Map<String, Object> plan = planUsingCustomApi();
+        plan.put("mcps", new ArrayList<>());
+        plan.put("tables", new ArrayList<>(List.of(new HashMap<>(Map.of("dataSourceId", 9, "label", "Find orders")))));
+        stubWorkflowWithPlan(plan);
+        when(dataSourceClient.bulkFind(any(), eq(TENANT_ID), any())).thenReturn(List.of(new DataSourceDto(
+                9L, TENANT_ID, "Orders", "Order book", null, null, null, null, null, null, null, null, null,
+                null, null, null)));
+        List<DataSourceItemDto> rows = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            rows.add(new DataSourceItemDto((long) i, 9L, TENANT_ID, Map.of("n", i), 0, null));
+        }
+        when(dataSourceClient.copyAllItems(eq(9L), eq(TENANT_ID), any())).thenReturn(rows);
+        service.snapshotBudget = new PublicationSnapshotBudget(new ObjectMapper(),
+                PublicationSnapshotBudget.DEFAULT_MAX_BYTES, 3);
+
+        WorkflowPublicationEntity published = publish(PublicationVisibility.PRIVATE, null);
+
+        assertThat(published.getPlanSnapshot().get("tables")).asList().hasSize(1);
     }
 
     // ==================== what only enrichment can reveal ====================

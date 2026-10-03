@@ -322,6 +322,7 @@ export function useConversationList({
           title: conv.title,
           workflowId: conv.workflowId,
           agentId: conv.agentId,
+          taskId: conv.taskId,
           // Forward the timestamps so UnifiedAppContext.sortByDate orders
           // correctly and the sidebar hover pill shows the real "Xm ago"
           // for each row - without these, the fallback in

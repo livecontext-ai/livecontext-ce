@@ -45,7 +45,7 @@ public final class ExamplesHelpProvider {
         planStructure.put("cores", "[{label: 'My Decision', type: 'decision|switch|loop|split|fork|merge|transform|wait|approval|...', ...params}]  // NOTE: plan uses 'expression' in decisionConditions; add_node uses 'condition' in params");
         planStructure.put("tables", "[{label: 'My CRUD', type: 'insert-row|find|read-row|update-row|delete-row', table_id: 123, crud: {where: {...}, set: {...}}}]  // Edges use table: prefix");
         planStructure.put("interfaces", "[{label: 'My Interface', interfaceId: '<uuid>'}]  // Edges use interface: prefix");
-        planStructure.put("notes", "[{label: 'My Note', content: '...'}]  // Visual-only, no execution, no edges");
+        planStructure.put("notes", "[{label: 'Why dedup', text: '...', attachedTo: 'Check Seen'}]  // Visual-only, no execution, no edges; attachedTo (optional) = label of the node the note explains");
         planStructure.put("edges", "[{from: 'trigger:my_trigger', to: 'mcp:my_step'}, {from: 'core:check:if', to: 'mcp:success'}]");
         planStructure.put("edge_format", "get_plan returns edges using RAW LABELS with ports (e.g., {from: 'Check Priority:if', to: 'Express Ship'}). " +
             "set_plan accepts BOTH label-based edges AND normalized prefixed keys (e.g., {from: 'core:check_priority:if', to: 'mcp:express_ship'}). " +

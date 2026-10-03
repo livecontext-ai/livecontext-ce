@@ -88,7 +88,11 @@ public class SkillHelpModule implements ToolModule {
             "Use skill(action='list') to find existing skills before creating duplicates",
             "ASSIGN: pass ALL skill IDs in ONE call - it is additive (existing skills kept, already-assigned skipped), max 10 per agent",
             "To find agent IDs: agent(action='list')",
-            "You can also assign skills during agent creation: agent(action='create', ..., skill_ids=['uuid1', 'uuid2'])"
+            "You can also assign skills during agent creation: agent(action='create', ..., skill_ids=['uuid1', 'uuid2'])",
+            "Once this conversation has read Gmail or Google Drive, create, publish and any update that changes a "
+                + "skill's text are refused (RESTRICTED_DATA_PROVIDER_NOT_ALLOWED): a skill is kept indefinitely and "
+                + "loaded into other agents' prompts, and a marketplace listing is public. Reading, assigning, deleting, "
+                + "unpublishing and folder moves still work"
         ));
 
         result.put("folder_tips", List.of(

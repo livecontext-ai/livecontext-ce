@@ -85,8 +85,8 @@ class AgentToolsControllerTest {
     }
 
     @Test
-    @DisplayName("Falls back to the request-body userRoles when the X-User-Roles header is absent")
-    void fallsBackToBodyUserRolesWhenHeaderAbsent() {
+    @DisplayName("LC-013: a request-body userRoles is ignored, only the X-User-Roles header counts")
+    void ignoresBodyUserRolesWhenHeaderAbsent() {
         AgentToolsController controller = new AgentToolsController(registry, registrationService);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-User-ID", "tenant-1");
@@ -100,11 +100,12 @@ class AgentToolsControllerTest {
         controller.executeTool(request, Map.of(
             "tool", "agent",
             "parameters", Map.of("action", "help_models"),
-            "userRoles", "USER"
+            "userRoles", "ADMIN"
         ));
 
         assertThat(contextCaptor.getValue().credentials())
-            .containsEntry("__userRoles__", "USER");
+            .as("a body-asserted ADMIN must never reach the tool modules")
+            .doesNotContainKey("__userRoles__");
     }
 
     @Test
@@ -119,6 +120,8 @@ class AgentToolsControllerTest {
         // assert its own role. The test's subject is that the context is forwarded, not which
         // channel the role uses, so it keeps its meaning on the honest channel.
         request.addHeader("X-Organization-Role", "MEMBER");
+        // Same for the workspace (LC-013): internal callers send X-Organization-ID as a header.
+        request.addHeader("X-Organization-ID", "org-1");
 
         when(registry.hasTool("agent")).thenReturn(true);
         ArgumentCaptor<ToolsProvider.ToolExecutionContext> contextCaptor =
@@ -194,9 +197,9 @@ class AgentToolsControllerTest {
         assertThat(context.orgRole())
             .as("a body-supplied role must never reach the execution context")
             .isNull();
-        // orgId still comes from the body on purpose: it is how an internal caller names the
-        // workspace, and it is not the privilege axis. Pinned so the two are not conflated.
-        assertThat(context.orgId()).isEqualTo("victim-org");
+        // LC-013: the workspace is no longer read from the body either. A caller whose gateway
+        // resolved no active org could otherwise name any workspace.
+        assertThat(context.orgId()).isNull();
     }
 
     @Test
@@ -244,6 +247,6 @@ class AgentToolsControllerTest {
         )).join();
 
         assertThat(contextCaptor.getValue().orgRole()).isNull();
-        assertThat(contextCaptor.getValue().orgId()).isEqualTo("victim-org");
+        assertThat(contextCaptor.getValue().orgId()).isNull();
     }
 }

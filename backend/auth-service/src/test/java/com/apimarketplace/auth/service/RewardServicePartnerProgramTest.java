@@ -207,6 +207,82 @@ class RewardServicePartnerProgramTest {
     }
 
     @Test
+    @DisplayName("partner code: a partner cannot be attributed to another partner (PARTNER_ACCOUNT), nothing granted")
+    void partnerCannotRedeemAnotherPartnersCode() {
+        partnerCode();
+        // USER is a partner too: they own a partner code of their own.
+        RewardCode own = new RewardCode();
+        own.setProgram(RewardProgram.PARTNER);
+        own.setOwnerUserId(USER);
+        when(codeRepository.findByOwnerUserIdAndProgram(USER, RewardProgram.PARTNER)).thenReturn(Optional.of(own));
+
+        assertThat(service.redeem(USER, "TECHDOX").status()).isEqualTo(RewardService.RedeemStatus.PARTNER_ACCOUNT);
+        verify(codeRepository, never()).tryReserveRedemption(anyLong());
+        verify(redemptionRepository, never()).save(any());
+        verifyNoInteractions(creditService);
+    }
+
+    @Test
+    @DisplayName("partner code: a disabled partner code still makes its owner a partner (PARTNER_ACCOUNT)")
+    void disabledPartnerIsStillAPartner() {
+        partnerCode();
+        RewardCode own = new RewardCode();
+        own.setProgram(RewardProgram.PARTNER);
+        own.setOwnerUserId(USER);
+        own.setActive(false);
+        when(codeRepository.findByOwnerUserIdAndProgram(USER, RewardProgram.PARTNER)).thenReturn(Optional.of(own));
+
+        assertThat(service.redeem(USER, "TECHDOX").status()).isEqualTo(RewardService.RedeemStatus.PARTNER_ACCOUNT);
+    }
+
+    @Test
+    @DisplayName("a partner typing their OWN code is told so (SELF_REFERRAL), not that they are a partner")
+    void ownCodeIsSelfReferralBeforePartnerAccount() {
+        RewardCode own = partnerCode();
+        when(codeRepository.findByOwnerUserIdAndProgram(PARTNER, RewardProgram.PARTNER)).thenReturn(Optional.of(own));
+
+        assertThat(service.redeem(PARTNER, "TECHDOX").status()).isEqualTo(RewardService.RedeemStatus.SELF_REFERRAL);
+    }
+
+    @Test
+    @DisplayName("a partner already attributed elsewhere is refused as a partner (PARTNER_ACCOUNT), not as attributed")
+    void partnerAccountBeforeAlreadyAttributed() {
+        partnerCode();
+        RewardCode own = new RewardCode();
+        own.setProgram(RewardProgram.PARTNER);
+        own.setOwnerUserId(USER);
+        when(codeRepository.findByOwnerUserIdAndProgram(USER, RewardProgram.PARTNER)).thenReturn(Optional.of(own));
+        when(redemptionRepository.findByRedeemerUserIdAndProgram(USER, RewardProgram.PARTNER))
+                .thenReturn(Optional.of(new RewardRedemption()));
+
+        assertThat(service.redeem(USER, "TECHDOX").status()).isEqualTo(RewardService.RedeemStatus.PARTNER_ACCOUNT);
+    }
+
+    @Test
+    @DisplayName("a partner may still redeem a creator code: the rule is about partner attribution only")
+    void partnerMayRedeemCreatorCode() {
+        creatorCode();
+        RewardCode own = new RewardCode();
+        own.setProgram(RewardProgram.PARTNER);
+        own.setOwnerUserId(USER);
+        when(codeRepository.findByOwnerUserIdAndProgram(USER, RewardProgram.PARTNER)).thenReturn(Optional.of(own));
+        when(adminPlanService.grantTimedComp(eq(USER), eq("PRO"), any()))
+                .thenReturn(AdminPlanService.AssignPlanResult.ok("FREE", "PRO"));
+
+        assertThat(service.redeem(USER, "LC-CREATOR1").status()).isEqualTo(RewardService.RedeemStatus.SUCCESS);
+    }
+
+    @Test
+    @DisplayName("partner code: a user who is not a partner is attributed as before (no false PARTNER_ACCOUNT)")
+    void nonPartnerIsStillAttributed() {
+        partnerCode();
+        when(codeRepository.findByOwnerUserIdAndProgram(USER, RewardProgram.PARTNER)).thenReturn(Optional.empty());
+
+        assertThat(service.redeem(USER, "TECHDOX").status()).isEqualTo(RewardService.RedeemStatus.SUCCESS);
+        verify(codeRepository).tryReserveRedemption(400L);
+    }
+
+    @Test
     @DisplayName("partner code: a user already attributed to a partner keeps the first one (ALREADY_ATTRIBUTED)")
     void firstPartnerWins() {
         partnerCode();

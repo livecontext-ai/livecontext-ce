@@ -31,7 +31,10 @@ const refreshAutomations = vi.fn();
 let modalProps: Record<string, any> | null = null;
 
 vi.mock('@/i18n/navigation', () => ({ useRouter: () => ({ push }) }));
-vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams() }));
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => new URLSearchParams(),
+  usePathname: () => '/en/app/agenda',
+}));
 // ONE function, not a new one per render. The page's window fetch lists its translator in
 // the effect's dependencies (the real `useTranslations` returns a stable one), so a mock
 // that mints a fresh closure on every call refetches the calendar forever - and the counts

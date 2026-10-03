@@ -31,6 +31,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -86,7 +87,7 @@ class ApiKeyServiceMultiKeyTest {
         @DisplayName("creates a full-access key (null scopes) with lc_live_ plaintext, hash and hint")
         void createKey_fullAccess_happyPath() {
             when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser()));
-            when(apiKeyRepository.countByUserIdAndRevokedAtIsNull(USER_ID)).thenReturn(0L);
+            when(apiKeyRepository.countUsableByUserId(eq(USER_ID), any())).thenReturn(0L);
             when(encryptionService.hmacHash(anyString())).thenReturn(HMAC_HASH);
             when(apiKeyRepository.save(any(ApiKey.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -112,7 +113,7 @@ class ApiKeyServiceMultiKeyTest {
         @DisplayName("stores scoped key with normalized comma-joined scopes and returns them as a list")
         void createKey_scoped_storesNormalizedScopes() {
             when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser()));
-            when(apiKeyRepository.countByUserIdAndRevokedAtIsNull(USER_ID)).thenReturn(0L);
+            when(apiKeyRepository.countUsableByUserId(eq(USER_ID), any())).thenReturn(0L);
             when(encryptionService.hmacHash(anyString())).thenReturn(HMAC_HASH);
             when(apiKeyRepository.save(any(ApiKey.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -129,7 +130,7 @@ class ApiKeyServiceMultiKeyTest {
         @DisplayName("normalizes scopes: trim, lowercase, dedupe, blanks dropped")
         void createKey_normalizesScopes() {
             when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser()));
-            when(apiKeyRepository.countByUserIdAndRevokedAtIsNull(USER_ID)).thenReturn(0L);
+            when(apiKeyRepository.countUsableByUserId(eq(USER_ID), any())).thenReturn(0L);
             when(encryptionService.hmacHash(anyString())).thenReturn(HMAC_HASH);
             when(apiKeyRepository.save(any(ApiKey.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -167,7 +168,7 @@ class ApiKeyServiceMultiKeyTest {
         @DisplayName("trims the name before validating and storing")
         void createKey_trimsName() {
             when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser()));
-            when(apiKeyRepository.countByUserIdAndRevokedAtIsNull(USER_ID)).thenReturn(0L);
+            when(apiKeyRepository.countUsableByUserId(eq(USER_ID), any())).thenReturn(0L);
             when(encryptionService.hmacHash(anyString())).thenReturn(HMAC_HASH);
             when(apiKeyRepository.save(any(ApiKey.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -201,7 +202,7 @@ class ApiKeyServiceMultiKeyTest {
         @DisplayName("caps active keys at 20 with a validation error")
         void createKey_rejectsBeyondCap() {
             when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser()));
-            when(apiKeyRepository.countByUserIdAndRevokedAtIsNull(USER_ID))
+            when(apiKeyRepository.countUsableByUserId(eq(USER_ID), any()))
                     .thenReturn((long) ApiKeyService.MAX_ACTIVE_KEYS);
 
             assertThatThrownBy(() -> apiKeyService.createKey(USER_ID, "One too many", null))
@@ -223,7 +224,7 @@ class ApiKeyServiceMultiKeyTest {
         @DisplayName("busts the gateway cache for the owner after creation (regenerateKey parity)")
         void createKey_bustsGatewayCache() {
             when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser()));
-            when(apiKeyRepository.countByUserIdAndRevokedAtIsNull(USER_ID)).thenReturn(0L);
+            when(apiKeyRepository.countUsableByUserId(eq(USER_ID), any())).thenReturn(0L);
             when(encryptionService.hmacHash(anyString())).thenReturn(HMAC_HASH);
             when(apiKeyRepository.save(any(ApiKey.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -331,8 +332,8 @@ class ApiKeyServiceMultiKeyTest {
             User user = buildUser();
             UserResolutionResponse resolution = new UserResolutionResponse();
             resolution.setUserId(USER_ID);
-            when(encryptionService.hmacHash(PLAINTEXT)).thenReturn(HMAC_HASH);
-            when(userRepository.findByApiKeyHash(HMAC_HASH)).thenReturn(Optional.of(user));
+            when(encryptionService.hmacHashCandidates(PLAINTEXT)).thenReturn(List.of(HMAC_HASH));
+            when(userRepository.findByApiKeyHashIn(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of(user));
             when(userResolutionService.resolveUser(PROVIDER_ID, null)).thenReturn(resolution);
 
             UserResolutionResponse result = apiKeyService.resolveByPlaintextKey(PLAINTEXT);
@@ -349,9 +350,9 @@ class ApiKeyServiceMultiKeyTest {
             ApiKey key = buildKey("Scoped", "workflow,table");
             UserResolutionResponse resolution = new UserResolutionResponse();
             resolution.setUserId(USER_ID);
-            when(encryptionService.hmacHash(PLAINTEXT)).thenReturn(HMAC_HASH);
-            when(userRepository.findByApiKeyHash(HMAC_HASH)).thenReturn(Optional.empty());
-            when(apiKeyRepository.findByKeyHashAndRevokedAtIsNull(HMAC_HASH)).thenReturn(Optional.of(key));
+            when(encryptionService.hmacHashCandidates(PLAINTEXT)).thenReturn(List.of(HMAC_HASH));
+            when(userRepository.findByApiKeyHashIn(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of());
+            when(apiKeyRepository.findByKeyHashInAndRevokedAtIsNull(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of(key));
             when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser()));
             when(userResolutionService.resolveUser(PROVIDER_ID, null)).thenReturn(resolution);
 
@@ -362,14 +363,51 @@ class ApiKeyServiceMultiKeyTest {
         }
 
         @Test
+        @DisplayName("LC-070: a named key stored under the legacy hash resolves in ONE query and is re-hashed to the current key")
+        void namedKeyStoredUnderLegacyHashResolvesAndIsRehashed() {
+            ApiKey key = buildKey("Legacy", null);   // stored hash = HMAC_HASH (the legacy form)
+            UserResolutionResponse resolution = new UserResolutionResponse();
+            resolution.setUserId(USER_ID);
+            String newHash = "f".repeat(64);
+            List<String> candidates = List.of(newHash, HMAC_HASH);
+            when(encryptionService.hmacHashCandidates(PLAINTEXT)).thenReturn(candidates);
+            when(userRepository.findByApiKeyHashIn(candidates)).thenReturn(List.of());
+            when(apiKeyRepository.findByKeyHashInAndRevokedAtIsNull(candidates)).thenReturn(List.of(key));
+            when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser()));
+            when(userResolutionService.resolveUser(PROVIDER_ID, null)).thenReturn(resolution);
+
+            UserResolutionResponse result = apiKeyService.resolveByPlaintextKey(PLAINTEXT);
+
+            assertThat(result).isNotNull();
+            verify(apiKeyRepository).findByKeyHashInAndRevokedAtIsNull(candidates);
+            verify(apiKeyRepository).rehash(KEY_ID, HMAC_HASH, newHash);
+        }
+
+        @Test
+        @DisplayName("LC-070: a named key already on the current hash is not re-hashed")
+        void namedKeyOnCurrentHashIsNotRehashed() {
+            ApiKey key = buildKey("Current", null);
+            UserResolutionResponse resolution = new UserResolutionResponse();
+            resolution.setUserId(USER_ID);
+            when(encryptionService.hmacHashCandidates(PLAINTEXT)).thenReturn(List.of(HMAC_HASH));
+            when(userRepository.findByApiKeyHashIn(List.of(HMAC_HASH))).thenReturn(List.of());
+            when(apiKeyRepository.findByKeyHashInAndRevokedAtIsNull(List.of(HMAC_HASH))).thenReturn(List.of(key));
+            when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser()));
+            when(userResolutionService.resolveUser(PROVIDER_ID, null)).thenReturn(resolution);
+
+            assertThat(apiKeyService.resolveByPlaintextKey(PLAINTEXT)).isNotNull();
+            verify(apiKeyRepository, never()).rehash(any(), anyString(), anyString());
+        }
+
+        @Test
         @DisplayName("full-access multi key (null scopes) resolves with null apiKeyScopes")
         void fullAccessMultiKeyResolvesWithNullScopes() {
             ApiKey key = buildKey("Full", null);
             UserResolutionResponse resolution = new UserResolutionResponse();
             resolution.setUserId(USER_ID);
-            when(encryptionService.hmacHash(PLAINTEXT)).thenReturn(HMAC_HASH);
-            when(userRepository.findByApiKeyHash(HMAC_HASH)).thenReturn(Optional.empty());
-            when(apiKeyRepository.findByKeyHashAndRevokedAtIsNull(HMAC_HASH)).thenReturn(Optional.of(key));
+            when(encryptionService.hmacHashCandidates(PLAINTEXT)).thenReturn(List.of(HMAC_HASH));
+            when(userRepository.findByApiKeyHashIn(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of());
+            when(apiKeyRepository.findByKeyHashInAndRevokedAtIsNull(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of(key));
             when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser()));
             when(userResolutionService.resolveUser(PROVIDER_ID, null)).thenReturn(resolution);
 
@@ -382,9 +420,9 @@ class ApiKeyServiceMultiKeyTest {
         @Test
         @DisplayName("revoked key no longer resolves (repository filters revoked_at IS NULL)")
         void revokedKeyDoesNotResolve() {
-            when(encryptionService.hmacHash(PLAINTEXT)).thenReturn(HMAC_HASH);
-            when(userRepository.findByApiKeyHash(HMAC_HASH)).thenReturn(Optional.empty());
-            when(apiKeyRepository.findByKeyHashAndRevokedAtIsNull(HMAC_HASH)).thenReturn(Optional.empty());
+            when(encryptionService.hmacHashCandidates(PLAINTEXT)).thenReturn(List.of(HMAC_HASH));
+            when(userRepository.findByApiKeyHashIn(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of());
+            when(apiKeyRepository.findByKeyHashInAndRevokedAtIsNull(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of());
 
             assertThat(apiKeyService.resolveByPlaintextKey(PLAINTEXT)).isNull();
             verifyNoInteractions(userResolutionService);
@@ -396,9 +434,9 @@ class ApiKeyServiceMultiKeyTest {
             ApiKey key = buildKey("Scoped", "workflow");
             User disabled = buildUser();
             disabled.setEnabled(false);
-            when(encryptionService.hmacHash(PLAINTEXT)).thenReturn(HMAC_HASH);
-            when(userRepository.findByApiKeyHash(HMAC_HASH)).thenReturn(Optional.empty());
-            when(apiKeyRepository.findByKeyHashAndRevokedAtIsNull(HMAC_HASH)).thenReturn(Optional.of(key));
+            when(encryptionService.hmacHashCandidates(PLAINTEXT)).thenReturn(List.of(HMAC_HASH));
+            when(userRepository.findByApiKeyHashIn(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of());
+            when(apiKeyRepository.findByKeyHashInAndRevokedAtIsNull(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of(key));
             when(userRepository.findById(USER_ID)).thenReturn(Optional.of(disabled));
 
             assertThat(apiKeyService.resolveByPlaintextKey(PLAINTEXT)).isNull();
@@ -459,9 +497,9 @@ class ApiKeyServiceMultiKeyTest {
         private void stubSuccessfulMultiKeyResolution(ApiKey key) {
             UserResolutionResponse resolution = new UserResolutionResponse();
             resolution.setUserId(USER_ID);
-            when(encryptionService.hmacHash(PLAINTEXT)).thenReturn(HMAC_HASH);
-            when(userRepository.findByApiKeyHash(HMAC_HASH)).thenReturn(Optional.empty());
-            when(apiKeyRepository.findByKeyHashAndRevokedAtIsNull(HMAC_HASH)).thenReturn(Optional.of(key));
+            when(encryptionService.hmacHashCandidates(PLAINTEXT)).thenReturn(List.of(HMAC_HASH));
+            when(userRepository.findByApiKeyHashIn(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of());
+            when(apiKeyRepository.findByKeyHashInAndRevokedAtIsNull(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of(key));
             when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser()));
             when(userResolutionService.resolveUser(PROVIDER_ID, null)).thenReturn(resolution);
         }

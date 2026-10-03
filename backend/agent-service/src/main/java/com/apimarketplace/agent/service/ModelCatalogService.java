@@ -401,6 +401,8 @@ public class ModelCatalogService {
             base.put("llmSource", "BYOK");
         }
 
+        stampFreeTierRanks(providers, overrideMap);
+
         // Recalculate defaultModel/defaultProvider from the final filtered list.
         // Picks the model with the LOWEST global displayOrder across every
         // provider - i.e. the user-visible #1 in the admin's drag-and-drop
@@ -418,6 +420,39 @@ public class ModelCatalogService {
         }
 
         return base;
+    }
+
+    /**
+     * Stamp {@code freeTierRank} on every model opened to the free tier that the admin
+     * ranked on the Free tier tab. A Free account's pickers and opening model order the
+     * covered models by it; an opened model with no rank of its own carries no key and
+     * keeps its global {@code displayOrder}, which is what the admin tab shows for it too.
+     *
+     * <p>Read from the sidecar directly, never through the overlaid override list: on a
+     * category-scoped catalogue that list carries the OTHER category's ranks.
+     */
+    @SuppressWarnings("unchecked")
+    private void stampFreeTierRanks(List<Map<String, Object>> providers,
+                                    Map<String, ModelConfigOverrideEntity> overrideMap) {
+        // Collected first so a catalogue with nothing opened to the free tier (every CE
+        // install, and any list before an admin opens a model) costs no query at all.
+        Map<Long, Map<String, Object>> openedByModelConfigId = new HashMap<>();
+        for (Map<String, Object> provider : providers) {
+            List<Map<String, Object>> models = (List<Map<String, Object>>) provider.get("models");
+            if (models == null) continue;
+            for (Map<String, Object> model : models) {
+                if (!Boolean.TRUE.equals(model.get("freeTierEnabled"))) continue;
+                ModelConfigOverrideEntity override = overrideMap.get(provider.get("name") + ":" + model.get("id"));
+                if (override != null && override.getId() != null) {
+                    openedByModelConfigId.put(override.getId(), model);
+                }
+            }
+        }
+        if (openedByModelConfigId.isEmpty()) return;
+        for (ModelCategorySettingsEntity s : categoryRepository.findByCategory(ModelCategory.FREE_TIER.key())) {
+            Map<String, Object> model = openedByModelConfigId.get(s.getModelConfigId());
+            if (model != null && s.getRank() != null) model.put("freeTierRank", s.getRank());
+        }
     }
 
     /**
@@ -1326,6 +1361,25 @@ public class ModelCatalogService {
         // Sort by displayOrder
         result.sort(Comparator.comparingInt(m -> (int) ((Map<String, Object>) m).getOrDefault("displayOrder", 999)));
 
+        if (ModelCategory.FREE_TIER.key().equals(category)) {
+            // The free-tier ranking orders the models opened to the free tier and no others:
+            // a rank given to a model a Free account cannot use would be read by nothing.
+            result.removeIf(m -> !Boolean.TRUE.equals(m.get("freeTierEnabled")));
+            // Ranked models first, then the ones never ranked here, in their global order.
+            // A free-tier rank and a global rank are two scales, so comparing them would let
+            // a model just opened (global #1) tie with the free tier's #1. The pickers apply
+            // this same rule to freeTierRank, which is what keeps this tab and a Free
+            // account's list identical. Stable, so each half keeps the order sorted above.
+            Set<Long> ranked = new HashSet<>();
+            for (ModelCategorySettingsEntity s : categoryRepository.findByCategory(category)) {
+                if (s.getRank() != null) ranked.add(s.getModelConfigId());
+            }
+            result.sort(Comparator.comparingInt(m -> {
+                ModelConfigOverrideEntity o = overrideMap.get(m.get("provider") + ":" + m.get("id"));
+                return o != null && o.getId() != null && ranked.contains(o.getId()) ? 0 : 1;
+            }));
+        }
+
         return result;
     }
 
@@ -1526,6 +1580,9 @@ public class ModelCatalogService {
         }
 
         ModelConfigOverrideEntity saved = repository.save(entity);
+        if (input.isFreeTierEnabledExplicitlySet() && !saved.isFreeTierEnabled()) {
+            dropFreeTierRank(saved);
+        }
 
         // Sync pricing into auth.model_pricing for any row that carries a price -
         // bridges included. Since V130 bridges store the underlying cloud model's
@@ -1646,11 +1703,22 @@ public class ModelCatalogService {
         // The chat tab gets this for free via the legacy path; the category
         // path needs it explicitly.
         Map<String, String> catalogDisplayNames = collectCatalogDisplayNames();
+        boolean freeTierRanking = ModelCategory.FREE_TIER.key().equals(category);
 
         for (Map<String, Object> item : rankings) {
             String provider = (String) item.get("provider");
             String modelId = (String) item.get("modelId");
             int rank = ((Number) item.get("ranking")).intValue();
+
+            if (freeTierRanking) {
+                // Only a model that is open to the free tier has a rank there. A rank written
+                // for a closed one (a list loaded before another admin closed it) would wait
+                // for the model to be re-opened and bring it back tied with whoever holds
+                // that rank by then. Skipped, not refused: the rest of the list is still valid.
+                ModelConfigOverrideEntity open = repository.findByProviderAndModelId(provider, modelId)
+                        .orElse(null);
+                if (open == null || !open.isFreeTierEnabled()) continue;
+            }
 
             ModelConfigOverrideEntity parent = repository.findByProviderAndModelId(provider, modelId)
                     .orElseGet(() -> {
@@ -1694,6 +1762,11 @@ public class ModelCatalogService {
     public void setCategoryEnabled(String provider, String modelId, String category, boolean enabled) {
         if (!ModelCategory.isValidShape(category)) {
             throw new IllegalArgumentException("Invalid category key: " + category);
+        }
+        if (ModelCategory.ranksOnly(category)) {
+            // Accepting it would answer "saved" and change nothing: the overlay never reads it.
+            throw new IllegalArgumentException("Category '" + category
+                    + "' only carries a ranking. Enable or disable the model globally instead.");
         }
         // A model can be listed in the admin panel with NO row of its own: the panel shows the
         // YAML-declared catalogue too, and a row is only written the first time something is
@@ -2058,6 +2131,7 @@ public class ModelCatalogService {
             // row still says it was open.
             closeFreeTierMirror(row);
             row.setFreeTierEnabled(false);
+            dropFreeTierRank(row);
             row.setEnabled(false);
             row.setBundleEnabled(false);
             // V554: a restore brings the model back OFF, and off carries no unlisted flag (the
@@ -2119,6 +2193,19 @@ public class ModelCatalogService {
             out.add(m);
         }
         return out;
+    }
+
+    /**
+     * Forget the free-tier rank of a model that is closed to the free tier. Left behind, the
+     * row would come back with the model if it is re-opened, at a rank the others have been
+     * renumbered over since: two models at the same rank, on the list that decides which
+     * model a Free account opens on. A re-opened model starts unranked, after the ranked ones.
+     */
+    private void dropFreeTierRank(ModelConfigOverrideEntity row) {
+        if (row == null || row.getId() == null) return;
+        categoryRepository
+                .findById(new ModelCategorySettingsId(row.getId(), ModelCategory.FREE_TIER.key()))
+                .ifPresent(categoryRepository::delete);
     }
 
     /** Push {@code free_tier = false} for a row that was open, so the gate stops funding it. */
@@ -2653,6 +2740,7 @@ public class ModelCatalogService {
                 .collect(Collectors.toMap(ModelCategorySettingsEntity::getModelConfigId,
                         java.util.function.Function.identity(),
                         (a, b) -> a));
+        boolean ranksOnly = ModelCategory.ranksOnly(category);
 
         List<ModelConfigOverrideEntity> out = new ArrayList<>(source.size());
         for (ModelConfigOverrideEntity orig : source) {
@@ -2666,9 +2754,13 @@ public class ModelCatalogService {
             // A category's own toggle is independent of the global (chat) flag, by design: a
             // model can be off for chat and on for the browser agent. A RETIRED model is the
             // exception: it is out of every category, whatever its sidecar row says.
-            copy.setEnabled(orig.isRetired()
-                    ? Boolean.FALSE
-                    : (setting.getEnabled() == null ? Boolean.TRUE : setting.getEnabled()));
+            // A ranks-only category (the free tier) has no toggle of its own: the row keeps
+            // the global flag, or reordering a model there would switch it on in that view.
+            if (!ranksOnly) {
+                copy.setEnabled(orig.isRetired()
+                        ? Boolean.FALSE
+                        : (setting.getEnabled() == null ? Boolean.TRUE : setting.getEnabled()));
+            }
             out.add(copy);
         }
         out.sort(Comparator.comparing(

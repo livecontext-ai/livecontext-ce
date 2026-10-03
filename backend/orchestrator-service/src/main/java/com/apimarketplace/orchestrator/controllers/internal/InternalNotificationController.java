@@ -50,10 +50,10 @@ public class InternalNotificationController {
 
     private static final Logger logger = LoggerFactory.getLogger(InternalNotificationController.class);
 
-    /** Mirrors the DB check {@code chk_notif_subject_type_v1} (V176, widened by V232 + V459 + V518 + V528). */
+    /** Mirrors the DB check {@code chk_notif_subject_type_v1} (V176, widened by V232 + V459 + V518 + V528 + V551 + V558). */
     private static final Set<String> SUBJECT_TYPES = Set.of(
             "WORKFLOW", "APPLICATION", "AGENT_TASK", "CREDENTIAL", "TRIGGER", "ORG_INVITATION",
-            "BADGE", "AGENT", "BILLING", "PUBLICATION");
+            "BADGE", "AGENT", "BILLING", "PUBLICATION", "USER");
 
     private static final Set<String> SEVERITIES = Set.of("info", "warning", "error");
 

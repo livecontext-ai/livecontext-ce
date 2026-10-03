@@ -162,8 +162,11 @@ public class SkippedNodePersistenceService {
             Map<String, Object> skipPayload = buildSkipPayload(
                     nodeId, nodeLabel, skipReason, skipSourceNode, itemIndex, execution.getDisplayName(), entity.getTriggerId());
 
+            // LC-066/CASA re-audit item 4: thread the run id so persistSkippedNodePayload can
+            // consult isRunRestricted and tag the skip envelope RESTRICTED when this run already
+            // holds Gmail/Drive-derived content (the skip reason can quote it).
             UUID storageId = stepPayloadService.persistSkippedNodePayload(
-                    execution.getPlan().getTenantId(), skipPayload, currentEpoch);
+                    execution.getPlan().getTenantId(), skipPayload, currentEpoch, execution.getRunId());
             entity.setOutputStorageId(storageId);
 
             // Row truth for the SKIPPED sibling: pre-fix a null storageId was

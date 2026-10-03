@@ -265,7 +265,7 @@ public class AgentDelegationModule implements ToolModule {
         // start_mode='pending' suppresses the centralized kickoff. Other modes preserve it.
         boolean autoTriggerWorker = !"pending".equals(startMode);
         AgentTaskEntity t = taskService.assignTask(
-                tenantId, callerAgentId, callerUserId, req, autoTriggerWorker);
+                tenantId, callerAgentId, callerUserId, req, autoTriggerWorker, callerSensitivity(ctx));
 
         // Apply board extras (labels / estimate / blockers / checklist) at creation
         // time, so an agent can create a task WITH them in a single assign call.
@@ -306,8 +306,110 @@ public class AgentDelegationModule implements ToolModule {
         if (finalTask.getErrorMessage() != null) {
             result.put("error_message", finalTask.getErrorMessage());
         }
-        return ToolExecutionResult.success(result);
+        // LC-066: the result of a task that holds Gmail / Drive content is that content's heir.
+        return finalTask.holdsRestrictedData()
+                ? ToolExecutionResult.success(result, RESTRICTED_METADATA)
+                : ToolExecutionResult.success(result);
     }
+
+    /** Tool-result metadata that tags a result as restricted data (CASA LC-066). */
+    private static final Map<String, Object> RESTRICTED_METADATA = Map.of(
+            com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY,
+            com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+
+    /**
+     * LC-066: a result that returns a task's title, instructions or result carries the restricted
+     * tag when that task is RESTRICTED, like {@link #handleAssign}'s synchronous result, so an
+     * untagged execution reading it becomes restricted and is provider-checked from then on.
+     */
+    private static ToolExecutionResult taskResult(Object result, boolean restricted) {
+        return restricted
+                ? ToolExecutionResult.success(result, RESTRICTED_METADATA)
+                : ToolExecutionResult.success(result);
+    }
+
+    /**
+     * A task listing (inbox, outbox, review_inbox, backlog). LC-066: never tagged restricted, so an
+     * agent polling a shared backlog that holds one RESTRICTED task does not become restricted for
+     * a task it never opened. A RESTRICTED task is listed WITHOUT its text instead (see
+     * {@link #withheldListingEntry}); the single-task read named by {@code openWith} returns the
+     * text, and that read is tagged.
+     *
+     * @param openWith the call that opens one task of this listing, as the agent writes it, with
+     *                 {@code <id>} standing for the task id
+     */
+    private static ToolExecutionResult taskListResult(List<AgentTaskEntity> list, String openWith) {
+        List<Object> tasks = new ArrayList<>(list.size());
+        for (AgentTaskEntity task : list) {
+            tasks.add(task.holdsRestrictedData() ? withheldListingEntry(task, openWith) : TaskResponse.from(task));
+        }
+        return ToolExecutionResult.success(Map.of("count", list.size(), "tasks", tasks));
+    }
+
+    /**
+     * LC-066: a RESTRICTED task as a listing shows it: what is needed to triage it (ids, status,
+     * priority, people, dates) and nothing it may have copied from Gmail or Google Drive (title,
+     * instructions, result, error, context, notes, checklist, attachments). Keys match
+     * {@link TaskResponse}'s, so a listing reads the same for both kinds of entry.
+     *
+     * <p>The one rendering of a RESTRICTED task for every untagged surface that lists tasks: the
+     * tool listings here, the scheduled wake-up prompt ({@code ScheduledTaskPromptBuilder}) and
+     * the workflow task node's list ({@code InternalAgentTaskController}).
+     *
+     * @param openWith the call that opens the task, with {@code <id>} standing for its id
+     */
+    public static Map<String, Object> withheldListingEntry(AgentTaskEntity task, String openWith) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("id", task.getId());
+        putIfPresent(entry, "parentTaskId", task.getParentTaskId());
+        entry.put("status", task.getStatus());
+        entry.put("priority", task.getPriority());
+        entry.put("depth", task.getDepth());
+        putIfPresent(entry, "createdByAgentId", task.getCreatedByAgentId());
+        putIfPresent(entry, "createdByUserId", task.getCreatedByUserId());
+        putIfPresent(entry, "assignedToAgentId", task.getAssignedToAgentId());
+        putIfPresent(entry, "assignedToUserId", task.getAssignedToUserId());
+        putIfPresent(entry, "reviewerAgentId", task.getReviewerAgentId());
+        putIfPresent(entry, "reviewerUserId", task.getReviewerUserId());
+        putIfPresent(entry, "dueBy", task.getDueBy());
+        putIfPresent(entry, "createdAt", task.getCreatedAt());
+        putIfPresent(entry, "updatedAt", task.getUpdatedAt());
+        putIfPresent(entry, "startedAt", task.getStartedAt());
+        putIfPresent(entry, "completedAt", task.getCompletedAt());
+        entry.put("restricted", true);
+        entry.put("note", "This task holds Gmail or Google Drive content, so its title, instructions and "
+                + "result are not shown here. Open it with "
+                + openWith.replace("<id>", String.valueOf(task.getId()))
+                + " to read it; the conversation or workflow run that reads it then counts as having read "
+                + "Gmail or Google Drive.");
+        return entry;
+    }
+
+    private static void putIfPresent(Map<String, Object> map, String key, Object value) {
+        if (value != null) {
+            map.put(key, value);
+        }
+    }
+
+    /**
+     * CASA LC-066: the classification of the execution calling this tool (the tag the agent loop,
+     * the conversation guard or a restricted run stamps on the call). A task, update or result it
+     * writes may carry Gmail / Drive content.
+     */
+    static com.apimarketplace.common.classification.DataSensitivity callerSensitivity(ToolExecutionContext ctx) {
+        return ctx != null
+                ? com.apimarketplace.common.classification.DataSensitivity.fromCredentials(ctx.credentials())
+                : com.apimarketplace.common.classification.DataSensitivity.NORMAL;
+    }
+
+    static final String RESTRICTED_RECURRENCE_REFUSAL =
+            com.apimarketplace.common.classification.RestrictedDataPolicy.REFUSAL_CODE
+            + ": Content from Gmail or Google Drive seen earlier in this conversation cannot be written into a "
+            + "recurring task: its title and instructions are kept indefinitely and sent to the target agent on "
+            + "every run, on whatever model that agent uses. In this conversation no recurrence can be created and "
+            + "no recurrence text can be changed (enabling, disabling, rescheduling, listing and deleting still "
+            + "work). A one-off task with agent(action='assign') is still possible. Tell the user: they can set "
+            + "up the recurrence from a conversation that has not read Gmail or Google Drive.";
 
     private ToolExecutionResult handleInbox(Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {
         UUID callerId = requireCallingAgentId(ctx, "inbox");
@@ -318,16 +420,13 @@ public class AgentDelegationModule implements ToolModule {
             TaskResponse task = organizationId != null
                     ? taskService.getInboxTask(tenantId, organizationId, callerId, taskId)
                     : taskService.getInboxTask(tenantId, callerId, taskId);
-            return ToolExecutionResult.success(task);
+            return taskResult(task, task.holdsRestrictedData());
         }
         int limit = getIntParam(p, "limit", 20);
         List<AgentTaskEntity> list = organizationId != null
                 ? taskService.getInboxList(tenantId, organizationId, callerId, limit)
                 : taskService.getInboxList(tenantId, callerId, limit);
-        return ToolExecutionResult.success(Map.of(
-                "count", list.size(),
-                "tasks", list.stream().map(TaskResponse::from).toList()
-        ));
+        return taskListResult(list, "agent(action='inbox', task_id='<id>')");
     }
 
     private ToolExecutionResult handleOutbox(Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {
@@ -341,7 +440,7 @@ public class AgentDelegationModule implements ToolModule {
             TaskResponse task = organizationId != null
                     ? taskService.getOutboxTask(tenantId, organizationId, callerAgentId, callerUserId, taskId)
                     : taskService.getOutboxTask(tenantId, callerAgentId, callerUserId, taskId);
-            return ToolExecutionResult.success(task);
+            return taskResult(task, task.holdsRestrictedData());
         }
         // List form: the repository indexes outbox by createdByAgentId, so a direct-chat caller
         // (no calling agent) has no agent-scoped task list to browse - only a single task_id lookup.
@@ -354,10 +453,7 @@ public class AgentDelegationModule implements ToolModule {
         List<AgentTaskEntity> list = organizationId != null
                 ? taskService.getOutbox(tenantId, organizationId, callerAgentId, status, limit)
                 : taskService.getOutbox(tenantId, callerAgentId, status, limit);
-        return ToolExecutionResult.success(Map.of(
-                "count", list.size(),
-                "tasks", list.stream().map(TaskResponse::from).toList()
-        ));
+        return taskListResult(list, "agent(action='outbox', task_id='<id>')");
     }
 
     private ToolExecutionResult handleComplete(Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {
@@ -373,7 +469,7 @@ public class AgentDelegationModule implements ToolModule {
         boolean force = rawForce instanceof Boolean b ? b
                 : rawForce != null && Boolean.parseBoolean(rawForce.toString());
         AgentTaskEntity t = taskService.completeTask(tenantId, taskId, callerId, result, force,
-                reviewerExecutionId(ctx));
+                reviewerExecutionId(ctx), callerSensitivity(ctx));
         return ToolExecutionResult.success(
                 Map.of("task_id", t.getId().toString(), "status", t.getStatus()),
                 TASK_TURN_DECISION_METADATA);
@@ -385,7 +481,7 @@ public class AgentDelegationModule implements ToolModule {
         UUID taskId = requireUuid(p, "task_id");
         assertTaskInScope(taskId, tenantId, ctx);
         String reason = getStringParam(p, "reason");
-        AgentTaskEntity t = taskService.rejectTask(tenantId, taskId, callerId, reason, reviewerExecutionId(ctx));
+        AgentTaskEntity t = taskService.rejectTask(tenantId, taskId, callerId, reason, reviewerExecutionId(ctx), callerSensitivity(ctx));
         return ToolExecutionResult.success(
                 Map.of("task_id", t.getId().toString(), "status", t.getStatus()),
                 TASK_TURN_DECISION_METADATA);
@@ -432,11 +528,15 @@ public class AgentDelegationModule implements ToolModule {
                 status,
                 maxReviewAttempts
         );
-        AgentTaskEntity t = taskService.updateTask(tenantId, taskId, callerAgentId, callerUserId, req);
+        // LC-066: the service ratchets the task to RESTRICTED in the update's own transaction, only
+        // once the permission check and every validation passed, and only when the title or the
+        // instructions (the assignee's prompt text) are written.
+        AgentTaskEntity t = taskService.updateTask(tenantId, taskId, callerAgentId, callerUserId, req,
+                callerSensitivity(ctx));
         // Board extras (F2 labels, F12 estimate/time, F9 blockers, F10 checklist) may be
         // set in the same call - shared with the create path (handleAssign).
         t = applyTaskExtras(p, tenantId, taskId, callerAgentId, callerUserId, t);
-        return ToolExecutionResult.success(TaskResponse.from(t));
+        return taskResult(TaskResponse.from(t), t.holdsRestrictedData());
     }
 
     /**
@@ -526,7 +626,7 @@ public class AgentDelegationModule implements ToolModule {
         UUID taskId = requireUuid(p, "task_id");
         assertTaskInScope(taskId, tenantId, ctx);
         String reason = getStringParam(p, "reason");
-        AgentTaskEntity t = taskService.rejectReview(tenantId, taskId, callerId, reviewerExecutionId(ctx), reason);
+        AgentTaskEntity t = taskService.rejectReview(tenantId, taskId, callerId, reviewerExecutionId(ctx), reason, callerSensitivity(ctx));
         return ToolExecutionResult.success(
                 Map.of("task_id", t.getId().toString(), "status", t.getStatus()),
                 TASK_TURN_DECISION_METADATA);
@@ -540,10 +640,7 @@ public class AgentDelegationModule implements ToolModule {
         List<AgentTaskEntity> list = organizationId != null
                 ? taskService.getReviewInbox(tenantId, organizationId, callerId, limit)
                 : taskService.getReviewInbox(tenantId, callerId, limit);
-        return ToolExecutionResult.success(Map.of(
-                "count", list.size(),
-                "tasks", list.stream().map(TaskResponse::from).toList()
-        ));
+        return taskListResult(list, "agent(action='task_get_context', task_id='<id>')");
     }
 
     // ========================================================================
@@ -568,10 +665,9 @@ public class AgentDelegationModule implements ToolModule {
         List<AgentTaskEntity> list = organizationId != null
                 ? taskService.getBacklog(tenantId, organizationId, limit)
                 : taskService.getBacklog(tenantId, limit);
-        return ToolExecutionResult.success(Map.of(
-                "count", list.size(),
-                "tasks", list.stream().map(TaskResponse::from).toList()
-        ));
+        return taskListResult(list, backlogCallerAgentId != null
+                ? "agent(action='claim', task_id='<id>')"
+                : "agent(action='task_get_context', task_id='<id>')");
     }
 
     private ToolExecutionResult handleClaim(Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {
@@ -613,7 +709,7 @@ public class AgentDelegationModule implements ToolModule {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("claimed", true);
         out.put("task", TaskResponse.from(claimed.get()));
-        return ToolExecutionResult.success(out);
+        return taskResult(out, claimed.get().holdsRestrictedData());
     }
 
     // ========================================================================
@@ -623,6 +719,11 @@ public class AgentDelegationModule implements ToolModule {
     private ToolExecutionResult handleRecurrenceCreate(Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {
         UUID callerAgentId = optionalCallingAgentId(ctx);
         String callerUserId = callerAgentId == null ? tenantId : null;
+        // LC-066: a recurrence is the memory tool's twin (kept indefinitely, replayed on every
+        // fire), so a restricted caller is refused rather than the template tagged for good.
+        if (callerSensitivity(ctx).isRestricted()) {
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, RESTRICTED_RECURRENCE_REFUSAL);
+        }
         Map<String, Object> p = mergeParams(params);
         CreateRecurrenceRequest req = new CreateRecurrenceRequest(
                 getStringParam(p, "title"),
@@ -653,6 +754,10 @@ public class AgentDelegationModule implements ToolModule {
         String callerUserId = callerAgentId == null ? tenantId : null;
         Map<String, Object> p = mergeParams(params);
         UUID recurrenceId = requireUuid(p, "recurrence_id");
+        if (callerSensitivity(ctx).isRestricted()
+                && (p.get("title") != null || p.get("instructions") != null)) {
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, RESTRICTED_RECURRENCE_REFUSAL);
+        }
         UpdateRecurrenceRequest req = new UpdateRecurrenceRequest(
                 (Boolean) p.get("enabled"),
                 getStringParam(p, "cron"),

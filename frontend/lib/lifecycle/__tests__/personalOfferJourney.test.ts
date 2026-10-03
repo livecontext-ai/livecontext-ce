@@ -45,6 +45,18 @@ describe('personal offer journey', () => {
     expect(url.searchParams.has('checkout')).toBe(false);
   });
 
+  it.each(['/\\evil.example', '//evil.example', 'javascript:alert(1)', '/%2F%2Fevil.example'])(
+    'drops a stored work return that would leave the origin (%s)',
+    (hostile) => {
+      // Regression (ASVS 5.1.5): the old ad-hoc check only refused `//`, so `/\evil.example`
+      // (which browsers resolve to another host) reached the "Return to work" link.
+      savePersonalOfferJourney(window, {
+        creditTierIndex: 1, billingCycle: 'monthly', returnToWork: hostile,
+      });
+      expect(readPersonalOfferJourney(window)).toBeNull();
+    },
+  );
+
   it('clears an obsolete selection after its offer is no longer active', () => {
     savePersonalOfferJourney(window, {
       creditTierIndex: 1, billingCycle: 'monthly', returnToWork: '/en/app/chat',

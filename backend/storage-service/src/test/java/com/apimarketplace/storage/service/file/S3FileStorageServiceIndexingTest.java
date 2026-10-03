@@ -135,6 +135,44 @@ class S3FileStorageServiceIndexingTest {
     }
 
     @Test
+    @DisplayName("LC-063: a traversal category never escapes the caller's key segment; key and index row agree")
+    void uploadGenericSanitizesCategoryIntoTheKey() {
+        S3FileStorageService svc = new S3FileStorageService();
+        ReflectionTestUtils.setField(svc, "s3Client", s3Client);
+        ReflectionTestUtils.setField(svc, "bucket", "test-bucket");
+        ReflectionTestUtils.setField(svc, "storageIndexService", storageIndexService);
+
+        svc.uploadGeneric("tenant-42", "../../tenant-7/general/avatar", "x.png", "image/png",
+                new ByteArrayInputStream(new byte[]{1}), 1L);
+        svc.uploadGeneric("tenant-42", "chat-attachments", "y.png", "image/png",
+                new ByteArrayInputStream(new byte[]{1}), 1L, null);
+
+        ArgumentCaptor<PutObjectRequest> put = ArgumentCaptor.forClass(PutObjectRequest.class);
+        verify(s3Client, times(2)).putObject(put.capture(), any(RequestBody.class));
+        String hostile = put.getAllValues().get(0).key();
+        assertThat(hostile).startsWith("tenant-42/general/______tenant-7_general_avatar/");
+        assertThat(hostile.substring("tenant-42/general/".length())).doesNotContain("..");
+        assertThat(hostile.split("/")).hasSize(4);
+        // A legitimate category is untouched (avatar eligibility and existing keys keep working).
+        assertThat(put.getAllValues().get(1).key()).startsWith("tenant-42/general/chat-attachments/");
+        // The index row receives the SAME sanitized category the key carries.
+        verify(storageIndexService).saveS3FileIndex(
+                eq("tenant-42"), isNull(), isNull(), isNull(),
+                eq(hostile), eq("x.png"), eq("image/png"), eq(1L), eq(0));
+    }
+
+    @Test
+    @DisplayName("LC-063: sanitizeCategory allow-list, blank default and length cap")
+    void sanitizeCategoryRules() {
+        assertThat(S3FileStorageService.sanitizeCategory(null)).isEqualTo("general");
+        assertThat(S3FileStorageService.sanitizeCategory("  ")).isEqualTo("general");
+        assertThat(S3FileStorageService.sanitizeCategory("avatar")).isEqualTo("avatar");
+        assertThat(S3FileStorageService.sanitizeCategory("a/b\\c")).isEqualTo("a_b_c");
+        assertThat(S3FileStorageService.sanitizeCategory("x".repeat(100)))
+                .hasSize(S3FileStorageService.MAX_CATEGORY_LENGTH);
+    }
+
+    @Test
     @DisplayName("indexer throws → swallowed (upload already succeeded; orphan-cleanup sweep is the safety net)")
     void indexerExceptionIsSwallowed() {
         S3FileStorageService svc = new S3FileStorageService();

@@ -1,8 +1,11 @@
 package com.apimarketplace.orchestrator.services.impl;
 
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.datasource.client.DataSourceClient;
+import com.apimarketplace.datasource.client.dto.CrudRequestDto;
 import com.apimarketplace.datasource.client.dto.CrudResultDto;
 import com.apimarketplace.orchestrator.services.interfaces.ExecutionResult;
+import com.apimarketplace.orchestrator.services.persistence.StepPayloadService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -29,12 +32,15 @@ class CrudToolExecutorTest {
     @Mock
     private DataSourceClient dataSourceClient;
 
+    @Mock
+    private StepPayloadService stepPayloadService;
+
     private CrudToolExecutor executor;
 
     @BeforeEach
     void setUp() {
         var limits = new com.apimarketplace.orchestrator.config.OrchestratorLimitsConfig();
-        executor = new CrudToolExecutor(dataSourceClient, limits);
+        executor = new CrudToolExecutor(dataSourceClient, limits, stepPayloadService);
     }
 
     @Nested
@@ -300,6 +306,141 @@ class CrudToolExecutorTest {
                 "tenant-1");
 
             assertThat(execResult.output()).doesNotContainKey("warnings");
+        }
+    }
+
+    /**
+     * LC-066/LC-011 re-audit item 2: the calling run's restricted classification flows IN (via
+     * {@code __workflowRunId__} in billingIdentifiers -> StepPayloadService.isRunRestricted ->
+     * CrudRequestDto.restricted) and a RESTRICTED read result flows OUT (via
+     * CrudResultDto.ResultData.dataSensitivity -> DataSensitivity.CREDENTIAL_KEY in the step
+     * output), exactly like a Gmail/Drive catalog tool result.
+     */
+    @Nested
+    @DisplayName("LC-066/LC-011 restricted-data classification")
+    class RestrictedDataTests {
+
+        @Test
+        @DisplayName("a read tagged RESTRICTED by datasource-service is stamped on the step output")
+        void restrictedReadIsStampedOnOutput() {
+            CrudResultDto result = new CrudResultDto(
+                "read-row", true, "Read 1 row",
+                new CrudResultDto.ResultData(
+                    List.of(Map.of("subject", "wire transfer")), 1, false, 0, null, null, null, null,
+                    null, null, DataSensitivity.RESTRICTED.name())
+            );
+            when(dataSourceClient.executeCrud(any())).thenReturn(result);
+
+            ExecutionResult execResult = executor.execute("crud/read-row",
+                Map.of("dataSourceId", 1L, "crud", Map.of()), "tenant-1");
+
+            assertThat(execResult.isSuccess()).isTrue();
+            assertThat(execResult.output()).containsEntry(
+                DataSensitivity.CREDENTIAL_KEY, DataSensitivity.RESTRICTED.name());
+        }
+
+        @Test
+        @DisplayName("a read tagged NORMAL is not stamped")
+        void normalReadIsNotStamped() {
+            CrudResultDto result = new CrudResultDto(
+                "read-row", true, "Read 1 row",
+                new CrudResultDto.ResultData(
+                    List.of(Map.of("name", "github")), 1, false, 0, null, null, null, null,
+                    null, null, DataSensitivity.NORMAL.name())
+            );
+            when(dataSourceClient.executeCrud(any())).thenReturn(result);
+
+            ExecutionResult execResult = executor.execute("crud/read-row",
+                Map.of("dataSourceId", 1L, "crud", Map.of()), "tenant-1");
+
+            assertThat(execResult.output()).doesNotContainKey(DataSensitivity.CREDENTIAL_KEY);
+        }
+
+        @Test
+        @DisplayName("a null dataSensitivity (legacy/back-compat response) is not stamped")
+        void nullDataSensitivityIsNotStamped() {
+            CrudResultDto result = new CrudResultDto(
+                "read-row", true, "Read 1 row",
+                new CrudResultDto.ResultData(List.of(Map.of("name", "a")), 1, false, 0, null, null, null, null, null)
+            );
+            when(dataSourceClient.executeCrud(any())).thenReturn(result);
+
+            ExecutionResult execResult = executor.execute("crud/read-row",
+                Map.of("dataSourceId", 1L, "crud", Map.of()), "tenant-1");
+
+            assertThat(execResult.output()).doesNotContainKey(DataSensitivity.CREDENTIAL_KEY);
+        }
+
+        @Test
+        @DisplayName("a write inside a run StepPayloadService reports restricted sets CrudRequestDto.restricted=true")
+        void writeInRestrictedRunSetsRequestFlag() {
+            when(stepPayloadService.isRunRestricted("run-1")).thenReturn(true);
+            CrudResultDto result = new CrudResultDto(
+                "create-row", true, "Created 1 row",
+                new CrudResultDto.ResultData(null, null, null, null, List.of(1L), 1, null, null, null)
+            );
+            org.mockito.ArgumentCaptor<CrudRequestDto> captor = org.mockito.ArgumentCaptor.forClass(CrudRequestDto.class);
+            when(dataSourceClient.executeCrud(captor.capture())).thenReturn(result);
+
+            executor.execute("crud/create-row",
+                Map.of("dataSourceId", 1L, "crud", Map.of("rows", List.of(Map.of("id", "r1", "columns", Map.of("name", "x"))))),
+                "tenant-1", Map.of("__workflowRunId__", "run-1"));
+
+            assertThat(captor.getValue().isRestricted()).isTrue();
+        }
+
+        @Test
+        @DisplayName("a write inside an ordinary run sets CrudRequestDto.restricted=false")
+        void writeInOrdinaryRunLeavesRequestFlagFalse() {
+            when(stepPayloadService.isRunRestricted("run-1")).thenReturn(false);
+            CrudResultDto result = new CrudResultDto(
+                "create-row", true, "Created 1 row",
+                new CrudResultDto.ResultData(null, null, null, null, List.of(1L), 1, null, null, null)
+            );
+            org.mockito.ArgumentCaptor<CrudRequestDto> captor = org.mockito.ArgumentCaptor.forClass(CrudRequestDto.class);
+            when(dataSourceClient.executeCrud(captor.capture())).thenReturn(result);
+
+            executor.execute("crud/create-row",
+                Map.of("dataSourceId", 1L, "crud", Map.of("rows", List.of(Map.of("id", "r1", "columns", Map.of("name", "x"))))),
+                "tenant-1", Map.of("__workflowRunId__", "run-1"));
+
+            assertThat(captor.getValue().isRestricted()).isFalse();
+        }
+
+        @Test
+        @DisplayName("no billingIdentifiers (3-arg overload / chat path): dispatched as NOT restricted, no lookup")
+        void noBillingIdentifiersSkipsLookup() {
+            CrudResultDto result = new CrudResultDto(
+                "create-row", true, "Created 1 row",
+                new CrudResultDto.ResultData(null, null, null, null, List.of(1L), 1, null, null, null)
+            );
+            org.mockito.ArgumentCaptor<CrudRequestDto> captor = org.mockito.ArgumentCaptor.forClass(CrudRequestDto.class);
+            when(dataSourceClient.executeCrud(captor.capture())).thenReturn(result);
+
+            executor.execute("crud/create-row",
+                Map.of("dataSourceId", 1L, "crud", Map.of("rows", List.of(Map.of("id", "r1", "columns", Map.of("name", "x"))))),
+                "tenant-1");
+
+            assertThat(captor.getValue().isRestricted()).isFalse();
+            org.mockito.Mockito.verifyNoInteractions(stepPayloadService);
+        }
+
+        @Test
+        @DisplayName("billingIdentifiers present but no __workflowRunId__: dispatched as NOT restricted, no lookup")
+        void noWorkflowRunIdSkipsLookup() {
+            CrudResultDto result = new CrudResultDto(
+                "create-row", true, "Created 1 row",
+                new CrudResultDto.ResultData(null, null, null, null, List.of(1L), 1, null, null, null)
+            );
+            org.mockito.ArgumentCaptor<CrudRequestDto> captor = org.mockito.ArgumentCaptor.forClass(CrudRequestDto.class);
+            when(dataSourceClient.executeCrud(captor.capture())).thenReturn(result);
+
+            executor.execute("crud/create-row",
+                Map.of("dataSourceId", 1L, "crud", Map.of("rows", List.of(Map.of("id", "r1", "columns", Map.of("name", "x"))))),
+                "tenant-1", Map.of("__analyticsNodeId__", "core:table"));
+
+            assertThat(captor.getValue().isRestricted()).isFalse();
+            org.mockito.Mockito.verifyNoInteractions(stepPayloadService);
         }
     }
 

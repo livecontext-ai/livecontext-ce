@@ -74,6 +74,18 @@ public final class AuditEventTypes {
      */
     public static final String ACCOUNT_VERIFIED = "account.verified";
 
+    // ----- third-party credential lifecycle (LC-058) -----
+    /** An OAuth2 connect completed and a credential was stored (carries the granted scopes). */
+    public static final String CREDENTIAL_OAUTH_CONNECTED = "credential.oauth_connected";
+    /** A token refresh failed; {@code terminal} says whether the credential now needs re-auth. */
+    public static final String CREDENTIAL_REFRESH_FAILED = "credential.refresh_failed";
+    /** A stored credential was deleted (or its tokens scrubbed by a BYOK client removal). */
+    public static final String CREDENTIAL_DELETED = "credential.deleted";
+    /** Outcome of the RFC 7009 revocation call made to the provider before a delete. */
+    public static final String CREDENTIAL_PROVIDER_REVOKED = "credential.provider_revoked";
+    /** Credential material was handed to another service by an internal endpoint. */
+    public static final String CREDENTIAL_SECRET_READ = "credential.secret_read";
+
     // ----- CE install lifecycle -----
     /** Public {@code /api/auth/register} door has been re-opened by admin (or fresh install). */
     public static final String CE_REGISTRATION_OPENED = "ce.registration.opened";

@@ -131,19 +131,22 @@ class SensitiveFieldDetectorTest {
         }
 
         @Test
-        @DisplayName("the sweep pages on a BIGINT id: a non-numeric id is reported, never silently skipped as clean")
-        void nonNumericIdIsReported() {
+        @DisplayName("the sweep pages by keyset on any orderable id: a non-numeric (UUID) id is migrated, not skipped")
+        void nonNumericIdIsMigrated() {
             org.springframework.jdbc.core.JdbcTemplate jdbc = org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class);
+            org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString()))
+                    .thenReturn(List.of(Map.of("id", "4f0c-uuid", "js", "{\"api_secret\":\"s\"}")));
             org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(Object[].class)))
-                    .thenReturn(List.of(Map.of("id", "not-a-number", "js", "{\"api_secret\":\"s\"}")));
+                    .thenReturn(List.of());
+            org.mockito.Mockito.when(jdbc.update(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(Object[].class)))
+                    .thenReturn(1);
             SensitiveJsonbBackfill sweep = new SensitiveJsonbBackfill(jdbc, new com.fasterxml.jackson.databind.ObjectMapper(), service);
             SensitiveJsonbBackfill.TableSpec spec = new SensitiveJsonbBackfill.TableSpec("auth.x", "id", "credential_data");
 
-            org.assertj.core.api.Assertions.assertThatThrownBy(() -> sweep.migrate(spec))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("BIGINT");
-            // migrateAll turns it into a WARN so one bad spec never stops the others
-            assertThat(sweep.migrateAll(List.of(spec))).isZero();
+            assertThat(sweep.migrate(spec)).isEqualTo(1);
+            // the second page continues after the text id it last saw
+            org.mockito.Mockito.verify(jdbc).queryForList(
+                    org.mockito.ArgumentMatchers.contains("WHERE id > ?"), org.mockito.ArgumentMatchers.eq("4f0c-uuid"));
         }
 
         @Test

@@ -112,3 +112,38 @@ test('internalSignedHeaders: no secret → still sends X-User-ID + provider-id, 
   assert.equal(h['X-Provider-ID'], 'internal-credit-client');
   assert.equal(h['X-Gateway-Secret'], undefined);
 });
+
+// --- v2 (CASA LC-035): parity with the Java GatewaySignatureV2 via the shared fixture ---
+
+import { gatewaySignatureV2, withGatewaySignatureV2, GATEWAY_SIGNATURE_V2_HEADER } from '../gatewayAuth.mjs';
+
+test('v2 cross-language parity: each v2Cases entry reproduces the golden signature', () => {
+  assert.ok(fixture.v2Cases.length > 0, 'fixture has v2 cases');
+  for (const c of fixture.v2Cases) {
+    const sig = gatewaySignatureV2({ secretKey: fixture.secretKey, method: c.method, path: c.path, query: c.query, headers: c.headers, timestamp: c.timestamp });
+    assert.equal(sig, c.expectedSignature, `case "${c.name}"`);
+  }
+});
+
+test('v2: header lookup is case-insensitive (agent-cli sends X-User-Id)', () => {
+  const base = { secretKey: 'k', method: 'POST', path: '/api/agent/cli/tool', timestamp: '1' };
+  const a = gatewaySignatureV2({ ...base, headers: { 'X-Provider-ID': 'p', 'X-User-ID': '42' } });
+  const b = gatewaySignatureV2({ ...base, headers: { 'x-provider-id': 'p', 'X-User-Id': '42' } });
+  assert.equal(a, b);
+});
+
+test('withGatewaySignatureV2: signs the final headers, method and URL', () => {
+  const headers = { ...gatewaySignedHeaders({ secretKey: 'k', providerId: 'p', userId: '42', timestampMs: 1700000000000 }), 'X-User-ID': '42', 'X-User-Roles': 'USER' };
+  const out = withGatewaySignatureV2(headers, { secretKey: 'k', method: 'GET', url: 'http://auth:8083/api/credits/balance?x=1' });
+  const expected = gatewaySignatureV2({ secretKey: 'k', method: 'GET', path: '/api/credits/balance', query: 'x=1', headers, timestamp: '1700000000000' });
+  assert.equal(out[GATEWAY_SIGNATURE_V2_HEADER], expected);
+  const otherPath = withGatewaySignatureV2(headers, { secretKey: 'k', method: 'GET', url: 'http://auth:8083/api/credits/other?x=1' });
+  assert.notEqual(otherPath[GATEWAY_SIGNATURE_V2_HEADER], expected, 'path is bound');
+});
+
+test('withGatewaySignatureV2: no secret or no v1 timestamp -> no v2 header', () => {
+  const unsigned = withGatewaySignatureV2({ 'X-User-ID': '1' }, { secretKey: 'k', method: 'GET', url: 'http://x/y' });
+  assert.equal(unsigned[GATEWAY_SIGNATURE_V2_HEADER], undefined);
+  const noSecret = withGatewaySignatureV2({ 'X-Gateway-Timestamp': '1', 'X-Provider-ID': 'p' }, { secretKey: '', method: 'GET', url: 'http://x/y' });
+  assert.equal(noSecret[GATEWAY_SIGNATURE_V2_HEADER], undefined);
+});

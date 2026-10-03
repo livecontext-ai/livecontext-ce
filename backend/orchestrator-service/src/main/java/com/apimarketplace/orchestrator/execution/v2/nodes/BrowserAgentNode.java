@@ -66,6 +66,9 @@ public class BrowserAgentNode extends BaseNode {
 
     /** Workflow-plan-supplied node configuration: { task, start_url, llm, … }. */
     private final Map<String, Object> nodeConfig;
+
+    /** LC-004: tells whether this run already holds restricted (Gmail / Drive) data. */
+    private com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
     private final List<String> dependencies;
 
     // Injected services
@@ -143,6 +146,7 @@ public class BrowserAgentNode extends BaseNode {
         this.signalService = registry.getSignalService();
         this.cloudBrowserRelayClient = registry.getCloudBrowserAgentRelayClient();
         this.cloudRuntimeAccess = registry.getCloudLlmRuntimeAccess();
+        this.stepPayloadService = registry.getStepPayloadService();
 
         // Two supported wirings:
         //  - cloud / self-hosted with the browser stack: local BrowserAgentModule present.
@@ -190,6 +194,19 @@ public class BrowserAgentNode extends BaseNode {
             resolvedParams = resolveParams(context);
         } catch (IllegalStateException e) {
             return NodeExecutionResult.failure(nodeId, e.getMessage(), System.currentTimeMillis() - startTime);
+        }
+
+        // LC-004: the browsing task is written from this run's data and handed to an LLM. Once
+        // the run holds Gmail / Drive data, that LLM must be on the restricted-data allow-list.
+        Map<String, Object> llm = mapField(nodeConfig, "llm");
+        String browseProvider = llm != null ? stringField(llm, "provider") : null;
+        if (stepPayloadService != null && context.runId() != null
+                && !com.apimarketplace.common.classification.RestrictedDataPolicy.mayReceiveRestricted(browseProvider)
+                && stepPayloadService.isRunRestricted(context.runId())) {
+            String refusal = com.apimarketplace.common.classification.RestrictedDataPolicy.refusalMessage(
+                browseProvider != null ? browseProvider : "browser agent default model");
+            return NodeExecutionResult.failureWithOutput(nodeId, refusal,
+                Map.of("resolved_params", resolvedParams), System.currentTimeMillis() - startTime);
         }
 
         if (browserAgentModule == null) {

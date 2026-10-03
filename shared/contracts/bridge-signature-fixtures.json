@@ -1,0 +1,49 @@
+{
+  "_comment": "Cross-language fixtures for the body-bound bridge signature (X-Bridge-Signature). Consumed by mcp/bridge/test/bridgeSignature.test.mjs AND the Java BridgeRequestSignatureParityTest. Encoding: the fleet v2 length-prefixed fields with domain lc-bridge-v2 plus a final field = lowercase hex sha256 of the UTF-8 body bytes. Absent headers sign as the empty string.",
+  "secretKey": "test-gateway-hmac-key-for-unit-tests",
+  "cases": [
+    {
+      "name": "execute / user + org + role / json body",
+      "method": "POST",
+      "path": "/api/bridge/execute",
+      "query": "",
+      "headers": {
+        "X-Provider-ID": "bridge-client",
+        "X-User-ID": "42",
+        "X-Organization-ID": "org_7",
+        "X-Organization-Role": "OWNER"
+      },
+      "timestamp": "1700000000000",
+      "body": "{\"prompt\":\"hi\",\"tenantId\":\"42\"}",
+      "expectedSignature": "br2_97U1oKvfHgAW3d5ofLxC5Kg-V_laqHURxNIbxFPbbCw"
+    },
+    {
+      "name": "unrestricted provider / empty body / no org",
+      "method": "post",
+      "path": "/api/bridge/auth-check",
+      "query": "",
+      "headers": {
+        "X-Provider-ID": "bridge-unrestricted",
+        "X-User-ID": "1"
+      },
+      "timestamp": "1700000000001",
+      "body": "",
+      "expectedSignature": "br2_fb1QwP8SavJKNvATDwefZUcoYJT8tVuSb-nK1LsaZIo"
+    },
+    {
+      "name": "separator characters and utf-8 in fields",
+      "method": "POST",
+      "path": "/api/bridge/execute",
+      "query": "a=1&b=%7C",
+      "headers": {
+        "X-Provider-ID": "bridge-client",
+        "X-User-ID": "u|1\n",
+        "X-Organization-ID": "o:2",
+        "X-User-Roles": "ADMIN,USER"
+      },
+      "timestamp": "1700000000002",
+      "body": "{\"prompt\":\"café | 42\"}",
+      "expectedSignature": "br2__rn0ZQNdM0G9MgrCnnhe4fv7jBVIxFYTCmdXdE19_XI"
+    }
+  ]
+}

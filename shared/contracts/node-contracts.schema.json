@@ -527,7 +527,8 @@
         { "name": "textColor", "type": "string", "status": "aligned" },
         { "name": "width", "type": "number", "status": "aligned" },
         { "name": "height", "type": "number", "status": "aligned" },
-        { "name": "position", "type": "object", "status": "aligned" }
+        { "name": "position", "type": "object", "status": "aligned", "notes": "Optional: without one the canvas places the note next to its anchor, or above the graph" },
+        { "name": "attachedTo", "type": "string", "status": "aligned", "notes": "Key of the node the note explains (e.g. core:check_seen); absent for a free note" }
       ],
       "outputs": []
     },

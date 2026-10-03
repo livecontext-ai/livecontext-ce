@@ -168,6 +168,19 @@ gateway:
       # the prefix is gated as a whole and a new endpoint added under it is gated by default
       # instead of by remembering to list it.
       - /api/internal/credentials/
+      # Workflow variables: /bundle returns DECRYPTED secret values for any tenantId it is given,
+      # /set writes them. Both callers sign (CredentialClient.getWorkflowVariablesBundle and
+      # ConversationToolExecutionService's credential(variables / set_variable), both through
+      # InternalGatewaySigner), so the whole prefix is gated now.
+      - /api/internal/variables/
+      # The rest of /api/internal/auth/ (plan limits, roles, org restrictions, purges, lifecycle,
+      # notification mail, pricing...). Staged like the storage gate: every caller signs from this
+      # release (AuthClient, AuthPricingSyncClient, HttpCreditDeadLetterHandler,
+      # PricingSnapshotClient, the bridge's pricing cache), and the gate is armed one release
+      # later with AUTH_INTERNAL_HMAC_REQUIRED_PATH=/api/internal/auth/ (helm
+      # global.casaRollout.authInternalHmacRequiredPath), once no unsigned caller is left running,
+      # the lane-2 bridge included. Blank = not armed (a blank entry matches nothing).
+      - ${AUTH_INTERNAL_HMAC_REQUIRED_PATH:}
       - /api/internal/auth/workspace/
       # The CURRENT workspace role of a member, read by the gateway WebSocket per run-driving
       # action. Only the gateway calls it and it signs (WsOrgRoleResolver); gated so nothing
@@ -182,6 +195,9 @@ services:
   auth-service:
     url: ${AUTH_SERVICE_URL:http://localhost:8083}
   catalog-url: ${CATALOG_SERVICE_URL:http://localhost:8081}
+  # Partner offers (V560): the apps an offer gives are checked with, and installed through,
+  # publication-service (PartnerOfferAppsClient).
+  publication-url: ${PUBLICATION_SERVICE_URL:http://localhost:8092}
   # PR1: GatewayCacheClient calls /api/gateway/cache/invalidate/{providerId}
   # on the gateway after a set-default flip to bust the 5-min QuotaCacheService
   # entry (otherwise users see stale active-org for up to 5 minutes).

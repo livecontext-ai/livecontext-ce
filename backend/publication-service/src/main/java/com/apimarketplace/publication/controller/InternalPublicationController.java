@@ -418,6 +418,11 @@ public class InternalPublicationController {
             return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (PublicationValidationException e) {
+            // Structured refusal (snapshot size budget): 422 with the machine-readable body, so
+            // the MCP publish tools report a fixable listing instead of a platform failure.
+            log.warn("Resource publish refused ({}): {}", e.getErrorCode(), e.getMessage());
+            return ResponseEntity.unprocessableEntity().body(e.toBody());
         } catch (PublicationPendingReviewException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
@@ -792,6 +797,10 @@ public class InternalPublicationController {
             return planUpgradeResponse(e);
         } catch (CeExclusivePublicationException e) {
             return ceExclusiveResponse(e);
+        } catch (com.apimarketplace.auth.client.entitlement.LimitExceededException e) {
+            // The plan's applications quota: rethrown so LimitExceededExceptionHandler answers the
+            // platform-wide 409 every caller reads as such (PublicationClient types it), not a 500.
+            throw e;
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {

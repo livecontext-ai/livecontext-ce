@@ -232,8 +232,7 @@ class ServiceToolsControllerTest {
         // gateway strips the caller's own identity HEADERS but not the body, so a user whose
         // gateway resolved no active org could name a workspace and assert OWNER in it. Every
         // internal caller sends the role as a header from the same source it filled the body with,
-        // so nothing legitimate needs the body read. orgId is still accepted from the body, and is
-        // asserted here so the two are not conflated by a later reader.
+        // so nothing legitimate needs the body read. Since LC-013 the body orgId is ignored too.
         StubProvider catalog = new StubProvider("catalog", ToolCategory.GENERATION);
         ServiceToolsController controller = new ServiceToolsController(List.of(catalog));
 
@@ -246,6 +245,7 @@ class ServiceToolsControllerTest {
         assertThat(catalog.lastContext.orgRole())
                 .as("a body-supplied role must never reach the execution context")
                 .isNull();
-        assertThat(catalog.lastContext.orgId()).isEqualTo("victim-org");
+        // LC-013: the workspace is no longer read from the body either (header only).
+        assertThat(catalog.lastContext.orgId()).isNull();
     }
 }

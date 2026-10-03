@@ -3,12 +3,12 @@
 # Git hooks have no extension; a CRLF shebang fails with "bad interpreter" on Linux.
 scripts/git-hooks/* text eol=lf
 
-# Host files copied by hand onto the k3s workers / lc-data: systemd refuses a
+# Host files copied by hand onto the k3s workers and the data host: systemd refuses a
 # unit with CRLF, k3s ignores a drop-in it cannot parse, cron wants LF.
 deploy/systemd/* text eol=lf
 deploy/k3s/** text eol=lf
 deploy/config/cron.d/* text eol=lf
-# prodwatch is packaged from the working tree and deployed to lc-websearch by
+# prodwatch is packaged from the working tree and deployed to the edge host by
 # deploy-direct.sh. From a Windows checkout the sudoers file shipped with CRLF
 # and `visudo -c` refused every line ("syntax error" at the line end), which
 # aborted the deploy. The whole tree goes to Linux, so the whole tree is LF.
@@ -18,3 +18,6 @@ deploy/prodwatch/** text eol=lf
 # Windows checkout cannot append CR bytes to path/pattern entries.
 deploy/ce-export/*.txt text eol=lf
 deploy/ce-export/*.toml text eol=lf
+
+# Keycloak reads the common-password list line by line on its Linux host: keep it LF.
+infra/keycloak/password-blacklists/* text eol=lf

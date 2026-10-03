@@ -75,6 +75,14 @@ public class TablePublishModule implements ToolModule {
         var restricted = TableToolAccess.denyIfMemberRestricted(dataSourceService, context, tenantId,
                 parseTableId(tableIdStr), true);
         if (restricted.isPresent()) return restricted;
+        // LC-066: a listing copies the table's rows into a marketplace snapshot no restricted tag
+        // follows, so a restricted execution cannot publish (rows already tagged RESTRICTED are
+        // left out of every publication copy regardless, see the datasource items read).
+        if ("publish".equals(action) && context != null && com.apimarketplace.common.classification.DataSensitivity
+                .fromCredentials(context.credentials()).isRestricted()) {
+            return Optional.of(ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                com.apimarketplace.common.classification.RestrictedDataPolicy.publishRefusalMessage("table")));
+        }
 
         return Optional.of(switch (action) {
             case "publish" -> executePublish(parameters, tenantId, context);
@@ -150,6 +158,19 @@ public class TablePublishModule implements ToolModule {
                     : "Table published. ")
                     + "Marketplace publication id: " + response.get("id"));
             return ToolExecutionResult.success(data);
+        } catch (com.apimarketplace.publication.client.PublicationValidationException e) {
+            log.info("Publish of table {} refused ({}): {}", tableIdStr, e.getErrorCode(), e.getMessage());
+            if (e.isRetryable()) {
+                // The rows could not be read just now: nothing to fix, the same call can be retried.
+                return ToolExecutionResult.failure(ToolErrorCode.EXTERNAL_SERVICE_ERROR,
+                        "Publish failed: " + e.getMessage());
+            }
+            // 422 = the table cannot ship as it is (today: more rows than a publication carries).
+            // The agent fixes the TABLE, so it gets the parameter code, the reason (table + limit)
+            // and the fix in THIS tool's actions.
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                    "Publish refused: " + e.reasonForAgent() + " Fix: delete rows with table(action='delete_rows', "
+                            + "table_id=" + tableIdStr + ", where={...}), then call publish again.");
         } catch (RuntimeException e) {
             String msg = extractPublicationErrorMessage(e);
             log.warn("Failed to publish table {}: {}", tableIdStr, msg);

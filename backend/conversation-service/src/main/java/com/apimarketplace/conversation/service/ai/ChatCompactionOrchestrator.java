@@ -10,6 +10,7 @@ import com.apimarketplace.agent.summary.CompactionConfigResolver;
 import com.apimarketplace.agent.summary.CompactionTrigger;
 import com.apimarketplace.conversation.entity.Conversation;
 import com.apimarketplace.conversation.entity.Message;
+import com.apimarketplace.conversation.purge.RestrictedConversationContentPurger;
 import com.apimarketplace.conversation.repository.ConversationRepository;
 import com.apimarketplace.conversation.repository.MessageRepository;
 import com.apimarketplace.conversation.service.ai.ColdSummarizerService.LlmJsonInvoker;
@@ -20,10 +21,14 @@ import com.apimarketplace.common.web.TenantResolver;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -133,6 +138,24 @@ public class ChatCompactionOrchestrator {
             "mistral-vibe", "openai"   // closest API-family fallback for cap sizing
     );
 
+    /**
+     * CASA LC-011 / LC-066: a restricted message this close to the retention limit is summarised
+     * as already removed. The purge redacts a message and clears the conversation's summary in one
+     * statement, but a compaction that loaded the message just before could write its summary just
+     * after, restoring the content the purge had removed. With this margin a summary never holds
+     * content the purge can reach before that summary is written: compactions last minutes.
+     */
+    static final Duration RESTRICTED_SUMMARY_MARGIN = Duration.ofDays(1);
+
+    /** Mirrors the purge's own switch: with the purge off nothing is redacted, so nothing is withheld early. */
+    @Value("${data-classification.restricted.sweep.enabled:true}")
+    private boolean restrictedPurgeEnabled = true;
+
+    @Value("${data-classification.restricted.retention-days:"
+            + com.apimarketplace.common.classification.RestrictedDataPolicy.DEFAULT_RETENTION_DAYS + "}")
+    private int restrictedRetentionDays =
+            com.apimarketplace.common.classification.RestrictedDataPolicy.DEFAULT_RETENTION_DAYS;
+
     private final MessageRepository messageRepository;
     private final ConversationRepository conversationRepository;
     private final ColdSummarizerService coldSummarizer;
@@ -163,6 +186,29 @@ public class ChatCompactionOrchestrator {
                 .description("Compaction post-turn dispatch threw before reaching ColdSummarizerService")
                 .register(meterRegistry);
         this.meterRegistry = meterRegistry;
+    }
+
+    /**
+     * Creation time before which a RESTRICTED message is summarised as removed (see
+     * {@link #RESTRICTED_SUMMARY_MARGIN}); null when the purge is off. In the JVM zone, the zone
+     * {@code Message.createdAt} is read in.
+     */
+    LocalDateTime restrictedSummaryCutoff(Instant now) {
+        if (!restrictedPurgeEnabled) {
+            return null;
+        }
+        Instant cutoff = now.minus(Duration.ofDays(Math.max(1, restrictedRetentionDays)))
+                .plus(RESTRICTED_SUMMARY_MARGIN);
+        return LocalDateTime.ofInstant(cutoff, ZoneId.systemDefault());
+    }
+
+    /** The text a COLD turn contributes to the summary. */
+    static String summarisableContent(Message m, LocalDateTime restrictedCutoff) {
+        if (restrictedCutoff != null && "RESTRICTED".equals(m.getDataSensitivity())
+                && m.getCreatedAt() != null && m.getCreatedAt().isBefore(restrictedCutoff)) {
+            return RestrictedConversationContentPurger.PLACEHOLDER;
+        }
+        return m.getContent() == null ? "" : m.getContent();
     }
 
     /**
@@ -252,9 +298,10 @@ public class ChatCompactionOrchestrator {
         List<Integer> turnsCovered = new ArrayList<>(coldMessages.size());
         int coldTokens = 0;
         int newColdTokens = 0;
+        LocalDateTime restrictedCutoff = restrictedSummaryCutoff(Instant.now());
         for (int i = 0; i < coldMessages.size(); i++) {
             Message m = coldMessages.get(i);
-            String body = m.getContent() == null ? "" : m.getContent();
+            String body = summarisableContent(m, restrictedCutoff);
             int tokens = body.length() / CHARS_PER_TOKEN;
             coldTokens += tokens;
             if (i > prior.maxTurn()) {
@@ -340,7 +387,23 @@ public class ChatCompactionOrchestrator {
         // Tenant-bound adapter: close over tenantId so the X-User-ID hits the
         // json-completion endpoint without threading it through the LlmJsonInvoker
         // three-arg SPI (which intentionally stays tenant-agnostic).
-        LlmJsonInvoker tenantAwareInvoker = (p, m, s, u) -> httpInvoker.invoke(p, m, s, u, tenantId);
+        //
+        // LC-004 re-audit: an anonymous class, not a lambda, because it must also override the
+        // sensitivity-aware default method - a lambda can only implement the single abstract
+        // method, which would silently drop the tag ColdSummarizerService passes and leave
+        // JsonCompletionService's RestrictedDataRouting check a no-op again.
+        LlmJsonInvoker tenantAwareInvoker = new LlmJsonInvoker() {
+            @Override
+            public String invoke(String p, String m, String s, String u) {
+                return httpInvoker.invoke(p, m, s, u, tenantId);
+            }
+
+            @Override
+            public String invoke(String p, String m, String s, String u,
+                                 com.apimarketplace.common.classification.DataSensitivity sensitivity) {
+                return httpInvoker.invoke(p, m, s, u, tenantId, sensitivity);
+            }
+        };
 
         SummarizeOutcome outcome = coldSummarizer.summarize(req, tenantAwareInvoker);
         log.debug("Compaction outcome: conv={} outcome={} trigger={} coldTok={} newColdTok={} "

@@ -57,6 +57,9 @@ import java.util.UUID;
  *                        Null for other subject types. Drives the bell's per-row
  *                        icon (Clock for schedule, Webhook for webhook, etc.) and
  *                        the deep-link tab selection on /app/settings/public-access.
+ * @param profileHandle   USER-only: the @handle of the person the row is about (a new
+ *                        subscriber), captured from {@code payload->>'profileHandle'}.
+ *                        Null for other subject types. The bell links to {@code /app/u/<handle>}.
  */
 public record NotificationItem(
         UUID subjectId,
@@ -71,5 +74,6 @@ public record NotificationItem(
         boolean unread,
         String integration,
         String credentialId,
-        String triggerKind
+        String triggerKind,
+        String profileHandle
 ) {}

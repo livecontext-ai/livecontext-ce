@@ -671,4 +671,75 @@ class AgentTaskContextModuleTest {
             assertThat(items.get(items.size() - 1).get("content")).asString().endsWith("...[truncated]");
         }
     }
+
+    // ========================== LC-066 restricted tag ==========================
+
+    @Nested
+    @DisplayName("LC-066: reads of a RESTRICTED task or execution carry the restricted tag")
+    class Lc066RestrictedReads {
+
+        private boolean tagged(ToolExecutionResult result) {
+            assertThat(result.success()).isTrue();
+            return result.metadata() != null && "RESTRICTED".equals(result.metadata().get(
+                    com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY));
+        }
+
+        private ToolExecutionResult getContext(AgentTaskEntity task) {
+            when(visibilityResolver.resolveRoleAndTask(any(), any(), any(), any()))
+                    .thenReturn(new ResolvedTask(Role.REVIEWER, task));
+            when(taskEventRepository.findByTaskIdOrderByCreatedAtDesc(eq(TASK_ID), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of()));
+            when(executionRepository.findByTaskIdAndTenantIdOrderByStartedAtDesc(eq(TASK_ID), eq(TENANT), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of()));
+            return module.execute("task_get_context", Map.of("task_id", TASK_ID.toString()),
+                    TENANT, context(REVIEWER)).orElseThrow();
+        }
+
+        private ToolExecutionResult getExecution(AgentTaskEntity task, AgentExecutionEntity exec) {
+            when(visibilityResolver.resolveRoleAndTask(any(), any(), any(), any()))
+                    .thenReturn(new ResolvedTask(Role.REVIEWER, task));
+            when(executionRepository.findById(EXECUTION_ID)).thenReturn(Optional.of(exec));
+            when(messageRepository.findByExecutionIdOrderBySequenceNumber(eq(EXECUTION_ID), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of()));
+            return module.execute("task_get_execution", Map.of("task_id", TASK_ID.toString(),
+                    "execution_id", EXECUTION_ID.toString()), TENANT, context(REVIEWER)).orElseThrow();
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: task_get_context of a RESTRICTED task is tagged")
+        void lc066RestrictedTaskContextTagged() {
+            AgentTaskEntity task = buildTask();
+            task.setDataSensitivity("RESTRICTED");
+
+            assertThat(tagged(getContext(task))).isTrue();
+        }
+
+        @Test
+        @DisplayName("LC-066: task_get_context of a NORMAL task is not tagged")
+        void lc066NormalTaskContextNotTagged() {
+            assertThat(tagged(getContext(buildTask()))).isFalse();
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: task_get_execution is tagged when the task OR the execution is RESTRICTED")
+        void lc066RestrictedExecutionTagged() {
+            AgentTaskEntity restrictedTask = buildTask();
+            restrictedTask.setDataSensitivity("RESTRICTED");
+            assertThat(tagged(getExecution(restrictedTask, buildExecution(EXECUTION_ID)))).isTrue();
+
+            AgentExecutionEntity restrictedExec = buildExecution(EXECUTION_ID);
+            restrictedExec.setDataSensitivity("RESTRICTED");
+            assertThat(tagged(getExecution(buildTask(), restrictedExec))).isTrue();
+        }
+
+        @Test
+        @DisplayName("LC-066: task_get_execution of a NORMAL task and a NORMAL (or REDACTED) execution is not tagged")
+        void lc066NormalExecutionNotTagged() {
+            assertThat(tagged(getExecution(buildTask(), buildExecution(EXECUTION_ID)))).isFalse();
+
+            AgentExecutionEntity redacted = buildExecution(EXECUTION_ID);
+            redacted.setDataSensitivity("REDACTED");
+            assertThat(tagged(getExecution(buildTask(), redacted))).isFalse();
+        }
+    }
 }

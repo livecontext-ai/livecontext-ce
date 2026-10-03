@@ -257,6 +257,38 @@ public record AgentExecutionRequestDto(
     public static final String RESTRICTED_TOOLSET_KEY = "__restrictedToolset__";
 
     /**
+     * True when this request carries the restricted "API mode" marker. The bridge clients use it
+     * to never sign such a dispatch as unrestricted (the marker may only tighten, LC-022).
+     * Not a bean-style accessor, so Jackson does not serialize it.
+     */
+    public boolean claimsRestrictedToolset() {
+        return credentials != null && Boolean.TRUE.equals(credentials.get(RESTRICTED_TOOLSET_KEY));
+    }
+
+    /**
+     * Longest agent loop the platform runs: agent-service refuses an agent configured above it,
+     * and the orchestrator clamps a workflow node to it. One constant, so the two cannot drift.
+     */
+    public static final int MAX_ITERATIONS_LIMIT = 1000;
+
+    /**
+     * A copy carrying the budget fields the CLI bridge enforces itself (CASA LC-056), and NO
+     * {@code pricingRates}: the bridge primes the price cache every run shares with them, so only
+     * the platform's own snapshot may set prices, never a request.
+     */
+    public AgentExecutionRequestDto withBridgeBudget(Double newTenantBalance, Double newMaxCreditBudget,
+                                                     Double newCreditsConsumedSoFar) {
+        return new AgentExecutionRequestDto(
+            prompt, systemPrompt, provider, model, temperature, maxTokens, tools,
+            autoDiscoverTools, maxTools, maxIterations, executionTimeout, conversationHistory,
+            tenantId, runId, nodeId, variables, credentials, newMaxCreditBudget, streamChannelId,
+            itemIndex, loopIteration, conversationId, streamingFormat, parentConversationId,
+            subAgentName, subAgentAvatarUrl, subAgentId, workflowRunId, attachments, agentEntityId,
+            newTenantBalance, null, newCreditsConsumedSoFar, loopIdenticalStop, loopConsecutiveStop,
+            executionId, source, reasoningEffort, enabledModules);
+    }
+
+    /**
      * Return a copy flagged for CLOUD model-execution-link "API mode": the bridge locks the
      * CLI to ONLY the platform MCP tools (no native Bash/Read/Write/Web), an empty cwd (no
      * AGENTS.md / CLAUDE.md / project files) and no account/CLI leakage, so a linked model

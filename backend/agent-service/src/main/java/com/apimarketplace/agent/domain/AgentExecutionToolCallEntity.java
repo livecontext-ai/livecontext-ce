@@ -86,6 +86,21 @@ public class AgentExecutionToolCallEntity implements OrgScopedEntity {
     @Column(name = "consecutive_count", nullable = false)
     private int consecutiveCount = 1;
 
+    /**
+     * NORMAL, or RESTRICTED when the tool read Google restricted-scope data (see common-lib
+     * RestrictedDataPolicy). REDACTED once RestrictedObservabilityContentPurger removed it.
+     */
+    @Column(name = "data_sensitivity", nullable = false, length = 16)
+    private String dataSensitivity = "NORMAL";
+
+    public String getDataSensitivity() {
+        return dataSensitivity;
+    }
+
+    public void setDataSensitivity(String dataSensitivity) {
+        this.dataSensitivity = dataSensitivity == null ? "NORMAL" : dataSensitivity;
+    }
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

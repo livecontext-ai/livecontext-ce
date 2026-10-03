@@ -72,12 +72,34 @@ class StorageMappingResolverServiceTest {
             StorageMappingConfig cfg = mock(StorageMappingConfig.class);
             when(cfg.getCatalogBaseUrl()).thenReturn("http://livecontext-livecontext-catalog:8081");
             WebClient.Builder builder = mock(WebClient.Builder.class, RETURNS_SELF);
+            when(builder.clone()).thenReturn(builder);
             when(builder.build()).thenReturn(mock(WebClient.class));
 
             new StorageMappingResolverService(
                 new ObjectMapper(), cfg, simpleMappingService, normalizer, converter, builder);
 
             verify(builder).baseUrl("http://livecontext-livecontext-catalog:8081");
+        }
+
+        // The injected builder is a shared singleton: configuring it in place changed every client
+        // built from it later, and made this one inherit whatever another bean had set (the file
+        // downloader's SSRF-pinned connector refused the catalog's private address).
+        @Test
+        @DisplayName("configures a clone of the shared builder, never the shared builder itself")
+        void configuresACloneNotTheSharedBuilder() {
+            StorageMappingConfig cfg = mock(StorageMappingConfig.class);
+            when(cfg.getCatalogBaseUrl()).thenReturn("http://livecontext-livecontext-catalog:8081");
+            WebClient.Builder shared = mock(WebClient.Builder.class);
+            WebClient.Builder copy = mock(WebClient.Builder.class, RETURNS_SELF);
+            when(shared.clone()).thenReturn(copy);
+            when(copy.build()).thenReturn(mock(WebClient.class));
+
+            new StorageMappingResolverService(
+                new ObjectMapper(), cfg, simpleMappingService, normalizer, converter, shared);
+
+            verify(copy).baseUrl("http://livecontext-livecontext-catalog:8081");
+            verify(shared).clone();
+            org.mockito.Mockito.verifyNoMoreInteractions(shared);
         }
     }
 

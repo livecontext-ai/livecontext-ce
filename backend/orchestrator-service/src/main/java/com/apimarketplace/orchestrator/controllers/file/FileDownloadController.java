@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.controllers.file;
 
 import com.apimarketplace.common.web.ContentDispositions;
+import com.apimarketplace.common.web.SafeFileServeHeaders;
 import com.apimarketplace.orchestrator.services.file.FileStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,9 +73,11 @@ public class FileDownloadController {
 
         logger.debug("Serving file: key={}, size={}, type={}", key, data.length, mimeType);
 
-        return ResponseEntity.ok()
+        // Stored run files are user/AI supplied: active types download, nosniff + sandboxed (LC-020).
+        return SafeFileServeHeaders.applyTo(ResponseEntity.ok(), mimeType)
                 .contentType(MediaType.parseMediaType(mimeType))
-                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDispositions.inline(filename))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDispositions.of(
+                        SafeFileServeHeaders.dispositionType(mimeType, true), filename))
                 .contentLength(data.length)
                 .body(new ByteArrayResource(data));
     }

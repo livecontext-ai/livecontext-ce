@@ -1248,6 +1248,16 @@ public class WorkflowBuilderProvider implements ToolsProvider {
         return ToolExecutionResult.success(result);
     }
 
+    /**
+     * LC-066: true when the calling chat or agent already holds Gmail / Drive content (the tag the
+     * agent loop, the conversation guard or a restricted run stamps on the tool call). The run that
+     * {@code execute} fires is then marked restricted, since {@code data_inputs} may carry it.
+     */
+    static boolean callerHoldsRestrictedData(ToolExecutionContext ctx) {
+        return ctx != null && com.apimarketplace.common.classification.DataSensitivity
+                .fromCredentials(ctx.credentials()).isRestricted();
+    }
+
     private ToolExecutionResult executeWorkflow(Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {
         String workflowIdStr = resolveWorkflowId(params, tenantId, ctx);
         if (workflowIdStr == null) {
@@ -1433,7 +1443,7 @@ public class WorkflowBuilderProvider implements ToolsProvider {
 
             // Fire trigger (blocking - waits for full epoch cycle in AUTO mode)
             com.apimarketplace.orchestrator.trigger.TriggerExecutionResult triggerResult =
-                    agentWorkflowFireService.fire(run, trigger, dataInputs);
+                    agentWorkflowFireService.fire(run, trigger, dataInputs, callerHoldsRestrictedData(ctx));
 
             // Build structured result scoped to (run_id, trigger_id, epoch)
             Map<String, Object> result = agentWorkflowFireService.buildResult(run, triggerResult, workflow, plan, tenantId);
@@ -1893,6 +1903,9 @@ public class WorkflowBuilderProvider implements ToolsProvider {
     private static final Set<String> TRIGGER_TYPES = Set.of(
             "webhook", "schedule", "table", "manual", "chat", "form", "workflow", "error", "datasource");
 
+    /** The add_node types that create a sticky note: the label rule, the policy refusal and the dispatch. */
+    private static final Set<String> NOTE_TYPES = Set.of("note", "sticky_note", "annotation");
+
     /** Package-private so the add_node surface is reachable from a test, like delegateModify. */
     ToolExecutionResult executeAddNode(Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {
         String type = safeString(params.get("type"));
@@ -1905,7 +1918,8 @@ public class WorkflowBuilderProvider implements ToolsProvider {
 
     private ToolExecutionResult handleNodeCreation(Map<String, Object> params, String tenantId, String type, ToolExecutionContext ctx) {
         String label = safeString(params.get("label"));
-        if (label == null || label.isBlank()) {
+        // A note is read for its text: NoteCreator names it after the node it explains.
+        if ((label == null || label.isBlank()) && !NOTE_TYPES.contains(bareNodeType(type))) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "label is required for type='" + type + "'");
         }
 
@@ -1960,7 +1974,7 @@ public class WorkflowBuilderProvider implements ToolsProvider {
             // runs after the creator, off the stored node id.
             String bareType = bareNodeType(type);
             policyError = NodePolicyApplier.rejectionForType(nodePolicyRequest,
-                    TRIGGER_TYPES.contains(bareType) || "trigger".equals(bareType) || "note".equals(bareType));
+                    TRIGGER_TYPES.contains(bareType) || "trigger".equals(bareType) || NOTE_TYPES.contains(bareType));
         }
         if (policyError != null) {
             // Refused BEFORE the node exists. Refusing afterwards would leave a node behind that
@@ -2172,6 +2186,7 @@ public class WorkflowBuilderProvider implements ToolsProvider {
                 case "sftp", "add_sftp", "file_transfer" -> creator.executeAddSftp(sr.session(), merged);
                 case "database", "add_database", "db", "sql" -> creator.executeAddDatabase(sr.session(), merged);
                 case "interface", "display", "ui" -> creator.executeAddInterface(sr.session(), merged);
+                case "note", "sticky_note", "annotation" -> creator.executeAddNote(sr.session(), merged);
                 case "insert_row", "create_row" -> tableOperations.execute(sr.session(), merged, tenantId, "insert_row");
                 case "update_row", "modify_row" -> tableOperations.execute(sr.session(), merged, tenantId, "update_row");
                 case "read_rows", "get_row", "get_rows", "fetch_rows" -> tableOperations.execute(sr.session(), merged, tenantId, "read_rows");

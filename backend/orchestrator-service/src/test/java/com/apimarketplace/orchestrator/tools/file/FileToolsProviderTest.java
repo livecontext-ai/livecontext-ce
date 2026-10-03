@@ -52,6 +52,7 @@ class FileToolsProviderTest {
     @Mock private FileStorageService fileStorageService;
     @Mock private FileDownloader fileDownloader;
     @Mock private MimeTypeRegistry mimeTypeRegistry;
+    @Mock private com.apimarketplace.common.storage.service.StorageService storageIndex;
     @InjectMocks private FileToolsProvider provider;
 
     private final FileRef storedRef = FileRef.of("tenant-1/wf/run/step/out.bin", "out.bin", "application/pdf", 123L);
@@ -322,6 +323,163 @@ class FileToolsProviderTest {
 
             assertThat(r.errorCode()).isEqualTo(ToolErrorCode.EXECUTION_FAILED);
             assertThat(r.error()).contains("Failed to store file");
+        }
+    }
+
+    // ── LC-066: store_file from a restricted execution ─────────────────
+
+    @Nested
+    @DisplayName("LC-066 store_file from a restricted context")
+    class Lc066RestrictedStore {
+
+        private static final String FILE_ID = "6f7ccab2-0000-4000-8000-000000000001";
+        private final FileRef indexedRef =
+                FileRef.of("tenant-1/wf/run/step/mail.txt", "mail.txt", "text/plain", 4L, FILE_ID);
+
+
+
+        private final String b64 = Base64.getEncoder().encodeToString("mail".getBytes(StandardCharsets.UTF_8));
+
+        private ToolExecutionContext restrictedCtx() {
+            return new ToolExecutionContext(TENANT,
+                    Map.of(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "RESTRICTED"),
+                    Map.of(), Set.of(), null, null, null, null);
+        }
+
+        @BeforeEach
+        void wireIndex() {
+            provider.setStorageIndex(storageIndex);
+            lenient().when(fileStorageService.upload(any(), any(), any(), any(), any(), any(), any(),
+                    anyInt(), anyInt(), any(), any())).thenReturn(indexedRef);
+        }
+
+        @Test
+        @DisplayName("LC-066: a file stored from a restricted context is tagged RESTRICTED on its index row")
+        void lc066RestrictedStoreIsTagged() {
+            when(storageIndex.markRestricted(eq(TENANT), any(), any())).thenReturn(1);
+
+            ToolExecutionResult r = provider.execute("store_file",
+                    Map.of("content", b64, "filename", "mail.txt", "mime_type", "text/plain"), restrictedCtx());
+
+            assertThat(r.success()).isTrue();
+            verify(storageIndex).markRestricted(eq(TENANT),
+                    eq(java.util.List.of(java.util.UUID.fromString(FILE_ID))), any());
+            verify(fileStorageService, never()).delete(any());
+            verify(fileStorageService, never()).delete(any(), any());
+            verify(storageIndex, never()).deleteById(any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: when the tag cannot be recorded the object is deleted under its OWNER tenant and the index row too")
+        void lc066UntaggableRestrictedStoreIsDeleted() {
+            when(storageIndex.markRestricted(eq(TENANT), any(), any())).thenThrow(new RuntimeException("db down"));
+            when(fileStorageService.delete(TENANT, "tenant-1/wf/run/step/mail.txt")).thenReturn(true);
+            when(storageIndex.deleteById(java.util.UUID.fromString(FILE_ID), TENANT)).thenReturn(true);
+
+            ToolExecutionResult r = provider.execute("store_file",
+                    Map.of("content", b64, "filename", "mail.txt", "mime_type", "text/plain"), restrictedCtx());
+
+            assertThat(r.success()).isFalse();
+            assertThat(r.error()).contains("not stored").contains("Nothing was saved");
+            // Owner-aware delete: the key-only delete carries no X-User-ID and is refused (403) remotely.
+            verify(fileStorageService).delete(TENANT, "tenant-1/wf/run/step/mail.txt");
+            verify(fileStorageService, never()).delete(any());
+            // The index row goes too, or the file keeps listing under its name.
+            verify(storageIndex).deleteById(java.util.UUID.fromString(FILE_ID), TENANT);
+        }
+
+        @Test
+        @DisplayName("LC-066: a file with no index row to tag is deleted and the call fails (absent row is not a cleanup failure)")
+        void lc066RestrictedStoreWithoutIndexRowIsDeleted() {
+            when(storageIndex.markRestricted(eq(TENANT), any(), any())).thenReturn(0);
+            when(fileStorageService.delete(TENANT, "tenant-1/wf/run/step/mail.txt")).thenReturn(true);
+            when(storageIndex.deleteById(any(), any())).thenReturn(false);
+
+            ToolExecutionResult r = provider.execute("store_file",
+                    Map.of("content", b64, "filename", "mail.txt", "mime_type", "text/plain"), restrictedCtx());
+
+            assertThat(r.success()).isFalse();
+            assertThat(r.error()).isEqualTo(FileToolsProvider.RESTRICTED_FILE_UNTAGGABLE);
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: object delete returning false is reported, never 'Nothing was saved'")
+        void lc066ObjectDeleteReturningFalseTellsTheTruth() {
+            when(storageIndex.markRestricted(eq(TENANT), any(), any())).thenThrow(new RuntimeException("db down"));
+            when(fileStorageService.delete(TENANT, "tenant-1/wf/run/step/mail.txt")).thenReturn(false);
+            when(storageIndex.deleteById(any(), any())).thenReturn(true);
+
+            ToolExecutionResult r = provider.execute("store_file",
+                    Map.of("content", b64, "filename", "mail.txt", "mime_type", "text/plain"), restrictedCtx());
+
+            assertThat(r.success()).isFalse();
+            assertThat(r.error()).doesNotContain("Nothing was saved")
+                    .contains("removing the unclassified copy also failed")
+                    .contains("'mail.txt'");
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: object delete throwing is reported, never 'Nothing was saved'")
+        void lc066ObjectDeleteThrowingTellsTheTruth() {
+            when(storageIndex.markRestricted(eq(TENANT), any(), any())).thenThrow(new RuntimeException("db down"));
+            when(fileStorageService.delete(TENANT, "tenant-1/wf/run/step/mail.txt"))
+                    .thenThrow(new RuntimeException("storage down"));
+            when(storageIndex.deleteById(any(), any())).thenReturn(true);
+
+            ToolExecutionResult r = provider.execute("store_file",
+                    Map.of("content", b64, "filename", "mail.txt", "mime_type", "text/plain"), restrictedCtx());
+
+            assertThat(r.success()).isFalse();
+            assertThat(r.error()).doesNotContain("Nothing was saved").contains("'mail.txt'");
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: an index row that cannot be deleted is reported, never 'Nothing was saved'")
+        void lc066IndexRowDeleteFailingTellsTheTruth() {
+            when(storageIndex.markRestricted(eq(TENANT), any(), any())).thenThrow(new RuntimeException("db down"));
+            when(fileStorageService.delete(TENANT, "tenant-1/wf/run/step/mail.txt")).thenReturn(true);
+            when(storageIndex.deleteById(any(), any())).thenThrow(new RuntimeException("db down"));
+
+            ToolExecutionResult r = provider.execute("store_file",
+                    Map.of("content", b64, "filename", "mail.txt", "mime_type", "text/plain"), restrictedCtx());
+
+            assertThat(r.success()).isFalse();
+            assertThat(r.error()).doesNotContain("Nothing was saved").contains("'mail.txt'");
+        }
+
+        @Test
+        @DisplayName("LC-066: without the index service a restricted store is refused before anything is uploaded")
+        void lc066RestrictedStoreWithoutIndexIsRefused() {
+            provider.setStorageIndex(null);
+
+            ToolExecutionResult r = provider.execute("store_file",
+                    Map.of("content", b64, "filename", "mail.txt", "mime_type", "text/plain"), restrictedCtx());
+
+            assertThat(r.success()).isFalse();
+            verify(fileStorageService, never()).upload(any(), any(), any(), any(), any(), any(), any(),
+                    anyInt(), anyInt(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: an ordinary context stores the file untagged (no over-tagging)")
+        void lc066NormalStoreIsNotTagged() {
+            ToolExecutionResult r = exec("store_file",
+                    Map.of("content", b64, "filename", "mail.txt", "mime_type", "text/plain"));
+
+            assertThat(r.success()).isTrue();
+            verifyNoInteractions(storageIndex);
+        }
+
+        @Test
+        @DisplayName("LC-066: download_file is not affected by the restricted tag (it stores a public URL's bytes)")
+        void lc066DownloadIsNotTagged() {
+            when(fileDownloader.download("https://x/a.pdf")).thenReturn(new byte[] {1});
+
+            provider.execute("download_file",
+                    Map.of("url", "https://x/a.pdf", "filename", "a.pdf", "mime_type", "application/pdf"),
+                    restrictedCtx());
+
+            verifyNoInteractions(storageIndex);
         }
     }
 }

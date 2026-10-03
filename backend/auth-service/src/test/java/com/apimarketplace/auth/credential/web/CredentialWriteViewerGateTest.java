@@ -92,8 +92,8 @@ class CredentialWriteViewerGateTest {
     void viewerOAuthRefused() {
         role("VIEWER");
 
-        assertForbidden(oAuth2Controller.initiate(request, null, mock(OAuth2InitiateRequest.class)));
-        assertForbidden(oAuth2Controller.initiateSimple(request, null, mock(OAuth2SimpleInitiateRequest.class)));
+        assertForbidden(oAuth2Controller.initiate(request, null, null, mock(OAuth2InitiateRequest.class)));
+        assertForbidden(oAuth2Controller.initiateSimple(request, null, null, mock(OAuth2SimpleInitiateRequest.class)));
         verifyNoInteractions(oAuth2Service);
     }
 

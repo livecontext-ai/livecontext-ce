@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { PageHeader } from '@/components/settings/PageHeader';
 
 /** Debounce window before an edit is auto-persisted (no manual Save button). */
 const AUTOSAVE_DEBOUNCE_MS = 600;
@@ -206,16 +207,8 @@ export function PublicProfileSettingsCard() {
   return (
     <div className="space-y-6">
       {/* Header - mirrors the "Account Information" section header on this page. */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-xl bg-theme-secondary flex items-center justify-center">
-            <User className="w-5 h-5 text-theme-primary" />
-          </div>
-          <div>
-            <h3 className="text-lg font-semibold text-theme-primary">{t('sectionTitle')}</h3>
-            <p className="text-sm text-theme-secondary">{t('sectionSubtitle')}</p>
-          </div>
-        </div>
+      <div className="flex items-center justify-between flex-wrap gap-x-4 gap-y-2">
+        <PageHeader icon={User} title={t('sectionTitle')} subtitle={t('sectionSubtitle')} headingLevel="h2" />
         <div className="flex items-center gap-3">
           {isSaving || handleSaving ? (
             <span className="flex items-center gap-1.5 text-xs text-theme-secondary">
@@ -374,7 +367,7 @@ export function PublicProfileSettingsCard() {
               scheduleSave();
             }}
           >
-            <SelectTrigger className="w-full sm:w-[200px]" data-testid="profile-visibility">
+            <SelectTrigger className="w-full @lg:w-60" data-testid="profile-visibility">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

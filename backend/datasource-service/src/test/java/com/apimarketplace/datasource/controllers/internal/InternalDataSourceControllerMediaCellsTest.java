@@ -101,7 +101,7 @@ class InternalDataSourceControllerMediaCellsTest {
         givenOneRow(Map.of("video", STORED_REF));
 
         ResponseEntity<List<DataSourceItem>> response =
-            controller.getItems(DS_ID, TENANT, null, 0, 50, true);
+            controller.getItems(DS_ID, TENANT, null, 0, 50, true, false, null, null);
 
         Object cell = firstRowData(response).get("video");
         assertThat(cell).isInstanceOf(Map.class);
@@ -122,7 +122,7 @@ class InternalDataSourceControllerMediaCellsTest {
         givenOneRow(Map.of("video", STORED_REF));
 
         ResponseEntity<List<DataSourceItem>> response =
-            controller.getItems(DS_ID, TENANT, null, 0, 50, false);
+            controller.getItems(DS_ID, TENANT, null, 0, 50, false, false, null, null);
 
         assertThat(firstRowData(response).get("video")).isEqualTo(STORED_REF);
         verify(dataSourceService, never()).getDataSource(any());
@@ -139,7 +139,7 @@ class InternalDataSourceControllerMediaCellsTest {
         givenOneRow(Map.of("body", STORED_REF));
 
         ResponseEntity<List<DataSourceItem>> response =
-            controller.getItems(DS_ID, TENANT, null, 0, 50, true);
+            controller.getItems(DS_ID, TENANT, null, 0, 50, true, false, null, null);
 
         assertThat(firstRowData(response).get("body")).isEqualTo(STORED_REF);
     }
@@ -154,7 +154,7 @@ class InternalDataSourceControllerMediaCellsTest {
                 Instant.parse("2026-01-01T00:00:00Z"))));
 
         ResponseEntity<List<DataSourceItem>> response =
-            controller.getItems(DS_ID, TENANT, null, 0, 50, true);
+            controller.getItems(DS_ID, TENANT, null, 0, 50, true, false, null, null);
 
         assertThat(response.getBody()).hasSize(1);
         assertThat(response.getBody().get(0).data()).isNull();
@@ -168,7 +168,7 @@ class InternalDataSourceControllerMediaCellsTest {
         stored.put("video", STORED_REF);
         givenOneRow(stored);
 
-        controller.getItems(DS_ID, TENANT, null, 0, 50, true);
+        controller.getItems(DS_ID, TENANT, null, 0, 50, true, false, null, null);
 
         assertThat(stored.get("video")).isEqualTo(STORED_REF);
     }
@@ -181,7 +181,7 @@ class InternalDataSourceControllerMediaCellsTest {
         givenOneRow(Map.of("video", STORED_REF));
 
         ResponseEntity<List<DataSourceItem>> response =
-            controller.getItems(DS_ID, TENANT, null, 0, 50, true);
+            controller.getItems(DS_ID, TENANT, null, 0, 50, true, false, null, null);
 
         assertThat(firstRowData(response).get("video")).isEqualTo(STORED_REF);
     }

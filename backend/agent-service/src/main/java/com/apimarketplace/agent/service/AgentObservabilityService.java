@@ -749,9 +749,25 @@ public class AgentObservabilityService {
             saveIterationsFromRequest(executionId, tenantId, organizationId, request.getIterations());
         }
 
+        // LC-066: an execution that called a Google restricted-scope tool (Gmail, Drive) holds
+        // that content in its tool-call rows AND in its message transcript (the TOOL messages
+        // carry the same result). Classified once here so both sinks get the same answer.
+        // The producer's tag counts as well: a chat turn in a conversation that holds such data,
+        // or an agent node in a run that does, carries it in its transcript without calling the
+        // tool again this time.
+        boolean restrictedExecution = com.apimarketplace.common.classification.DataSensitivity
+                .parse(request.getDataSensitivity()).isRestricted()
+            || (request.getToolCalls() != null && request.getToolCalls().stream()
+                .anyMatch(tc -> tc != null && com.apimarketplace.common.classification.RestrictedDataPolicy
+                    .fromToolMetadata(tc.getMetadata()).isRestricted()));
+        if (restrictedExecution) {
+            // Execution-level tag: what RestrictedObservabilityContentPurger selects on.
+            exec.setDataSensitivity(com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+        }
+
         // 3. Save messages
         if (request.getMessages() != null && !request.getMessages().isEmpty()) {
-            saveMessagesFromRequest(executionId, tenantId, organizationId, request.getMessages());
+            saveMessagesFromRequest(executionId, tenantId, organizationId, request.getMessages(), restrictedExecution);
             exec.setMessageCount(request.getMessages().size());
         }
 
@@ -906,7 +922,8 @@ public class AgentObservabilityService {
     }
 
     private void saveMessagesFromRequest(UUID executionId, String tenantId, String organizationId,
-                                          List<AgentObservabilityRequest.MessageData> messages) {
+                                          List<AgentObservabilityRequest.MessageData> messages,
+                                          boolean restrictedExecution) {
         List<AgentExecutionMessageEntity> entities = new ArrayList<>();
         int iterationCounter = 0;
         for (int seq = 0; seq < messages.size(); seq++) {
@@ -927,6 +944,9 @@ public class AgentObservabilityService {
                 entity.setIterationNumber("SYSTEM".equalsIgnoreCase(msgData.getRole()) ? null : iterationCounter);
             }
             applyContentStorage(entity, msgData.getContent(), tenantId);
+            if (restrictedExecution) {
+                markOverflowRestricted(tenantId, entity.getContentStorageId());
+            }
             entity.setToolCallId(msgData.getToolCallId());
             entity.setToolName(msgData.getToolName());
             entities.add(entity);
@@ -961,8 +981,17 @@ public class AgentObservabilityService {
             // vision channel only and would bloat the JSONB observability row.
             entity.setMetadata(ToolMediaMetadata.withoutHeavyMedia(tcData.getMetadata()));
 
+            // LC-066: tag the row so its content is redacted after the retention window
+            // (RestrictedObservabilityContentPurger) and its overflow text is hard-deleted.
+            com.apimarketplace.common.classification.DataSensitivity sensitivity =
+                com.apimarketplace.common.classification.RestrictedDataPolicy.fromToolMetadata(tcData.getMetadata());
+            entity.setDataSensitivity(sensitivity.name());
+
             // Content with storage strategy
             applyToolCallContentStorage(entity, tcData.getResult(), tenantId);
+            if (sensitivity.isRestricted()) {
+                markOverflowRestricted(tenantId, entity.getContentStorageId());
+            }
 
             // Estimated token counts from content size
             String argsStr = serializeArgs(tcData.getArguments());
@@ -1187,6 +1216,18 @@ public class AgentObservabilityService {
     // ==========================================================================
     // Content storage helpers
     // ==========================================================================
+
+    /** Bounds the lifetime of an overflow text row holding restricted content (best-effort). */
+    private void markOverflowRestricted(String tenantId, UUID storageId) {
+        if (storageId == null) {
+            return;
+        }
+        try {
+            storageService.markRestricted(tenantId, List.of(storageId), null);
+        } catch (Exception e) {
+            logger.warn("Could not tag restricted observability overflow {}: {}", storageId, e.getMessage());
+        }
+    }
 
     private void applyContentStorage(AgentExecutionMessageEntity entity, String content, String tenantId) {
         if (content == null) {

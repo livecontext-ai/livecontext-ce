@@ -66,6 +66,8 @@ public class ServiceRegistry {
     private final CodeExecutor codeExecutor;
     private final CredentialClient credentialClient;
     private final CreditBudgetService creditBudgetService;
+    /** LC-004: answers "does this run hold restricted (Gmail / Drive) data" for AgentNode. */
+    private final com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
     private final WorkflowRepository workflowRepository;
     private final WorkflowExecutionService workflowExecutionService;
     private final WorkflowExecutionServiceV2 workflowExecutionServiceV2;
@@ -108,6 +110,7 @@ public class ServiceRegistry {
         this.codeExecutor = builder.codeExecutor;
         this.credentialClient = builder.credentialClient;
         this.creditBudgetService = builder.creditBudgetService;
+        this.stepPayloadService = builder.stepPayloadService;
         this.workflowRepository = builder.workflowRepository;
         this.workflowExecutionService = builder.workflowExecutionService;
         this.workflowExecutionServiceV2 = builder.workflowExecutionServiceV2;
@@ -170,6 +173,13 @@ public class ServiceRegistry {
         return eventPublisher;
     }
 
+    /**
+     * The RestTemplate {@code HttpRequestNode} uses for its DEFAULT (no per-node timeout) call.
+     * This is its ONLY consumer, so production wires it to the PINNED bean
+     * ({@code RestTemplateConfig.httpRequestNodeRestTemplate}, not the shared unqualified
+     * {@code RestTemplate}) - see {@code ExecutionServiceInjector}. Do not repurpose this getter
+     * for another node's internal-service call without checking that pin still applies.
+     */
     public RestTemplate getRestTemplate() {
         return restTemplate;
     }
@@ -228,6 +238,10 @@ public class ServiceRegistry {
 
     public CreditBudgetService getCreditBudgetService() {
         return creditBudgetService;
+    }
+
+    public com.apimarketplace.orchestrator.services.persistence.StepPayloadService getStepPayloadService() {
+        return stepPayloadService;
     }
 
     public WorkflowRepository getWorkflowRepository() {
@@ -345,6 +359,7 @@ public class ServiceRegistry {
         private CodeExecutor codeExecutor;
         private CredentialClient credentialClient;
         private CreditBudgetService creditBudgetService;
+        private com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
         private WorkflowRepository workflowRepository;
         private WorkflowExecutionService workflowExecutionService;
         private WorkflowExecutionServiceV2 workflowExecutionServiceV2;
@@ -480,6 +495,11 @@ public class ServiceRegistry {
 
         public Builder creditBudgetService(CreditBudgetService service) {
             this.creditBudgetService = service;
+            return this;
+        }
+
+        public Builder stepPayloadService(com.apimarketplace.orchestrator.services.persistence.StepPayloadService service) {
+            this.stepPayloadService = service;
             return this;
         }
 

@@ -126,7 +126,9 @@
         <dependency>
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-ooxml</artifactId>
-            <version>5.2.5</version>
+            <!-- 5.4.0, aligned with orchestrator-service (5.2.5 carried CVE-2025-31672,
+                 malformed OOXML zip entries, fixed 5.4.0). -->
+            <version>5.4.0</version>
         </dependency>
 
         <!-- Test -->

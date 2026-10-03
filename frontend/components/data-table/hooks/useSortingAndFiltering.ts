@@ -6,12 +6,64 @@ import { getValueAtPath } from '../visualHelpers';
 import type { SortConfig } from '../utils/dataTableUtils';
 import { compareDisplayIds, displayIdOf, getDefaultSortConfig } from '../utils/dataTableUtils';
 import { cellDisplayText as cellText } from '@/lib/datatable/assetValue';
+import {
+  URL_SEARCH_DEBOUNCE_MS,
+  urlJson,
+  useUrlSearchState,
+  useUrlState,
+  type UrlStateCodec,
+} from '@/hooks/useUrlState';
+
+/** The names a table page spells its view with in the address. */
+export const TABLE_URL_KEYS = {
+  search: 'q',
+  sort: 'sort',
+  filters: 'filters',
+  page: 'page',
+  pageSize: 'size',
+} as const;
+
+/**
+ * A sort as `<column>:<asc|desc>`. The table's own default order is spelled by absence, like
+ * "no sort": cycling a header back to it must leave a clean address, not the default written out.
+ */
+const sortCodec: UrlStateCodec<SortConfig | null> = {
+  parse: (raw) => {
+    const cut = raw.lastIndexOf(':');
+    if (cut <= 0) return undefined;
+    const direction = raw.slice(cut + 1);
+    if (direction !== 'asc' && direction !== 'desc') return undefined;
+    return { key: raw.slice(0, cut), direction };
+  },
+  serialize: (value) => {
+    const fallback = getDefaultSortConfig();
+    if (!value || (value.key === fallback.key && value.direction === fallback.direction)) return '';
+    return `${value.key}:${value.direction}`;
+  },
+};
+
+/** Column filters are text per column: anything else in the address is not a filter set. */
+const columnFiltersCodec: UrlStateCodec<Record<string, string>> = (() => {
+  const json = urlJson<Record<string, string>>(
+    (value) =>
+      typeof value === 'object' && value !== null && !Array.isArray(value)
+      && Object.values(value).every((entry) => typeof entry === 'string'),
+  );
+  return {
+    parse: json.parse,
+    // Emptied filters are dropped, so a column typed in and cleared equals "no filters".
+    serialize: (value) =>
+      json.serialize(Object.fromEntries(Object.entries(value).filter(([, text]) => text !== ''))),
+  };
+})();
 
 export interface UseSortingAndFilteringParams {
   rows: DataSourceItemRow[];
   fetchData: (page: number, pageSize: number, sortConfig?: SortConfig | null) => Promise<void>;
   pagination: PaginationState;
   dataSourceId?: number;
+  /** True on a table's own page: the search, sort and column filters live in the address. */
+  urlState?: boolean;
 }
 
 export interface UseSortingAndFilteringReturn {
@@ -41,11 +93,23 @@ export function useSortingAndFiltering({
   fetchData,
   pagination,
   dataSourceId,
+  urlState = false,
 }: UseSortingAndFilteringParams): UseSortingAndFilteringReturn {
-  const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showColumnFilters, setShowColumnFilters] = useState(false);
-  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const [sortConfig, setSortConfig] = useUrlState<SortConfig | null>(TABLE_URL_KEYS.sort, null, {
+    codec: sortCodec,
+    enabled: urlState,
+  });
+  const [searchQuery, setSearchQuery] = useUrlSearchState(TABLE_URL_KEYS.search, urlState);
+  const [columnFilters, setColumnFilters] = useUrlState<Record<string, string>>(
+    TABLE_URL_KEYS.filters,
+    {},
+    { codec: columnFiltersCodec, enabled: urlState, debounceMs: URL_SEARCH_DEBOUNCE_MS },
+  );
+  // Filters restored from the address open their panel: rows filtered by a text nobody can
+  // see would read as missing data.
+  const [showColumnFilters, setShowColumnFilters] = useState(
+    () => Object.values(columnFilters).some((text) => text !== ''),
+  );
 
   // Helper to get field path
   const getFieldPath = (field: string) =>
@@ -128,7 +192,7 @@ export function useSortingAndFiltering({
 
       return newConfig;
     });
-  }, [dataSourceId, pagination.pageSize, fetchData]);
+  }, [dataSourceId, pagination.pageSize, fetchData, setSortConfig]);
 
   /**
    * Filter rows based on search query and column filters

@@ -15,6 +15,7 @@ import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { AgentPanelContent, AGENT_CONFIGURATION_TAB } from '@/components/app/AgentPanelContent';
 import { useTaskBoard, type TaskSortField } from './useTaskBoard';
+import { urlNullable, urlString, useUrlState } from '@/hooks/useUrlState';
 import { formatUtcDateTime, parseUtcAware } from '@/lib/utils/dateFormatters';
 import { formatDueShort } from './taskBadgeFormat';
 import { TaskDetailPanel } from './TaskDetailPanel';
@@ -110,9 +111,12 @@ export function TaskBoardPage() {
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(loadHiddenColumns);
   const [initialStagedStatusTaskId, setInitialStagedStatusTaskId] = useState<string | null>(null);
   // F6 client-side filters (the board already loads every card): label, "my tasks", "blocked".
-  const [labelFilter, setLabelFilter] = useState<string | null>(null);
-  const [mineOnly, setMineOnly] = useState(false);
-  const [blockedOnly, setBlockedOnly] = useState(false);
+  // They live in the address like the rest of the board's view (see useTaskBoard).
+  const [labelFilter, setLabelFilter] = useUrlState<string | null>('label', null, {
+    codec: urlNullable(urlString),
+  });
+  const [mineOnly, setMineOnly] = useUrlState('mine', false);
+  const [blockedOnly, setBlockedOnly] = useUrlState('blocked', false);
   const activeFilterCount = (mineOnly ? 1 : 0) + (blockedOnly ? 1 : 0);
   // Multi-select is scoped to ONE column at a time (per the same-column rule): selecting
   // a card in a different column resets the selection to that column. columnKey === a

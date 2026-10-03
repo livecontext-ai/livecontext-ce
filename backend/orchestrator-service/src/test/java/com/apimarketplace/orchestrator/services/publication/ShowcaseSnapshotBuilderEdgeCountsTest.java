@@ -76,7 +76,8 @@ class ShowcaseSnapshotBuilderEdgeCountsTest {
                 interfaceClient,
                 workflowStepDataRepository,
                 storageSkeletonService,
-                new ObjectMapper());
+                new ObjectMapper(),
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.persistence.StepPayloadService.class));
     }
 
     private WorkflowRunEntity run(String runId) {

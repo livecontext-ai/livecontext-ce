@@ -35,6 +35,8 @@ export interface RuntimeNodeState {
   _matchNodeId?: string;
   highlightState?: string;
   selectedLoopChildId?: string;
+  /** A note whose node is selected (see usePreparedGraph). */
+  noteFocused?: boolean;
 }
 
 /**
@@ -67,6 +69,7 @@ const RUNTIME_PROP_KEYS: (keyof RuntimeNodeProps)[] = [
   'validationIssues',
   'highlightState',
   'selectedLoopChildId',
+  'noteFocused',
 ];
 
 /**

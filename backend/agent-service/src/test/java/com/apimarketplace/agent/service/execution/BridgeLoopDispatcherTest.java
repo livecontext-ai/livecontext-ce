@@ -119,7 +119,7 @@ class BridgeLoopDispatcherTest {
                 Map.of("foo", "bar"), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null
             );
-            when(bridgeClient.execute(any())).thenReturn(bridgeResp);
+            when(bridgeClient.execute(any(), any())).thenReturn(bridgeResp);
 
             AgentLoopContext context = AgentLoopContext.builder()
                 .provider("claude-code").model("claude-sonnet-4-6")
@@ -148,7 +148,7 @@ class BridgeLoopDispatcherTest {
                 List.of(), AgentStopReason.COMPLETED.name(),
                 Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClient.execute(any())).thenReturn(ok);
+            when(bridgeClient.execute(any(), any())).thenReturn(ok);
 
             // Exactly the shape classify and guardrail build: one turn, no tools.
             AgentLoopContext context = AgentLoopContext.builder()
@@ -162,7 +162,7 @@ class BridgeLoopDispatcherTest {
 
             ArgumentCaptor<AgentExecutionRequestDto> captor =
                 ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            org.mockito.Mockito.verify(bridgeClient).execute(captor.capture());
+            org.mockito.Mockito.verify(bridgeClient).execute(captor.capture(), any());
             // null here would mean "nobody decided" and expand to the default module set
             // (table, workflow, files, catalog...), handing a one-shot judge a mutating,
             // credit-spending toolset it never has on the direct-API path.
@@ -178,7 +178,7 @@ class BridgeLoopDispatcherTest {
                 List.of(), AgentStopReason.COMPLETED.name(),
                 Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClient.execute(any())).thenReturn(ok);
+            when(bridgeClient.execute(any(), any())).thenReturn(ok);
 
             AgentLoopContext context = AgentLoopContext.builder()
                 .provider("claude-code").model("model-x")
@@ -192,7 +192,7 @@ class BridgeLoopDispatcherTest {
 
             ArgumentCaptor<AgentExecutionRequestDto> captor =
                 ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            org.mockito.Mockito.verify(bridgeClient).execute(captor.capture());
+            org.mockito.Mockito.verify(bridgeClient).execute(captor.capture(), any());
             assertThat(captor.getValue().enabledModules()).isNull();
         }
 
@@ -205,7 +205,7 @@ class BridgeLoopDispatcherTest {
                 List.of(), AgentStopReason.COMPLETED.name(),
                 Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClient.execute(any())).thenReturn(ok);
+            when(bridgeClient.execute(any(), any())).thenReturn(ok);
 
             // No tools in hand, but the caller wants them discovered: that is not tool-less,
             // so the callee keeps deciding the module set.
@@ -220,7 +220,7 @@ class BridgeLoopDispatcherTest {
 
             ArgumentCaptor<AgentExecutionRequestDto> captor =
                 ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            org.mockito.Mockito.verify(bridgeClient).execute(captor.capture());
+            org.mockito.Mockito.verify(bridgeClient).execute(captor.capture(), any());
             assertThat(captor.getValue().enabledModules()).isNull();
         }
 
@@ -233,7 +233,7 @@ class BridgeLoopDispatcherTest {
                 List.of(), AgentStopReason.COMPLETED.name(),
                 Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClient.execute(any())).thenReturn(ok);
+            when(bridgeClient.execute(any(), any())).thenReturn(ok);
 
             AgentLoopContext context = AgentLoopContext.builder()
                 .provider("claude-code").model("model-x")
@@ -245,7 +245,7 @@ class BridgeLoopDispatcherTest {
 
             ArgumentCaptor<AgentExecutionRequestDto> captor =
                 ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            org.mockito.Mockito.verify(bridgeClient).execute(captor.capture());
+            org.mockito.Mockito.verify(bridgeClient).execute(captor.capture(), any());
 
             AgentExecutionRequestDto dto = captor.getValue();
             assertThat(dto.provider()).isEqualTo("claude-code");
@@ -265,7 +265,7 @@ class BridgeLoopDispatcherTest {
         @Test
         @DisplayName("bridge null response → AgentLoopResult.failure with ERROR stop reason")
         void nullResponseMapsToError() {
-            when(bridgeClient.execute(any())).thenReturn(null);
+            when(bridgeClient.execute(any(), any())).thenReturn(null);
 
             AgentLoopContext context = AgentLoopContext.builder()
                 .provider("claude-code").model("claude-sonnet-4-6")
@@ -298,7 +298,7 @@ class BridgeLoopDispatcherTest {
                 List.of(), AgentStopReason.COMPLETED.name(),
                 Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClient.execute(any())).thenReturn(resp);
+            when(bridgeClient.execute(any(), any())).thenReturn(resp);
 
             AgentLoopContext context = AgentLoopContext.builder()
                 .provider("claude-code").model("claude-sonnet-4-6")
@@ -323,7 +323,7 @@ class BridgeLoopDispatcherTest {
                 List.of(), AgentStopReason.COMPLETED.name(),
                 Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClient.execute(any())).thenReturn(resp);
+            when(bridgeClient.execute(any(), any())).thenReturn(resp);
 
             AgentLoopContext context = AgentLoopContext.builder()
                 .provider("claude-code").model("claude-sonnet-4-6")
@@ -345,7 +345,7 @@ class BridgeLoopDispatcherTest {
                 List.of(), AgentStopReason.BUDGET_EXHAUSTED.name(),
                 Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClient.execute(any())).thenReturn(failure);
+            when(bridgeClient.execute(any(), any())).thenReturn(failure);
 
             AgentLoopContext context = AgentLoopContext.builder()
                 .provider("claude-code").model("claude-sonnet-4-6")
@@ -375,7 +375,7 @@ class BridgeLoopDispatcherTest {
                 List.of(Map.of("promptTokens", 15255, "completionTokens", 40, "totalTokens", 15295)),
                 List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClient.execute(any())).thenReturn(stopped);
+            when(bridgeClient.execute(any(), any())).thenReturn(stopped);
 
             AgentLoopContext context = AgentLoopContext.builder()
                 .provider("codex").model("gpt-5.6-sol")
@@ -440,7 +440,7 @@ class BridgeLoopDispatcherTest {
                 "claude-code", "claude-sonnet-4-6", List.of(),
                 AgentStopReason.COMPLETED.name(), Map.of(),
                 List.of(), List.of(), List.of(), List.of(), List.of(), null);
-            when(bridgeClient.execute(request)).thenReturn(resp);
+            when(bridgeClient.execute(org.mockito.ArgumentMatchers.eq(request), any())).thenReturn(resp);
 
             AgentExecutionResponseDto result = dispatcher.dispatchRaw(request, "USER");
 
@@ -512,7 +512,7 @@ class BridgeLoopDispatcherTest {
                 "claude-code", "claude-sonnet-4-6", List.of(),
                 AgentStopReason.COMPLETED.name(), Map.of(),
                 List.of(), List.of(), List.of(), List.of(), List.of(), null);
-            when(bridgeClient.execute(any())).thenReturn(resp);
+            when(bridgeClient.execute(any(), any())).thenReturn(resp);
 
             dispatcher.dispatchRaw(request, "ADMIN,USER");
 
@@ -562,7 +562,7 @@ class BridgeLoopDispatcherTest {
                     .isEqualTo(BridgeAccessDecision.REASON_NOT_ADMIN));
 
             // The denial must abort before forwarding to the bridge.
-            verify(bridgeClient, org.mockito.Mockito.never()).execute(any());
+            verify(bridgeClient, org.mockito.Mockito.never()).execute(any(), any());
         }
     }
 
@@ -611,14 +611,14 @@ class BridgeLoopDispatcherTest {
 
             assertThatThrownBy(() -> dispatcher.execute(nonAdminContext(), false))
                 .isInstanceOf(BridgeAccessDeniedException.class);
-            verify(bridgeClient, org.mockito.Mockito.never()).execute(any());
+            verify(bridgeClient, org.mockito.Mockito.never()).execute(any(), any());
         }
 
         @Test
         @DisplayName("execute: a routed run skips the selection policy and reaches the CLI")
         void executeRoutedIsNotGated() {
             BridgeAccessGuard guard = denyingGuard();
-            when(bridgeClient.execute(any())).thenReturn(OK);
+            when(bridgeClient.execute(any(), any())).thenReturn(OK);
 
             // Production's Agenda Scout: stored on anthropic, sent here by link 7, owned by a
             // non-admin. The guard answers "may this user SELECT this CLI" - the wrong question for
@@ -628,7 +628,7 @@ class BridgeLoopDispatcherTest {
 
             assertThat(result.success()).isTrue();
             verify(guard, org.mockito.Mockito.never()).enforce(any(), any(), any(), anyBoolean());
-            verify(bridgeClient).execute(any());
+            verify(bridgeClient).execute(any(), any());
         }
 
         @Test
@@ -638,14 +638,14 @@ class BridgeLoopDispatcherTest {
 
             assertThatThrownBy(() -> dispatcher.dispatchRaw(nonAdminRequest(), "USER", false))
                 .isInstanceOf(BridgeAccessDeniedException.class);
-            verify(bridgeClient, org.mockito.Mockito.never()).execute(any());
+            verify(bridgeClient, org.mockito.Mockito.never()).execute(any(), any());
         }
 
         @Test
         @DisplayName("dispatchRaw: a routed run skips the selection policy and reaches the CLI")
         void dispatchRawRoutedIsNotGated() {
             BridgeAccessGuard guard = denyingGuard();
-            when(bridgeClient.execute(any())).thenReturn(OK);
+            when(bridgeClient.execute(any(), any())).thenReturn(OK);
 
             AgentExecutionResponseDto response = dispatcher.dispatchRaw(nonAdminRequest(), "USER", true);
 

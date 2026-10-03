@@ -7,6 +7,9 @@ import { Input } from '@/components/ui/input';
 import { useTranslations } from 'next-intl';
 import { Check, Pencil, X } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { ratingStarCount } from '@/components/data-table/cells/RatingCell';
+import { progressMaxOf } from '@/components/data-table/cells/ProgressCell';
+import { numberDecimals as sanitizeDecimals } from '@/components/data-table/cells/NumberCell';
 import {
   RatingConfig,
   SelectConfig,
@@ -97,12 +100,12 @@ export function EditColumnModal({
     return {
       header_name: column?.header_name ?? '',
       type: column?.type as ColumnVisualType | undefined,
-      ratingMax: typeof display.max === 'number' ? display.max : 5,
-      progressMax: typeof display.max === 'number' ? display.max : 100,
+      ratingMax: ratingStarCount(display.max),
+      progressMax: progressMaxOf(display.max),
       selectOptions: initialOptions,
       dateFormat: (display.dateFormat as 'date' | 'datetime' | 'time') ?? 'date',
       numberFormat: (display.format as NumberFormatType) ?? 'plain',
-      numberDecimals: typeof display.decimals === 'number' ? display.decimals : 0,
+      numberDecimals: sanitizeDecimals(display.decimals),
       currencySymbol: typeof display.currencySymbol === 'string' ? display.currencySymbol : '$',
       // A column created from the legacy `image` type carries no display.render; its look has
       // always been the thumbnail, so that is what it must default to here.
@@ -176,20 +179,24 @@ export function EditColumnModal({
     // Compose new display config from the type-specific local state.
     const baseDisplay: ColumnDisplayConfig = { ...(column.displayConfig ?? {}) };
     let displayChanged = false;
-    if (visualType === 'rating' && baseDisplay.max !== ratingMax) {
+    // Every branch compares against what the modal OPENED with, never against the stored config.
+    // The opening values are sanitised and defaulted (a max of 50 opens at 20, a missing format
+    // opens as "plain"), so comparing with the stored value marked the column dirty on mount and
+    // a plain rename rewrote its display config.
+    if (visualType === 'rating' && ratingMax !== initial.ratingMax) {
       baseDisplay.max = ratingMax;
       displayChanged = true;
     } else if (visualType === 'select' || visualType === 'multi_select') {
-      const before = JSON.stringify(baseDisplay.options ?? []);
+      const before = JSON.stringify(initial.selectOptions);
       const after = JSON.stringify(selectOptions);
       if (before !== after) {
         baseDisplay.options = selectOptions;
         displayChanged = true;
       }
-    } else if (visualType === 'progress' && baseDisplay.max !== progressMax) {
+    } else if (visualType === 'progress' && progressMax !== initial.progressMax) {
       baseDisplay.max = progressMax;
       displayChanged = true;
-    } else if (visualType === 'date' && baseDisplay.dateFormat !== dateFormat) {
+    } else if (visualType === 'date' && dateFormat !== initial.dateFormat) {
       baseDisplay.dateFormat = dateFormat;
       displayChanged = true;
     } else if (isMediaType(visualType)) {
@@ -204,9 +211,9 @@ export function EditColumnModal({
       }
     } else if (visualType === 'number') {
       if (
-        baseDisplay.format !== numberFormat ||
-        baseDisplay.decimals !== numberDecimals ||
-        baseDisplay.currencySymbol !== currencySymbol
+        numberFormat !== initial.numberFormat ||
+        numberDecimals !== initial.numberDecimals ||
+        currencySymbol !== initial.currencySymbol
       ) {
         baseDisplay.format = numberFormat;
         baseDisplay.decimals = numberDecimals;

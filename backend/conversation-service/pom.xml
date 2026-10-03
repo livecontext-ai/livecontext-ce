@@ -115,12 +115,12 @@
 
         <!-- PDFBox: extract the text layer of a PDF chat attachment so the agent receives
              the document CONTENT, not just the file name. Version pinned to match the
-             orchestrator-service DocumentTextExtractor (same PDFBox 3.0.1 API) so the two
+             orchestrator-service DocumentTextExtractor (same PDFBox 3.0.x API) so the two
              attachment-extraction surfaces stay behaviourally identical. -->
         <dependency>
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
-            <version>3.0.1</version>
+            <version>3.0.8</version>
         </dependency>
 
         <!-- Jackson pour JSON -->
@@ -199,6 +199,13 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Shared scratch-Postgres gate for the SQL tests (RestrictedConversationContentPurgerPostgresTest). Test scope only. -->
+        <dependency>
+            <groupId>com.apimarketplace</groupId>
+            <artifactId>test-support</artifactId>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
 

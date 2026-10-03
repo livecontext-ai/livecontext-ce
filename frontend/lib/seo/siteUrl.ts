@@ -30,6 +30,32 @@ export function homeHref(locale: string = 'en') {
 }
 
 /**
+ * The public pages that live outside the `[locale]` tree yet have one URL per language: the
+ * bare path in English, `/<locale><path>` for the rest (the proxy rewrites the prefixed form
+ * onto the page and names its language in {@link PAGE_LOCALE_HEADER}). Outside the tree because
+ * its layout ships the whole message catalogue; one URL per language because a page whose
+ * language hangs on a cookie shows search engines English only.
+ */
+export const LOCALIZED_PUBLIC_PATHS = ['/partners'] as const;
+
+/** The request header the proxy sets on a localized public page: the language its URL names. */
+export const PAGE_LOCALE_HEADER = 'x-lc-page-locale';
+
+/** One of {@link LOCALIZED_PUBLIC_PATHS} in one language: bare for English, prefixed otherwise. */
+export function localizedPathHref(path: string, locale: string = 'en') {
+  return locale === 'en' ? path : `/${locale}${path}`;
+}
+
+/** The hreflang cluster of a localized public page, x-default on the English URL. */
+export function localizedPathAlternates(path: string, siteUrl: string = SITE_URL): Record<string, string> {
+  const origin = siteUrl.replace(/\/$/, '');
+  return Object.fromEntries([
+    ...locales.map((locale: Locale) => [locale, `${origin}${localizedPathHref(path, locale)}`]),
+    ['x-default', `${origin}${localizedPathHref(path)}`],
+  ]);
+}
+
+/**
  * Open Graph wants a language_TERRITORY tag, not the bare code the routing uses.
  *
  * <p>Without it a shared link carries no language at all, and Facebook, LinkedIn and Slack

@@ -8,11 +8,11 @@
  * <p>A query rather than an effect: react-query dedupes by key and never loops. A typed server
  * answer (applied, unknown, already used...) is final and forgets the code; anything else (no
  * token yet, network, 5xx) keeps it for the next page load. The outcome is shown once in a small dismissible notice.
- * Mounted only in the /app shell (cloud only).
+ * Mounted in the /app shell and on a partner's offer page (cloud only).
  */
 
 import React, { useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { Check, Gift, X } from 'lucide-react';
 import { useOptionalAuth } from '@/lib/providers/smart-providers';
@@ -27,26 +27,18 @@ import { useRedeemSuccessMessage, redeemErrorKey } from './redeemMessages';
 
 /** One shape rather than a union: the frontend compiles without strictNullChecks, so a
  *  discriminated union would not narrow on `ok`. */
-type Outcome = { ok: boolean; code: string; result?: RewardRedeemResult; errorKey?: string };
+export type PendingRedeemOutcome = { ok: boolean; code: string; result?: RewardRedeemResult; errorKey?: string };
 
-export default function PendingRewardCodeRedeemer() {
-  const auth = useOptionalAuth();
-  const t = useTranslations('reward.redeem');
-  const describeSuccess = useRedeemSuccessMessage();
-  const queryClient = useQueryClient();
-  const [dismissed, setDismissed] = useState(false);
-  const ready = !!auth && auth.isAuthenticated && auth.isReady && !auth.isLoading && auth.numericUserId != null;
-  // Capture first: this renders BEFORE the root capture's effect runs, so a signed-in person
-  // landing straight on /app?lc_ref=CODE would otherwise be missed until the next load.
-  const code = useMemo(() => {
-    if (typeof window === 'undefined') return null;
-    capturePendingRewardCode(window);
-    return readPendingRewardCode(window);
-  }, []);
-
-  const { data } = useQuery<Outcome>({
-    queryKey: ['reward', 'pending-redeem', auth?.numericUserId ?? null, code],
-    queryFn: async () => {
+/**
+ * The redeem of a waiting code, as one react-query entry per account and code. Shared so that a
+ * page about to open a checkout (a partner's offer) can wait for this very redeem, deduped with
+ * the notice's own query, instead of racing it: `queryClient.fetchQuery` returns its settled
+ * outcome, joins it in flight, or starts it.
+ */
+export function pendingRedeemQuery(queryClient: QueryClient, numericUserId: number | null, code: string | null) {
+  return {
+    queryKey: ['reward', 'pending-redeem', numericUserId, code] as const,
+    queryFn: async (): Promise<PendingRedeemOutcome> => {
       const pending = code as string;
       try {
         const result = await rewardApi.redeem(pending);
@@ -68,10 +60,30 @@ export default function PendingRewardCodeRedeemer() {
         throw e; // network / 5xx: keep the code, try again on the next page load
       }
     },
-    enabled: ready && !!code,
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,
+  };
+}
+
+export default function PendingRewardCodeRedeemer() {
+  const auth = useOptionalAuth();
+  const t = useTranslations('reward.redeem');
+  const describeSuccess = useRedeemSuccessMessage();
+  const queryClient = useQueryClient();
+  const [dismissed, setDismissed] = useState(false);
+  const ready = !!auth && auth.isAuthenticated && auth.isReady && !auth.isLoading && auth.numericUserId != null;
+  // Capture first: this renders BEFORE the root capture's effect runs, so a signed-in person
+  // landing straight on /app?lc_ref=CODE would otherwise be missed until the next load.
+  const code = useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    capturePendingRewardCode(window);
+    return readPendingRewardCode(window);
+  }, []);
+
+  const { data } = useQuery({
+    ...pendingRedeemQuery(queryClient, auth?.numericUserId ?? null, code),
+    enabled: ready && !!code,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount: false,

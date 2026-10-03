@@ -179,7 +179,7 @@ class HttpExecutionServiceParamValueLogTest {
     @DisplayName("The credential-less path (executeHttpCall) logs shapes too")
     void credentialLessPathLogsShapes() throws Exception {
         when(apiToolParameterRepository.findByApiToolId(TOOL)).thenReturn(List.of(param("client_secret", "body")));
-        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class)))
+        when(restTemplate.exchange(any(URI.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class)))
                 .thenReturn(ResponseEntity.ok(Map.of("ok", true)));
 
         service.executeHttpCall(api(), tool("/v1/auth"),

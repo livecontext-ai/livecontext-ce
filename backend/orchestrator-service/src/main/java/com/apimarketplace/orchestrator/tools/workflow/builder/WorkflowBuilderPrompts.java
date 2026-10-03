@@ -99,6 +99,10 @@ public final class WorkflowBuilderPrompts {
             }
             case READY -> {
                 help.put("NEXT", "workflow(action='finish') to finalize and save (closes the session)");
+                help.put("BEFORE_FINISH", "If a node holds a rule, a guard or a requirement the user cannot read off it "
+                    + "(why a decision branches, why a dedup or a wait exists, a credential or table to provide), explain it "
+                    + "with workflow(action='add_node', type='note', params={text: '...', attached_to: '<node label>'}). "
+                    + "A few notes where they help, never one per node. See workflow(action='help', topics=['notes']).");
             }
         }
 
@@ -199,6 +203,7 @@ public final class WorkflowBuilderPrompts {
                 "add_node (crypto/time: date_time, crypto_jwt)",
                 "add_node (interface - create first with interface(action='create'))",
                 "table CRUD (direct actions): find_rows, insert_row, read_rows, update_row, delete_row - require table_id param",
+                "add_node (note: explain the WHY of a node to the user, params={text, attached_to})",
                 "validate"
             );
             case WIRING -> List.of("connect", "validate", "describe", "modify", "remove");
@@ -519,7 +524,8 @@ public final class WorkflowBuilderPrompts {
                 billed_unit. Every run is charged and a per-second or per-character model costs more for a longer request; the node fails
                 rather than continue when no asset comes back. Details: workflow(action='help', topics=['generate']).
                 """;
-            case "add_code", "code" -> "workflow(action='add_node', type='code', label='Process', params={language: 'javascript', code: 'return {result: input.value * 2}'}, connect_after='...') - Execute custom code (JavaScript/Python).";
+            case "add_note", "note" -> "workflow(action='add_node', type='note', params={text: 'Skips emails already processed: their id is kept in the Seen table.', attached_to: 'Check Seen'}) - A sticky note that explains the workflow to the user. Never runs, needs no connection. attached_to (optional) = the node it explains: the note is placed next to it, shown when the user focuses it, and removed with it. Write the WHY, not what the node already says. Details: workflow(action='help', topics=['notes']).";
+            case "add_code", "code" -> "workflow(action='add_node', type='code', label='Process', params={language: 'javascript', code: '$output = {result: $input.previous_step.value * 2}'}, connect_after='...') - Execute custom code (JavaScript/TypeScript/Python/Bash). Upstream outputs arrive in the input object ($input in javascript and typescript, _input in python, INPUT in bash); read upstream values from it, not from {{...}} in the body: validate warns about such an expression, and outside a string literal it is inserted as a data literal (JSON, Python literals in python, a quoted word in bash), never as code.";
             case "add_option", "option" -> """
                 workflow(action='add_node', type='option', label='Pick Action', params={
                   choices: [{label: 'Approve', value: 'approve'}, {label: 'Reject', value: 'reject'}],

@@ -150,7 +150,10 @@ public class VectorRepository {
         }
 
         StringBuilder sql = new StringBuilder();
-        sql.append("SELECT i.id, i.data, i.priority, i.created_at, ");
+        // LC-066 re-audit item 2: i.data_sensitivity joined in so a RESTRICTED matched row tags
+        // the similarity-search result the same way executeReadRow already ORs in each row's own
+        // stored tag (see CrudExecutorService.readResultSensitivity).
+        sql.append("SELECT i.id, i.data, i.priority, i.created_at, i.data_sensitivity, ");
         sql.append("(v.embedding").append(vectorCast).append(" ").append(distanceOp);
         sql.append(" :query_vector").append(vectorCast).append(") AS distance ");
         sql.append("FROM ").append(VECTOR_TABLE).append(" v ");

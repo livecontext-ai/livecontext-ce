@@ -50,6 +50,7 @@ class ScheduleControllerViewerGateTest {
     @Mock TriggerClient triggerClient;
     @Mock ScheduleExecutorService scheduleExecutorService;
     @Mock WorkflowRepository workflowRepository;
+    @Mock com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard;
 
     private static final UUID WORKFLOW_ID = UUID.fromString("00000000-0000-4000-8000-000000000001");
     private static final String TRIGGER_ID = "trigger:cron";
@@ -60,7 +61,9 @@ class ScheduleControllerViewerGateTest {
 
     @BeforeEach
     void setUp() {
-        controller = new ScheduleController(triggerClient, scheduleExecutorService, workflowRepository, true);
+        controller = new ScheduleController(triggerClient, scheduleExecutorService, workflowRepository, orgAccessGuard, true);
+        // The deny-list half of the gate allows by default here; this class pins the ROLE half.
+        when(orgAccessGuard.canWrite(anyString(), anyString(), anyString(), anyString(), any())).thenReturn(true);
         WorkflowEntity workflow = new WorkflowEntity();
         workflow.setId(WORKFLOW_ID);
         workflow.setTenantId(TENANT);

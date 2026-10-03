@@ -26,12 +26,25 @@ import java.util.Map;
  *       cap (total serialized bytes, or rows of a single table). Details:
  *       {@code sizeBytes?/maxBytes?} and {@code breakdown[]} of
  *       {@code {type, id, name?, items?, approxBytes?}} sorted heaviest-first.</li>
+ *   <li>{@link #PUBLICATION_SNAPSHOT_TOO_LARGE} - the same size budget
+ *       ({@link PublicationSnapshotBudget}) broken by a table, interface or workflow
+ *       (application) listing. Same details as {@link #AGENT_SNAPSHOT_TOO_LARGE}
+ *       ({@code maxTableRows} with a one-entry breakdown, or {@code sizeBytes/maxBytes}), plus
+ *       {@code reason}: the message without its fix sentence, for surfaces (MCP tools) that
+ *       append a fix in their own actions.</li>
+ *   <li>{@link #TABLE_COPY_FAILED} - a table the snapshot ships could not be copied just now
+ *       (see {@link PublicationTableCopies}); nothing was published. Unlike the others it is
+ *       TRANSIENT: retrying the same publish is the fix. It rides this structured channel so
+ *       every surface already renders its message. Details: {@code retryable: true},
+ *       {@code tableId?}, {@code tableName?}.</li>
  * </ul>
  */
 public class PublicationValidationException extends RuntimeException {
 
     public static final String AGENT_ALL_ACCESS_NOT_PUBLISHABLE = "AGENT_ALL_ACCESS_NOT_PUBLISHABLE";
     public static final String AGENT_SNAPSHOT_TOO_LARGE = "AGENT_SNAPSHOT_TOO_LARGE";
+    public static final String PUBLICATION_SNAPSHOT_TOO_LARGE = "PUBLICATION_SNAPSHOT_TOO_LARGE";
+    public static final String TABLE_COPY_FAILED = "TABLE_COPY_FAILED";
     public static final String CUSTOM_API_NOT_PUBLISHABLE = "CUSTOM_API_NOT_PUBLISHABLE";
 
     private final String errorCode;

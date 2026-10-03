@@ -47,6 +47,15 @@ vi.mock('@/lib/providers/smart-providers', () => ({
 // self-hosted enterprise).
 vi.mock('@/lib/edition', () => ({ IS_CE: false, IS_MANAGED_CLOUD: true }));
 
+// The Partner program entry is for partners and applicants: the hook reads the partner state.
+const partnerSpace = vi.hoisted(() => ({ has: false, enabled: [] as boolean[] }));
+vi.mock('@/hooks/usePartnerSpace', () => ({
+  useHasPartnerSpace: ({ enabled = true }: { enabled?: boolean } = {}) => {
+    partnerSpace.enabled.push(enabled);
+    return partnerSpace.has;
+  },
+}));
+
 const searchConversations = vi.fn();
 // Only the client is stood in for. `conversationKind` is a pure reader the component uses to route
 // a studio thread to its own surface: replacing the whole module with a literal left it undefined,
@@ -96,6 +105,8 @@ beforeEach(() => {
   mockPathname.mockReturnValue('/en/app');
   hasRole.mockReturnValue(false);
   authState.isAuthenticated = true;
+  partnerSpace.has = false;
+  partnerSpace.enabled = [];
   translatorFactory = () => stableT;
   primeEmptyRemotes();
 });
@@ -316,6 +327,26 @@ describe('GlobalSearchBar settings sections', () => {
     render(<GlobalSearchBar />);
     await typeAndSettle('node types');
     expect(screen.queryByText('Node Types')).toBeNull();
+  });
+
+  it('offers the Partner program section to a partner or applicant only', async () => {
+    mockPathname.mockReturnValue('/en/app/settings/overview');
+    const { unmount } = render(<GlobalSearchBar />);
+    await typeAndSettle('partner program');
+    expect(screen.queryByText('Partner program')).toBeNull();
+    unmount();
+
+    partnerSpace.has = true;
+    render(<GlobalSearchBar />);
+    await typeAndSettle('partner program');
+    expect(screen.getByText('Partner program')).toBeTruthy();
+  });
+
+  it('asks for the partner state only once something is typed (the bar is on every page)', async () => {
+    render(<GlobalSearchBar />);
+    expect(partnerSpace.enabled.every((e) => e === false)).toBe(true);
+    await typeAndSettle('partner');
+    expect(partnerSpace.enabled[partnerSpace.enabled.length - 1]).toBe(true);
   });
 
   it('shows admin-only sections to platform admins', async () => {

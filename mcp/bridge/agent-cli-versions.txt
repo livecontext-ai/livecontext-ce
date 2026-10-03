@@ -1,0 +1,52 @@
+# Agent CLI versions installed into the bridge image (LC-046).
+#
+# WHY THIS FILE EXISTS
+# The bridge image used to run `npm install -g @anthropic-ai/claude-code` (and the two
+# other CLIs) with no version at all, so every rebuild silently pulled whatever the
+# registry served that day. A compromised publish of any of them would land in the next
+# build with NO git diff, inside the process that receives full agent prompts and holds
+# the provider API keys. Pinning here makes the exact code that runs an agent a reviewable
+# line in git, and makes a rebuild reproducible.
+#
+# FORMAT (one CLI per line, `#` starts a comment)
+#   <package>@<exact-version>  <run-scripts|ignore-scripts>  <sha512-integrity|->
+#
+# - The version MUST be exact: the image build FAILS on a range, a dist-tag or a bare name.
+# - The second column is the npm install-script policy. `ignore-scripts` is the safer default
+#   (a postinstall runs publisher code as the build user) but only usable for a package whose
+#   install needs no script.
+# - The third column is the registry `dist.integrity` of the package tarball. When present the
+#   build downloads the tarball with `npm pack`, refuses it unless its sha512 matches, and installs
+#   that verified file. `-` means NOT YET VERIFIED: the build installs by exact version (npm checks
+#   the registry's own integrity, which does not protect against a malicious publish of that
+#   version) and, with --build-arg BRIDGE_CLI_REQUIRE_INTEGRITY=1, refuses to build at all.
+#   Fill it with: npm view <package>@<version> dist.integrity
+#   (the platform-specific optional binaries a wrapper pulls in are pinned to exact versions by the
+#   wrapper itself, but are not hash-checked by this file).
+# `mcp/bridge/test/agentCliPinning.test.mjs` asserts the same rules so a bad line is caught by
+# `npm test`, not only by a Docker build.
+#
+# HOW TO BUMP
+# Change the version AND the integrity here, in ONE commit. Read the CLI's changelog first, and
+# check that every flag the adapter passes still exists (`<cli> --help`): these are the processes
+# that execute agent tool calls.
+
+# claude-adapter.mjs is verified against 2.1.280 (flags checked in its binary: -p,
+# --output-format stream-json, --max-turns, --verbose, --strict-mcp-config, --mcp-config,
+# --no-session-persistence, --dangerously-skip-permissions, --tools, --allowedTools,
+# --disallowedTools, --system-prompt, --model). The native binary is selected by
+# `postinstall: node install.cjs`, so scripts must stay enabled. Integrity taken from the npm
+# cache of the 2.1.280 install this adapter was verified with. Moved to 2.1.286 on 2026-10-02:
+# the version prod lane 2 already ran (live chat and workflow agent runs through the bridge OK),
+# so the first pinned cli-update run does not downgrade prod. Integrity from npm view dist.integrity.
+@anthropic-ai/claude-code@2.1.286  run-scripts  sha512-5UNEDKy2znv81PWqNqgPJO4qPqH5NRenh52XTtx2tT5Q6xIxjI1q0RyucY+AUHMABImzDOlh6ztuj4qNiAaRvA==
+
+# Depends on node-pty, whose install builds the native pty. Scripts stay enabled.
+# Version carried over from the previous pin; integrity from `npm view ... dist.integrity`.
+@google/gemini-cli@0.55.1  run-scripts  sha512-leEv91V7J3YWhZdXqYIj4nTl0hXl8oNos5aVR0whPCFqVbRvoFPTzaQOHdI2UIT1wGgp+XdCi4qUrFDnUFN7RQ==
+
+# codex-adapter.mjs usage/billing parsing is verified against 0.154.0. Pure-JS launcher plus
+# per-platform optional packages carrying a prebuilt binary; none declares an install script.
+# Integrity from `npm view @openai/codex@0.159.3 dist.integrity`. Moved from 0.154.0 on 2026-10-02 to the
+# version prod lane 2 already ran, so the first pinned cli-update run does not downgrade prod.
+@openai/codex@0.159.3  ignore-scripts  sha512-hg4nlqCwRb87GocxNnHvz4sadOrdJ71mO0a4CUYWXjAozJe2gtuAdRFldKGSQXw9m7SgR4ydis12KDVVPgzDkQ==

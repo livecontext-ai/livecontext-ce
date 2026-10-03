@@ -46,6 +46,10 @@ public class ApiKey {
     @Column(name = "revoked_at")
     private LocalDateTime revokedAt;
 
+    /** When the key stops resolving (CASA LC-054, V530). Null = never (keys created before V530). */
+    @Column(name = "expires_at")
+    private LocalDateTime expiresAt;
+
     public ApiKey() {
         this.createdAt = LocalDateTime.now();
     }
@@ -85,4 +89,7 @@ public class ApiKey {
 
     public LocalDateTime getRevokedAt() { return revokedAt; }
     public void setRevokedAt(LocalDateTime revokedAt) { this.revokedAt = revokedAt; }
+
+    public LocalDateTime getExpiresAt() { return expiresAt; }
+    public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }
 }

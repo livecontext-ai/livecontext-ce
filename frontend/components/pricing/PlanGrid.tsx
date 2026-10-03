@@ -35,7 +35,24 @@ export interface PlanGridGroup {
  * start on the same line. A card marks its header with {@code data-plan-head} and gives it
  * {@link PLAN_HEAD_CLASS}.
  */
-export default function PlanGrid({ groups }: { groups: PlanGridGroup[] }) {
+export default function PlanGrid({
+  groups,
+  focus,
+  fitThree = false,
+}: {
+  groups: PlanGridGroup[];
+  /**
+   * A card to bring into view (index in rail order): at once on the first render, smoothly each
+   * time {@code nonce} changes afterwards (a partner offer opens on the plan the partner chose, and
+   * comes back to it on request). Mobile is a plain column: nothing to slide.
+   */
+  focus?: { index: number; nonce: number };
+  /**
+   * Three cards (a partner offer's plans): once the rail has the room they fill it, rather than
+   * leaving the edge of a fourth card that does not exist. Narrower rails still slide.
+   */
+  fitThree?: boolean;
+}) {
   const t = useTranslations('pricing.planGrid');
   const railRef = useRef<HTMLDivElement>(null);
   const total = groups.reduce((n, g) => n + g.cards.length, 0);
@@ -65,15 +82,32 @@ export default function PlanGrid({ groups }: { groups: PlanGridGroup[] }) {
     const onScroll = () => measure();
     rail.addEventListener('scroll', onScroll, { passive: true });
     // Watches the headers too: a founding-price note that arrives after the first paint
-    // makes one header taller, and every other one must follow.
+    // makes one header taller, and every other one must follow. And the cards themselves: the
+    // rail's height is set from them, so a card that grows after it was measured (a late font,
+    // a feature line that wraps once more) would otherwise lose its bottom, button included.
     const observer = new ResizeObserver(() => measure());
     observer.observe(rail);
     rail.querySelectorAll('[data-plan-head] > *').forEach(el => observer.observe(el));
+    rail.querySelectorAll('[data-plan-cell]').forEach(el => observer.observe(el));
     return () => {
       rail.removeEventListener('scroll', onScroll);
       observer.disconnect();
     };
   }, [measure]);
+
+  // Bring the focused card into view: instantly the first time (the page opens on it), smoothly
+  // after that. The browser clamps a target past the last full position.
+  const focusedOnce = useRef(false);
+  const focusIndex = focus?.index;
+  const focusNonce = focus?.nonce;
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail || focusIndex === undefined) return;
+    const { step } = railStep(rail);
+    if (!step) return;
+    rail.scrollTo({ left: focusIndex * step, behavior: focusedOnce.current ? 'smooth' : 'auto' });
+    focusedOnce.current = true;
+  }, [focusIndex, focusNonce]);
 
   const scrollToCard = (index: number) => {
     const rail = railRef.current;
@@ -105,7 +139,7 @@ export default function PlanGrid({ groups }: { groups: PlanGridGroup[] }) {
         <div
           ref={railRef}
           data-testid="plan-grid"
-          className={`flex flex-col gap-3 md:relative md:overflow-y-hidden md:transition-[height] md:duration-300 md:grid md:grid-flow-col md:items-start md:gap-x-5 md:gap-y-0 md:overflow-x-auto md:snap-x md:snap-mandatory md:overscroll-x-contain md:pt-4 md:pb-2 ${COLS} md:[grid-template-rows:auto] ${fade} scrollbar-hide`}
+          className={`flex flex-col gap-3 md:relative md:overflow-y-hidden md:transition-[height] md:duration-300 md:grid md:grid-flow-col md:items-start md:gap-x-5 md:gap-y-0 md:overflow-x-auto md:snap-x md:snap-mandatory md:overscroll-x-contain md:pt-4 md:pb-2 ${fitThree ? COLS_THREE : COLS} md:[grid-template-rows:auto] ${fade} scrollbar-hide`}
         >
           {groups.flatMap((group, gi) => {
             const start = starts[gi];
@@ -150,6 +184,8 @@ export default function PlanGrid({ groups }: { groups: PlanGridGroup[] }) {
 
 /** Card widths per rail width (container queries on the rail's own room). */
 const COLS = 'auto-cols-[calc((100%-1.25rem)/1.2)] @min-[44rem]:auto-cols-[calc((100%-2.5rem)/2.25)] @min-[62rem]:auto-cols-[calc((100%-3.75rem)/3.3)]';
+/** The same, except that from 62rem three cards fill the rail (two gaps of 1.25rem). */
+const COLS_THREE = 'auto-cols-[calc((100%-1.25rem)/1.2)] @min-[44rem]:auto-cols-[calc((100%-2.5rem)/2.25)] @min-[62rem]:auto-cols-[calc((100%-2.5rem)/3)]';
 /** Fade on whichever edge still hides plans. */
 const FADES = {
   both: 'md:[mask-image:linear-gradient(to_right,transparent,black_3rem,black_calc(100%-3rem),transparent)]',

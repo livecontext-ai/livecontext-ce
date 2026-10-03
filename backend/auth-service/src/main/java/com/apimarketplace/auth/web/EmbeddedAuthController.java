@@ -38,7 +38,8 @@ import java.util.Set;
 @RestController
 @RequestMapping("/api/auth")
 @ConditionalOnProperty(name = "auth.mode", havingValue = "embedded")
-@CrossOrigin(origins = "*")
+// No @CrossOrigin (LC-033): CORS is decided centrally (gateway CorsConfig). A per-controller
+// wildcard would widen the origin set for any request reaching this service directly.
 public class EmbeddedAuthController {
 
     private static final Logger logger = LoggerFactory.getLogger(EmbeddedAuthController.class);

@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, RefreshCw, ShieldAlert, UserX, Wrench } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
+import { URL_SEARCH_DEBOUNCE_MS, urlInt, useUrlState, type UrlStateCodec } from '@/hooks/useUrlState';
 import { useAuth } from '@/lib/providers/smart-providers';
 import { Button } from '@/components/ui/button';
 import { apiClient } from '@/lib/api/api-client';
@@ -51,6 +52,12 @@ const VERDICT_STYLE: Record<Verdict, string> = {
 
 const WINDOWS = [7, 30, 90, 0];
 
+// Only a window the select offers: anything else in the address falls back to the default.
+const WINDOW_CODEC: UrlStateCodec<number> = {
+  parse: (raw) => (/^\d+$/.test(raw) && WINDOWS.includes(Number(raw)) ? Number(raw) : undefined),
+  serialize: (value) => String(value),
+};
+
 export default function ToolHealthPage() {
   const { isLoading: authLoading } = useAuthGuard();
   const { user } = useAuth();
@@ -59,8 +66,12 @@ export default function ToolHealthPage() {
   const [data, setData] = useState<ToolHealthResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sinceDays, setSinceDays] = useState(30);
-  const [minCalls, setMinCalls] = useState(10);
+  // The window and the call floor live in the address, so a reload reads the same slice.
+  const [sinceDays, setSinceDays] = useUrlState('days', 30, { codec: WINDOW_CODEC });
+  const [minCalls, setMinCalls] = useUrlState('min', 10, {
+    codec: urlInt(1, 1_000_000_000),
+    debounceMs: URL_SEARCH_DEBOUNCE_MS,
+  });
 
   const load = useCallback(async () => {
     setLoading(true);

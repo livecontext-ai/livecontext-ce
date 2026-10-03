@@ -1,5 +1,6 @@
 package com.apimarketplace.conversation.service;
 
+import com.apimarketplace.common.classification.RestrictedDataPolicy;
 import com.apimarketplace.common.storage.service.StorageBreakdownService;
 import com.apimarketplace.conversation.entity.ToolResult;
 import com.apimarketplace.conversation.repository.ToolResultRepository;
@@ -75,6 +76,9 @@ public class ToolResultService {
         );
         result.setMetadata(metadata);
         result.setExecutionId(executionId);
+        // LC-066: a result from a Google restricted-scope integration (the catalog stamps its
+        // iconSlug in the metadata) is tagged, which bounds its retention and hides it from search.
+        result.setDataSensitivity(RestrictedDataPolicy.fromToolMetadata(metadata).name());
 
         // Generate hot preview for lightweight history loading
         result.setContentPreview(buildPreview(fullContent, toolCallId));
@@ -87,7 +91,7 @@ public class ToolResultService {
 
         // DEBUG: Log at INFO level for workflow to trace metadata persistence
         if ("workflow".equals(toolName)) {
-            log.info("💾 [WORKFLOW] Saved to DB - id: {}, metadata: {}", saved.getId(), metadata);
+            log.info("💾 [WORKFLOW] Saved to DB - id: {}, metadata: {}", saved.getId(), com.apimarketplace.common.logging.PayloadLogSafety.describeAny(metadata));
         } else {
             log.debug("Saved tool result: {} for tool: {} ({}ms) metadata keys: {}",
                      saved.getId(), toolName, durationMs, metadata != null ? metadata.keySet() : "null");

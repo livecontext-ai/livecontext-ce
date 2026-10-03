@@ -161,11 +161,17 @@ export function isInactiveAccountError(error: unknown): boolean {
   return error instanceof ApiError && isInactiveAccountResponse(error.status, error.details);
 }
 
+/**
+ * Returns the current access token. `forceRefresh` asks for a NEW token (used after a 401);
+ * without it the provider may return a cached token that is not about to expire.
+ */
+export type TokenProvider = (options?: { forceRefresh?: boolean }) => Promise<string | null>;
+
 class ApiClient {
   private baseUrl: string;
   private timeout: number;
   private retries: number;
-  private tokenProvider?: () => Promise<string | null>;
+  private tokenProvider?: TokenProvider;
   private onAuthFailure?: () => void;
   private authFailureFired = false;
   /**
@@ -189,7 +195,7 @@ class ApiClient {
    * Set the OIDC token provider
    * This should be called once when the app initializes
    */
-  setTokenProvider(provider: () => Promise<string | null>): void {
+  setTokenProvider(provider: TokenProvider): void {
     this.tokenProvider = provider;
   }
 
@@ -207,7 +213,7 @@ class ApiClient {
    *      is public and is called signed out, where waiting would only delay a request that was
    *      always going to be anonymous.
    */
-  getTokenProvider(): (() => Promise<string | null>) | undefined {
+  getTokenProvider(): TokenProvider | undefined {
     return this.tokenProvider;
   }
 
@@ -505,7 +511,9 @@ class ApiClient {
         // On 401: force-refresh the token and retry once
         if (error instanceof ApiError && error.status === 401 && !options.skipAuth && this.tokenProvider) {
           try {
-            const freshToken = await this.tokenProvider();
+            // Force a refresh: the server refused THIS token, so the cached one (even if its
+            // exp is still ahead, e.g. clock skew or a revoked session) must not be re-sent.
+            const freshToken = await this.tokenProvider({ forceRefresh: true });
             if (freshToken && freshToken !== token) {
               return await this.executeFetch<T>(method, url, freshToken, body, options, timeout);
             }

@@ -79,7 +79,7 @@ class InternalCredentialControllerScopesTest {
                         "OAuth2", List.of("https://mail.google.com/"), "gmail", "Gmail Credential")));
 
         ResponseEntity<Map<String, Object>> response =
-                controller.getCredentialScopes("user-1", "gmail", null);
+                controller.getCredentialScopes("user-1", "gmail", null, "user-1");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).containsEntry("integration", "gmail");
@@ -99,7 +99,7 @@ class InternalCredentialControllerScopesTest {
                 .thenReturn(Optional.of(scopes("OAuth2", List.of("email"), "gmail", "Shared Gmail")));
 
         ResponseEntity<Map<String, Object>> response =
-                controller.getCredentialScopes("user-1", "gmail", "org-9");
+                controller.getCredentialScopes("user-1", "gmail", "org-9", "user-1");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         verify(credentialService).getCredentialScopes("user-1", "gmail", "org-9");
@@ -116,7 +116,7 @@ class InternalCredentialControllerScopesTest {
                 .thenReturn(Optional.empty());
 
         ResponseEntity<Map<String, Object>> response =
-                controller.getCredentialScopes("user-1", "elevenlabs", null);
+                controller.getCredentialScopes("user-1", "elevenlabs", null, "user-1");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(response.getBody()).isNull();
@@ -131,7 +131,7 @@ class InternalCredentialControllerScopesTest {
                 .thenReturn(Optional.of(scopes("API_Key", null, "smtp", "my mailer")));
 
         ResponseEntity<Map<String, Object>> response =
-                controller.getCredentialScopes("user-1", "smtp", null);
+                controller.getCredentialScopes("user-1", "smtp", null, "user-1");
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).containsEntry("type", "API_Key");
@@ -145,7 +145,7 @@ class InternalCredentialControllerScopesTest {
                 .thenReturn(Optional.of(scopes("OAuth2", List.of("email"), "gmail", "Gmail Credential")));
 
         ResponseEntity<Map<String, Object>> response =
-                controller.getCredentialScopes("user-1", "gmail", null);
+                controller.getCredentialScopes("user-1", "gmail", null, "user-1");
 
         assertThat(response.getBody()).containsOnlyKeys("type", "scopes", "integration", "name");
         assertThat(response.getBody().toString()).doesNotContain("super-secret");

@@ -5,6 +5,7 @@ import {
   SITE_URL,
   compareSitemap,
   landingSitemap,
+  localizedPathSitemap,
   personaSitemap,
   integrationsSitemap,
   marketplaceSitemap,
@@ -92,7 +93,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const pages: MetadataRoute.Sitemap = [
     { url: `${SITE_URL}/about`, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/contact`, changeFrequency: 'monthly', priority: 0.6 },
-    { url: `${SITE_URL}/partners`, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/models`, changeFrequency: 'weekly', priority: 0.7 },
     { url: `${SITE_URL}/changelog`, changeFrequency: 'weekly', priority: 0.5 },
     // Status mirrors live monitoring, so it changes far more often than it is
@@ -125,6 +125,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   return [
     ...personaSitemap(),
+    // Translated, one URL per language (the page is cloud only).
+    ...(IS_CE ? [] : localizedPathSitemap('/partners', 0.6)),
     ...landing,
     ...compareSitemap(),
     ...pages,

@@ -36,10 +36,51 @@ public class GatewayAuthenticationFilter implements Filter {
     private static final String HEADER_GATEWAY_TIMESTAMP = "X-Gateway-Timestamp";
     private static final String HEADER_PROVIDER_ID = "X-Provider-ID";
 
+    /**
+     * Default window of a v2 signature ({@code gateway.signature.max-skew-seconds}), in either
+     * direction (CASA LC-035). Every signer stamps the current time at send time, so this only
+     * has to absorb clock skew between hosts and request latency.
+     */
+    static final long DEFAULT_V2_MAX_SKEW_MS = 60_000;
+
     private final GatewayFilterProperties properties;
 
+    /**
+     * Whether a request carrying only the v1 signature is still accepted
+     * ({@code gateway.signature.accept-v1}). True for the rollout release so a service deployed
+     * before its callers keeps answering them; set false once every signer emits v2.
+     */
+    private final boolean acceptV1;
+
+    /** v2 freshness window in ms ({@code gateway.signature.max-skew-seconds}). */
+    private final long v2MaxSkewMs;
+
+    /** Counts and logs (once per route and caller) the requests accepted on v1 alone. */
+    private final GatewaySignatureV1OnlyMonitor v1OnlyMonitor;
+
     public GatewayAuthenticationFilter(GatewayFilterProperties properties) {
+        this(properties, true);
+    }
+
+    public GatewayAuthenticationFilter(GatewayFilterProperties properties, boolean acceptV1) {
+        this(properties, acceptV1, DEFAULT_V2_MAX_SKEW_MS / 1000);
+    }
+
+    public GatewayAuthenticationFilter(GatewayFilterProperties properties, boolean acceptV1,
+                                       long v2MaxSkewSeconds) {
+        this(properties, acceptV1, v2MaxSkewSeconds, new GatewaySignatureV1OnlyMonitor());
+    }
+
+    /**
+     * @param v1OnlyMonitor told about every request accepted on v1 alone (no v2 header), so the
+     *                      remaining v1-only callers are visible before accept-v1 is turned off
+     */
+    public GatewayAuthenticationFilter(GatewayFilterProperties properties, boolean acceptV1,
+                                       long v2MaxSkewSeconds, GatewaySignatureV1OnlyMonitor v1OnlyMonitor) {
         this.properties = properties;
+        this.acceptV1 = acceptV1;
+        this.v1OnlyMonitor = v1OnlyMonitor != null ? v1OnlyMonitor : new GatewaySignatureV1OnlyMonitor();
+        this.v2MaxSkewMs = v2MaxSkewSeconds > 0 ? v2MaxSkewSeconds * 1000 : DEFAULT_V2_MAX_SKEW_MS;
         if (properties.isVerificationEnabled() && isUnsafeSecret(properties.getSecretKey())) {
             throw new IllegalStateException("gateway.filter.secret-key must be configured when gateway verification is enabled");
         }
@@ -82,7 +123,36 @@ public class GatewayAuthenticationFilter implements Filter {
         String gatewaySecretHeader = httpRequest.getHeader(HEADER_GATEWAY_SECRET);
         String gatewayTimestamp = httpRequest.getHeader(HEADER_GATEWAY_TIMESTAMP);
 
-        // Resolve providerId: query parameter first, then header fallback
+        String signatureV2 = httpRequest.getHeader(GatewaySignatureV2.HEADER);
+
+        // v2 (CASA LC-035): binds roles, method, path and query, providerId from the header only.
+        if (signatureV2 != null) {
+            if (isValidSignatureV2(httpRequest, signatureV2, gatewayTimestamp)) {
+                log.debug("Gateway v2 authentication passed for path={}", requestPath);
+                chain.doFilter(request, response);
+                return;
+            }
+            if (!acceptV1) {
+                log.warn("Invalid gateway v2 signature for {} {}", httpRequest.getMethod(), requestPath);
+                rejectRequest(httpResponse, HttpServletResponse.SC_UNAUTHORIZED, "Invalid gateway secret");
+                return;
+            }
+            // Transition window only: a v1-only request is accepted anyway, so falling back to v1
+            // here grants nothing a stripped v2 header would not. The WARN is what tells us a
+            // signer computes v2 differently from this verifier BEFORE accept-v1 is turned off.
+            log.warn("Gateway v2 signature mismatch for {} {} (provider={}); checking v1 during the transition",
+                    httpRequest.getMethod(), requestPath, httpRequest.getHeader(HEADER_PROVIDER_ID));
+        } else if (!acceptV1) {
+            log.warn("Gateway v2 signature missing for {} {} and v1 is no longer accepted",
+                    httpRequest.getMethod(), requestPath);
+            rejectRequest(httpResponse, HttpServletResponse.SC_UNAUTHORIZED, "Missing gateway authentication headers");
+            return;
+        }
+
+        // v1 (legacy, accepted while gateway.signature.accept-v1=true). The providerId query
+        // parameter is read here and ONLY here: the gateway's user-resolution call used to carry
+        // its providerId solely in the query, and a service must keep answering a gateway that
+        // has not been redeployed. v2 reads X-Provider-ID and nothing else.
         String providerId = httpRequest.getParameter("providerId");
         if (providerId == null) {
             providerId = httpRequest.getHeader(HEADER_PROVIDER_ID);
@@ -109,6 +179,11 @@ public class GatewayAuthenticationFilter implements Filter {
         }
 
         log.debug("Gateway authentication passed for path={}", LogSafePath.of(requestPath));
+        if (signatureV2 == null) {
+            // Accepted on v1 ALONE: the one case nothing else reports, and the one that turns into
+            // a 401 when accept-v1 goes false. A v2 mismatch that fell back to v1 is already WARNed.
+            v1OnlyMonitor.record(httpRequest.getMethod(), requestPath, providerId);
+        }
         chain.doFilter(request, response);
     }
 
@@ -130,7 +205,9 @@ public class GatewayAuthenticationFilter implements Filter {
             return false;
         }
         for (String prefix : prefixes) {
-            if (prefix != null && path.startsWith(prefix)) {
+            // A blank entry (an unset env-driven list) must match NOTHING: "".startsWith is true
+            // for every path, which would silently gate or open the whole service.
+            if (prefix != null && !prefix.isBlank() && path.startsWith(prefix)) {
                 return true;
             }
         }
@@ -163,6 +240,35 @@ public class GatewayAuthenticationFilter implements Filter {
             return false;
         } catch (Exception e) {
             log.error("Error validating gateway secret: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Verify the v2 signature over the request as this servlet received it. The provider id is
+     * read from {@code X-Provider-ID} only (never the query string), and must be present.
+     */
+    boolean isValidSignatureV2(HttpServletRequest request, String received, String timestamp) {
+        try {
+            if (timestamp == null) {
+                return false;
+            }
+            boolean ok = GatewaySignatureV2.verify(properties.getSecretKey(), request.getMethod(),
+                    request.getRequestURI(), request.getQueryString(),
+                    name -> {
+                        java.util.Enumeration<String> values = request.getHeaders(name);
+                        return values == null ? List.of() : java.util.Collections.list(values);
+                    },
+                    received, v2MaxSkewMs, System.currentTimeMillis());
+            if (!ok) {
+                log.debug("Gateway v2 signature invalid or outside the {}ms window", v2MaxSkewMs);
+            }
+            return ok;
+        } catch (NumberFormatException e) {
+            log.warn("Invalid gateway timestamp format: {}", timestamp);
+            return false;
+        } catch (Exception e) {
+            log.error("Error validating gateway v2 signature: {}", e.getMessage());
             return false;
         }
     }

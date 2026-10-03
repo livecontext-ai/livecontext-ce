@@ -9,7 +9,12 @@
 # 20.18. That broke every local and e2e-slot image build while CI kept working
 # off its older GHCR mirror, which is the worst shape a base-image regression
 # can take. Bump this tag deliberately, after checking `npm ci` on it.
-ARG NODE_IMAGE=node:20.18-alpine
+#
+# Node 22 (maintenance LTS) since LC-047: Node 20 reached end of life in April 2026 and
+# receives no security fixes. `npm ci` on this lockfile was verified on 22.23.2-alpine.
+# Pinned by digest (multi-arch index). This ARG is the only copy: the GHCR mirror and the
+# CI build read the digest from it (scripts/ci/base-images.sh).
+ARG NODE_IMAGE=node:22.23.2-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85
 # Deliberately NOT pinned to $BUILDPLATFORM (unlike the monolith's Maven stage, which
 # emits an architecture-independent jar). `next build` resolves and traces NATIVE
 # node_modules into .next/standalone - @next/swc-linux-<arch>-musl and friends - so a
@@ -91,10 +96,14 @@ ENV NEXT_PUBLIC_RECAPTCHA_SITE_KEY=$NEXT_PUBLIC_RECAPTCHA_SITE_KEY
 # image. Only string hrefs point at /legal/* (no imports), so the build is
 # unaffected - the public-tree build (gate D) already proves Next builds
 # without app/legal. publish-ce.yml's image content gate pins the legal-page
-# absence pre-push.
+# absence pre-push. public/.well-known/security.txt goes too: it is the hosted
+# service's disclosure file (livecontext.ai contact, Canonical and Policy), and a
+# self-hosted install serving it would publish the cloud's file as its own, with a
+# Canonical that does not match the URL it is served from (RFC 9116 says to reject
+# it). The content gate pins its absence as well.
 RUN if [ "$NEXT_PUBLIC_APP_EDITION" = "ce" ]; then \
       rm -rf app/legal public/landing/screenshots \
-      && rm -f public/landing/videos/builder-built-by-chat.webm; \
+      && rm -f public/landing/videos/builder-built-by-chat.webm public/.well-known/security.txt; \
     fi
 
 # Next's production build outgrew V8's default heap on the 8 GB build node
@@ -105,6 +114,12 @@ RUN NODE_OPTIONS="--max-old-space-size=6144" npm run build
 # ---- Runtime stage ----
 FROM ${NODE_IMAGE}
 WORKDIR /app
+
+# Unprivileged runtime user (LC-047). uid/gid 1001 = the k8s podSecurityContext
+# (runAsUser/runAsGroup/fsGroup 1001), so the image and the cluster agree, and a
+# docker/compose (CE) install no longer runs the server as root (USER below). Which
+# files that user may write is decided by the --chown on the standalone COPY.
+RUN addgroup -S -g 1001 nodejs && adduser -S -u 1001 -G nodejs nextjs
 
 # The standalone tree is owned by the runtime user (1001, podSecurityContext in the
 # helm chart), not root: Next writes revalidated ISR pages back into
@@ -119,9 +134,14 @@ COPY --chown=1001:1001 --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 COPY --from=build /app/messages ./messages
+# Preload that drops the absolute `x-middleware-rewrite` Next adds to every /api/proxy/*
+# response (it named the in-cluster gateway URL). Rationale in the file header.
+COPY --from=build /app/lib/security/stripInternalResponseHeaders.cjs ./strip-internal-response-headers.cjs
 
 RUN mkdir -p .next/cache && chown -R 1001:1001 .next/cache
 
+USER 1001:1001
+
 EXPOSE 3000
 ENV HOSTNAME="0.0.0.0"
-CMD ["node", "server.js"]
+CMD ["node", "--require", "./strip-internal-response-headers.cjs", "server.js"]

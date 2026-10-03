@@ -30,14 +30,28 @@ describe('proxy.ts middleware - ?token query handling', () => {
     expect(rewriteTarget(res)).toBe(`http://localhost:8080/api/organizations/invitations/info?token=${uuid}`);
   });
 
-  it('strips a JWT-shaped ?token and promotes it to the forwarded Authorization bearer', () => {
+  it('LC-044: never promotes a JWT-shaped ?token to the forwarded Authorization bearer', () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig';
     const res = proxy(
       new NextRequest(`http://localhost:3000/api/proxy/files/x?token=${jwt}`),
     ) as NextResponse;
 
-    expect(rewriteTarget(res)).toBe('http://localhost:8080/api/files/x'); // token removed from query
-    expect(res.headers.get('x-middleware-request-authorization')).toBe(`Bearer ${jwt}`);
+    // A session credential in a URL is not an authentication channel any more: no bearer is
+    // synthesised from it, so the gateway treats the request as unauthenticated.
+    expect(res.headers.get('x-middleware-request-authorization')).toBeNull();
+    // ...and it is STRIPPED, so the credential never reaches the gateway URL or its logs.
+    expect(rewriteTarget(res)).toBe('http://localhost:8080/api/files/x');
+  });
+
+  it('LC-044: strips a JWT-shaped ?token even when an Authorization header is present, keeping other params', () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig';
+    const res = proxy(
+      new NextRequest(`http://localhost:3000/api/proxy/files/x?token=${jwt}&page=2`, {
+        headers: { authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.sig' },
+      }),
+    ) as NextResponse;
+
+    expect(rewriteTarget(res)).toBe('http://localhost:8080/api/files/x?page=2');
   });
 
   it('leaves a resource ?token in place when an Authorization header is already present', () => {

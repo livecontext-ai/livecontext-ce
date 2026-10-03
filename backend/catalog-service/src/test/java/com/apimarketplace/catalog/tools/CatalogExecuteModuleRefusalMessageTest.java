@@ -392,6 +392,17 @@ class CatalogExecuteModuleRefusalMessageTest {
         }
 
         @Test
+        @DisplayName("regression (CASA LC-066): a Gmail 401 Reconnect card read nothing, so it never marks the conversation restricted")
+        void expiredGmailCardIsNotRestrictedData() throws Exception {
+            ToolExecutionResult result = refuse(HttpStatus.UNAUTHORIZED, "{\"service\":\"gmail\"}");
+
+            // The card names Gmail so it can be drawn; the provider refused the call.
+            assertThat(result.metadata()).containsEntry("iconSlug", "gmail").containsEntry("authExpired", true);
+            assertThat(com.apimarketplace.common.classification.RestrictedDataPolicy
+                    .fromToolMetadata(result.metadata()).isRestricted()).isFalse();
+        }
+
+        @Test
         @DisplayName("a rate limit says to wait, because 'change the call' is not the remedy for it")
         void rateLimitSaysWait() throws Exception {
             ToolExecutionResult result = refuse(HttpStatus.TOO_MANY_REQUESTS, "{\"message\":\"slow down\"}");

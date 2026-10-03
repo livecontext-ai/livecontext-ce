@@ -41,6 +41,8 @@ import { FolderDragContext } from '@/components/folders/FolderDragContext';
 import { samePageUrl, showSamePageUrl } from '@/lib/navigation/showSamePageUrl';
 import { DraggableResourceCard } from '@/components/folders/DraggableResourceCard';
 import { useListFolders } from '@/hooks/useListFolders';
+import { useUrlListView } from '@/hooks/useUrlListView';
+import { useEffectOnChange } from '@/hooks/useEffectOnChange';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { AgentPanelContent, AGENT_CONFIGURATION_TAB } from '@/components/app/AgentPanelContent';
@@ -100,19 +102,23 @@ export function AgentTable({ className = '' }: AgentTableProps) {
   const { favoriteIds, toggleFavorite } = useResourceFavorites('AGENT', handleFavoriteError);
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  // The list's view lives in the address, so a reload reopens it as it was.
+  const {
+    searchQuery, setSearchQuery, sortBy, setSortBy, visibilityFilter, setVisibilityFilter,
+    page, setPage, pageSize, setPageSize,
+  } = useUrlListView<ListSortKey>({
+    sortKeys: ['lastModified', 'name'],
+    defaultSort: 'lastModified',
+    defaultPageSize: 25,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Bumped on workspace switch to force a reload; the load effect keys on it (and the search term)
   // rather than on the fetch callback identity, so an unstable callback can never re-fire the load.
   const [reloadKey, setReloadKey] = useState(0);
-  const [searchQuery, setSearchQuery] = useState('');
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
   // Default order = most-recently-modified first; visibility filter = no restriction. Both are
   // applied SERVER-SIDE over the whole tenant set, so the browser loads only the page it shows.
-  const [sortBy, setSortBy] = useState<ListSortKey>('lastModified');
-  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>('all');
   // Publication status now ships WITH each list page (publicationStatuses envelope), so it is always
   // resolved by the time a card renders - no separate sweep, no Lock-flash gate.
   // Monotonic id so only the latest page request applies its result (out-of-order guard).
@@ -218,7 +224,7 @@ export function AgentTable({ className = '' }: AgentTableProps) {
   }, [page, pageSize, debouncedSearch, sortBy, visibilityFilter, folders.folderIdParam]);
 
   // Reset to page 0 when the search term, sort, visibility filter or folder changes.
-  useEffect(() => {
+  useEffectOnChange(() => {
     setPage(0);
   }, [debouncedSearch, sortBy, visibilityFilter, folders.folderIdParam]);
 
@@ -289,8 +295,11 @@ export function AgentTable({ className = '' }: AgentTableProps) {
 
   // Snap back if the active page fell out of range (e.g. a last-page deletion narrowed the total).
   useEffect(() => {
-    if (!loading && page > 0 && page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
-  }, [loading, page, totalPages]);
+    // Not after a failed load: the count is 0 then because nothing came back, not because the
+    // list is empty, and snapping would erase from the address the very page a reload after a
+    // dropped connection is meant to come back to.
+    if (!loading && !error && page > 0 && page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
+  }, [loading, error, page, totalPages, setPage]);
 
   // Trigger badges (webhook / schedule) for the WHOLE workspace in ONE /agents/triggers (FleetTrigger)
   // batch, instead of a getWebhook + getSchedule pair per visible agent. The endpoint returns only

@@ -1,7 +1,24 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { LATEST_CHANGELOG_ENTRY, currentEntry, isValidEntry, resolveEntry, type ChangelogEntry } from '../latestEntry';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  CHANGELOG_COPY_KEYS,
+  CLOUD_CHANGELOG_ENTRY,
+  LATEST_CHANGELOG_ENTRY,
+  SELF_HOSTED_CHANGELOG_ENTRY,
+  currentEntry,
+  entryForEdition,
+  isValidEntry,
+  resolveEntry,
+  selfHostedEntry,
+  type ChangelogEntry,
+} from '../latestEntry';
+
+/** Both editions' entries: each is a hand edit that ships to every user of its edition. */
+const SHIPPED = [
+  ['self-hosted', SELF_HOSTED_CHANGELOG_ENTRY],
+  ['cloud', CLOUD_CHANGELOG_ENTRY],
+] as const;
 
 const LOCALES = ['en', 'fr', 'de', 'es', 'pt', 'zh'] as const;
 const REPO_FRONTEND = path.resolve(__dirname, '../../..');
@@ -13,6 +30,7 @@ interface LocaleMessages {
     dismiss?: string;
     learnMore?: string;
     latest?: Record<string, string>;
+    latestCloud?: Record<string, string>;
   };
   sidebar?: Record<string, string>;
 }
@@ -22,20 +40,42 @@ function messages(locale: string): LocaleMessages {
 }
 
 /**
- * The entry is edited by hand on every release, in three places that must agree: this file, the
+ * The entries are edited by hand on every release, in three places that must agree: this file, the
  * media directory and six locale files. Every check below is one of those hand edits going wrong
  * in a way nobody sees until the panel is in front of every user.
  */
-describe('the shipped changelog entry', () => {
-  it('is valid, so this build actually announces something', () => {
-    // If this fails, the release ships a silent build: currentEntry() returns null and no user
-    // ever sees the note that was written for them.
-    expect(isValidEntry(LATEST_CHANGELOG_ENTRY)).toBe(true);
-    expect(currentEntry()).not.toBeNull();
+describe('the shipped changelog entries', () => {
+  it.each(SHIPPED)('the %s entry is valid, so that edition actually announces something', (_, entry) => {
+    // If this fails, the release ships a silent build on that edition: currentEntry() returns
+    // null and no user ever sees the note that was written for them.
+    expect(isValidEntry(entry)).toBe(true);
   });
 
-  it('points at a media file that exists in the repo', () => {
-    const media = LATEST_CHANGELOG_ENTRY?.media;
+  it('gives each edition its own key and its own copy block', () => {
+    // A shared key would mark the other edition's news as read; a shared block would show one
+    // edition the other's words (the partner program on a self-hosted install, where it does
+    // not exist).
+    expect(SELF_HOSTED_CHANGELOG_ENTRY?.key).not.toBe(CLOUD_CHANGELOG_ENTRY?.key);
+    expect(SELF_HOSTED_CHANGELOG_ENTRY?.copy).not.toBe(CLOUD_CHANGELOG_ENTRY?.copy);
+  });
+
+  it('never sends a self-hosted reader to a page that exists on the managed cloud only', () => {
+    // The partner program, its badge and the partner space are managed-cloud features: a link
+    // there from a self-hosted install points at nothing.
+    const links = [SELF_HOSTED_CHANGELOG_ENTRY?.action?.href, SELF_HOSTED_CHANGELOG_ENTRY?.learnMoreUrl]
+      .filter((href): href is string => !!href);
+    for (const href of links) {
+      expect(href, `self-hosted entry links to ${href}`).not.toMatch(/^(\/[a-z]{2})?\/(partners|app\/settings\/partner)\b/);
+    }
+  });
+
+  it('maps the managed cloud to the cloud entry and everything else to the self-hosted one', () => {
+    expect(entryForEdition(true)).toBe(CLOUD_CHANGELOG_ENTRY);
+    expect(entryForEdition(false)).toBe(SELF_HOSTED_CHANGELOG_ENTRY);
+  });
+
+  it.each(SHIPPED)('the %s entry points at a media file that exists in the repo', (_, entry) => {
+    const media = entry?.media;
     if (!media) return;
     // A path typo passes every type check and every unit test, and renders as a broken image in
     // the panel. The file has to be on disk, under public/, or the entry is not shippable.
@@ -45,21 +85,35 @@ describe('the shipped changelog entry', () => {
     }
   });
 
-  it('has its copy translated in every locale, with no locale left on the English string', () => {
-    const en = messages('en').changelog;
-    expect(en?.latest?.title).toBeTruthy();
-    expect(en?.latest?.body).toBeTruthy();
-    expect(en?.latest?.mediaAlt).toBeTruthy();
+  it('keeps no media file that no entry points at', () => {
+    // Every image ships every file under public/, and only the latest entries are ever shown.
+    const used = new Set(SHIPPED.flatMap(([, entry]) => [entry?.media?.src, entry?.media?.poster]).filter(Boolean));
+    const onDisk = readdirSync(path.join(REPO_FRONTEND, 'public', 'changelog')).map((f) => `/changelog/${f}`);
+    expect(onDisk.filter((src) => !used.has(src))).toEqual([]);
+  });
+
+  it.each(SHIPPED)('the %s entry has its copy translated in every locale, none left on the English string', (_, entry) => {
+    const block = entry!.copy;
+    const keys = entry!.action ? ['title', 'body', 'mediaAlt', 'action'] as const : ['title', 'body', 'mediaAlt'] as const;
+    const en = messages('en').changelog?.[block];
+    for (const key of keys) {
+      expect(en?.[key], `en.changelog.${block}.${key} is missing`).toBeTruthy();
+    }
 
     for (const locale of LOCALES.filter((l) => l !== 'en')) {
-      const other = messages(locale).changelog;
-      for (const key of ['title', 'body', 'mediaAlt'] as const) {
-        expect(other?.latest?.[key], `${locale}.changelog.latest.${key} is missing`).toBeTruthy();
+      const other = messages(locale).changelog?.[block];
+      for (const key of keys) {
+        expect(other?.[key], `${locale}.changelog.${block}.${key} is missing`).toBeTruthy();
         // A copied English string is the failure this catches: the key exists, parity tooling is
         // happy, and that language's users read English.
-        expect(other.latest[key], `${locale}.changelog.latest.${key} is the English string`)
-          .not.toBe(en.latest[key]);
+        expect(other![key], `${locale}.changelog.${block}.${key} is the English string`).not.toBe(en![key]);
       }
+    }
+  });
+
+  it('has the shared strings in every locale and no menu entry', () => {
+    for (const locale of LOCALES.filter((l) => l !== 'en')) {
+      const other = messages(locale).changelog;
       for (const key of ['whatsNew', 'dismiss', 'learnMore'] as const) {
         expect(other?.[key], `${locale}.changelog.${key} is missing`).toBeTruthy();
       }
@@ -84,6 +138,8 @@ describe('isValidEntry', () => {
     publishedAt: '2026-09-07',
     media: { type: 'image', src: '/changelog/x.svg', width: 1200, height: 630 },
     learnMoreUrl: '/changelog',
+    copy: 'latest',
+    action: null,
   };
 
   it('accepts a well-formed entry, with or without media', () => {
@@ -134,6 +190,23 @@ describe('isValidEntry', () => {
   it('rejects a protocol-relative learn-more link, which leaves the deployment entirely', () => {
     expect(isValidEntry({ ...valid, learnMoreUrl: '//evil.example.com' })).toBe(false);
   });
+
+  it('accepts every copy block the locale files carry, and nothing else', () => {
+    for (const copy of CHANGELOG_COPY_KEYS) {
+      expect(isValidEntry({ ...valid, copy })).toBe(true);
+    }
+    // An unknown block renders the raw key path ("changelog.latestCe.title") as the title.
+    expect(isValidEntry({ ...valid, copy: 'latestCe' as never })).toBe(false);
+  });
+
+  it('accepts an in-app call to action', () => {
+    expect(isValidEntry({ ...valid, action: { href: '/partners' } })).toBe(true);
+  });
+
+  it('rejects a call to action that leaves the deployment, like the learn-more link', () => {
+    expect(isValidEntry({ ...valid, action: { href: 'https://example.com' } })).toBe(false);
+    expect(isValidEntry({ ...valid, action: { href: '//evil.example.com' } })).toBe(false);
+  });
 });
 
 describe('resolveEntry', () => {
@@ -142,6 +215,8 @@ describe('resolveEntry', () => {
     publishedAt: '2026-09-07',
     media: null,
     learnMoreUrl: '/changelog',
+    copy: 'latest',
+    action: null,
   };
 
   it('announces a valid entry unchanged', () => {
@@ -159,5 +234,49 @@ describe('resolveEntry', () => {
 
   it('is what currentEntry answers with, so the shipped entry goes through the same gate', () => {
     expect(currentEntry()).toEqual(resolveEntry(LATEST_CHANGELOG_ENTRY));
+  });
+
+  it('gives the CE e2e suite the self-hosted entry, never the cloud one', () => {
+    // The suite runs in a Node process without the CE build's edition variables: reading the
+    // build's own entry there would acknowledge the cloud key, and the panel would ambush every
+    // CE spec again.
+    expect(selfHostedEntry()?.key).toBe(SELF_HOSTED_CHANGELOG_ENTRY?.key);
+    expect(selfHostedEntry()?.key).not.toBe(CLOUD_CHANGELOG_ENTRY?.key);
+  });
+});
+
+/**
+ * The edition is frozen at build time from NEXT_PUBLIC_* variables, so each case re-imports the
+ * module under its own environment. The managed cloud is the only edition with the partner
+ * program: a self-hosted ENTERPRISE build resolves EDITION to 'cloud' yet is not managed, and must
+ * get the self-hosted entry. Keying the choice on IS_CLOUD instead of IS_MANAGED_CLOUD would show
+ * those installs a partner button that leads nowhere, and only these cases would notice.
+ */
+describe('the entry a build announces, by deployment', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  async function entryUnder(appEdition: string, authMode: string) {
+    vi.resetModules();
+    vi.stubEnv('NEXT_PUBLIC_APP_EDITION', appEdition);
+    vi.stubEnv('NEXT_PUBLIC_AUTH_MODE', authMode);
+    return import('../latestEntry');
+  }
+
+  it.each([
+    ['managed cloud', 'cloud', 'cloud', 'oidc'],
+    ['dedicated cloud', 'cloud', 'dedicated-cloud', 'oidc'],
+    ['community edition', 'self-hosted', 'ce', 'embedded'],
+    ['self-hosted enterprise', 'self-hosted', 'self-hosted-enterprise', 'keycloak'],
+    ['cloud claimed with embedded auth', 'self-hosted', 'cloud', 'embedded'],
+  ])('a %s build announces the %s entry', async (_, expected, appEdition, authMode) => {
+    const mod = await entryUnder(appEdition, authMode);
+    const want = expected === 'cloud' ? mod.CLOUD_CHANGELOG_ENTRY : mod.SELF_HOSTED_CHANGELOG_ENTRY;
+    expect(mod.LATEST_CHANGELOG_ENTRY).toBe(want);
+    expect(mod.currentEntry()?.key).toBe(want?.key);
+    // Whatever the build, the e2e helper still names the self-hosted entry.
+    expect(mod.selfHostedEntry()?.key).toBe(mod.SELF_HOSTED_CHANGELOG_ENTRY?.key);
   });
 });

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Node, NodeChange } from 'reactflow';
 import { BuilderNodeData } from '../types';
 import { nodeRegistry } from '../registry/nodeRegistry';
+import { withAttachedNoteChanges } from '../utils/noteAnchors';
 
 interface UseSelectionProps {
   selectedNodeIds: string[];
@@ -73,7 +74,7 @@ export function useSelection({
     });
 
     if (meaningful.length > 0) {
-      onNodesChangeBase(meaningful);
+      onNodesChangeBase(withAttachedNoteChanges(meaningful, currentNodes));
     }
   }, [onNodesChangeBase]);
 

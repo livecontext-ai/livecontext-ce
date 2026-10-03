@@ -75,7 +75,8 @@ class ShowcaseSnapshotBuilderStepFilesTest {
                 interfaceClient,
                 workflowStepDataRepository,
                 storageSkeletonService,
-                MAPPER);
+                MAPPER,
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.persistence.StepPayloadService.class));
     }
 
     /** Minimal stand-in for the repository's alias + output-storage projection. */

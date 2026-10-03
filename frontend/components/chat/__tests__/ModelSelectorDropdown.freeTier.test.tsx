@@ -86,6 +86,18 @@ describe('ModelSelectorDropdown - the free tier on the chat path', () => {
     expect(rowOrder()).toEqual(['haiku', 'opus', 'sonnet']);
   });
 
+  it('orders the covered models by the free tier ranking when the admin set one', () => {
+    const ranked = [
+      { id: 'opus', name: 'Opus', provider: 'anthropic', iconSlug: 'anthropic' },
+      { id: 'haiku', name: 'Haiku', provider: 'anthropic', iconSlug: 'anthropic', freeTierEnabled: true, freeTierRank: 2 },
+      { id: 'mini', name: 'Mini', provider: 'anthropic', iconSlug: 'anthropic', freeTierEnabled: true, freeTierRank: 1 },
+    ] as never[];
+
+    openMenu({ prefersFreeTierModels: true, availableModels: ranked });
+
+    expect(rowOrder()).toEqual(['mini', 'haiku', 'opus']);
+  });
+
   it('leaves the catalogue order alone for an account that is not on the free tier', () => {
     openMenu({ prefersFreeTierModels: false });
 

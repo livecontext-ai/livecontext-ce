@@ -4,6 +4,7 @@ import com.apimarketplace.agent.client.AgentClient;
 import com.apimarketplace.agent.client.dto.AgentDto;
 import com.apimarketplace.agent.client.dto.AgentSkillDto;
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.common.publication.ShowcaseCaptureContract;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.storage.service.StorageBreakdownService;
 import com.apimarketplace.common.storage.url.FileProxyUrls;
@@ -146,6 +147,14 @@ public class WorkflowPublicationService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     CustomApiPublishGuard customApiPublishGuard;
+
+    /**
+     * The snapshot size budget shared by every listing type (rows per copied table, total
+     * bytes). Field-injected like the guard above; null in plain unit constructions, which
+     * then get the default limits.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    PublicationSnapshotBudget snapshotBudget;
 
     public WorkflowPublicationService(WorkflowPublicationRepository publicationRepository,
                                        PublicationSnapshotVersionRepository snapshotVersionRepository,
@@ -1745,6 +1754,11 @@ public class WorkflowPublicationService {
             customApiPublishGuard.assertPublishable(publication.getVisibility(), planSnapshot, tenantId, organizationId);
         }
 
+        // Size budget on the fully enriched plan (its tables, sub-workflows and agents' tables
+        // included), before it is set on the entity: publish and update both pass here.
+        (snapshotBudget != null ? snapshotBudget : PublicationSnapshotBudget.defaults(objectMapper))
+                .assertWithinBudget(planSnapshot, PublicationSnapshotBudget.Listing.WORKFLOW);
+
         Map<String, Object> ownerApplicationSnapshot = objectMapper.convertValue(planSnapshot,
                 new TypeReference<Map<String, Object>>() {});
 
@@ -1830,6 +1844,19 @@ public class WorkflowPublicationService {
                             + "successful run.");
         }
 
+        // LC-066: the source run holds Gmail or Google Drive data, so the orchestrator answered a
+        // header-only snapshot marked withheld. The publication goes through without a preview:
+        // there is nothing to copy, replace or screen, and the marker is what the public reads
+        // answer "no preview" from.
+        if (snapshot.get(ShowcaseCaptureContract.WITHHELD_KEY) != null) {
+            publication.setShowcaseSnapshot(snapshot);
+            publication.setShowcaseSnapshotCapturedAt(java.time.Instant.now());
+            publicationRepository.save(publication);
+            logger.info("[ShowcaseSnapshot] run={} holds restricted data: pub={} published without a showcase ({})",
+                    sourceRunIdPublic, publication.getId(), snapshot.get(ShowcaseCaptureContract.WITHHELD_KEY));
+            return;
+        }
+
         // P0 fix: walk the captured run-state and re-namespace any FileRef
         // (image_generation outputs, download_file, sftp downloads, catalog
         // binary tools like Drive/Gmail/S3, …) under the publication's S3
@@ -1904,6 +1931,11 @@ public class WorkflowPublicationService {
         Map<String, Object> snapshot = publication.getShowcaseSnapshot();
         if (snapshot == null || snapshot.isEmpty()) {
             throw new IllegalArgumentException("Cannot choose a showcase epoch before a showcase snapshot exists");
+        }
+        if (snapshot.get(ShowcaseCaptureContract.WITHHELD_KEY) != null) {
+            // LC-066: a withheld snapshot holds no epoch to check; the orchestrator verified the
+            // epoch exists in the run before withholding it.
+            return;
         }
 
         int snapshotEpoch = resolveSnapshotEpochKey(snapshot, showcaseEpoch);
@@ -2915,6 +2947,10 @@ public class WorkflowPublicationService {
                                                            Map<String, String> imageReplacements,
                                                            String tenantId) {
         Map<String, Object> snapshot = publication.getShowcaseSnapshot();
+        if (snapshot.get(ShowcaseCaptureContract.WITHHELD_KEY) != null) {
+            // LC-066: no preview is served, so there is nothing to replace an image in.
+            return;
+        }
         Map<String, String> namespacedReplacements = new java.util.LinkedHashMap<>();
         for (Map.Entry<String, String> repl : imageReplacements.entrySet()) {
             String newPath = copyReplacementImageToPublicationNamespace(
@@ -3485,7 +3521,13 @@ public class WorkflowPublicationService {
                     continue;
                 }
 
-                List<DataSourceItemDto> items = dataSourceClient.getAllItems(dataSourceId, tenantId, organizationId);
+                // Strict on a publish: a failed copy or a table over the row budget refuses it
+                // here (before any data-input file is copied); empty means the table IS empty.
+                // Lenient in the moderation view (PublicationTableCopies.forReview).
+                Object dsName = tableNode.get("_snapshot_ds_name");
+                List<DataSourceItemDto> items = PublicationTableCopies.copy(dataSourceClient, snapshotBudget,
+                        PublicationSnapshotBudget.Listing.WORKFLOW, dataSourceId,
+                        dsName != null ? dsName.toString() : null, tenantId, organizationId);
                 if (items.isEmpty()) continue;
 
                 // Store as lightweight maps: {data: {...}, priority: N}
@@ -4759,6 +4801,10 @@ public class WorkflowPublicationService {
                 logger.info("Snapshotted sub-workflow {} for publication", workflowId);
             } catch (IllegalArgumentException e) {
                 logger.warn("Invalid sub-workflow ID {}, skipping", workflowId);
+            } catch (PublicationValidationException e) {
+                // A sub-workflow table that could not be copied, or is over the row budget,
+                // refuses the publish: skipping it would ship the application without that step.
+                throw e;
             } catch (Exception e) {
                 logger.error("Failed to snapshot sub-workflow {}: {}", workflowId, e.getMessage());
             }

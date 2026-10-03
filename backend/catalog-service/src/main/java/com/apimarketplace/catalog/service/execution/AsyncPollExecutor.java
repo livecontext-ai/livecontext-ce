@@ -97,6 +97,11 @@ public class AsyncPollExecutor {
             throw new AsyncPollFailureException("execution.async.poll.path is required");
         }
         String pollUrl = baseUrl + resolvePollPath(pollPath, responseIdPath, jobId);
+        // The job id comes from the upstream's response and is spliced into the url, and the poll
+        // carries the submit call's credential headers, so the poll target gets the same SSRF
+        // check as every other outbound call (LC-006), on EVERY attempt below, the first one
+        // included: polling can last minutes, long enough for the name to be re-pointed (DNS
+        // rebinding). The pinned transport additionally dials only the address it vetted (LC-073).
 
         // 3. Status config
         JsonNode statusCfg = asyncConfig.path("status");
@@ -109,47 +114,134 @@ public class AsyncPollExecutor {
 
         String resultPath = asyncConfig.path("resultPath").asText(null);
 
-        long deadline = System.currentTimeMillis() + maxWaitMs;
+        long deadline = clock.getAsLong() + maxWaitMs;
         int attempt = 0;
 
-        while (System.currentTimeMillis() < deadline) {
+        while (true) {
             attempt++;
+            // A refusal (AsyncPollFailureException) is final and propagates; a lookup that failed
+            // only skips this attempt: nothing is sent on it.
+            boolean resolved = true;
             try {
-                ResponseEntity<Object> response = restTemplate.exchange(
-                    java.net.URI.create(pollUrl),
-                    HttpMethod.valueOf(pollMethod),
-                    new HttpEntity<>(headers),
-                    Object.class
-                );
-                JsonNode body = objectMapper.valueToTree(response.getBody());
-                String status = readPath(body, statusPath);
-
-                if (status != null) {
-                    if (failureValues.contains(status)) {
-                        throw new AsyncPollFailureException("Async job " + jobId + " ended with failure status: " + status);
-                    }
-                    if (successValues.contains(status)) {
-                        log.info("AsyncPollExecutor: job {} completed after {} attempts", jobId, attempt);
-                        if (resultPath != null && !resultPath.isBlank()) {
-                            JsonNode result = navigatePath(body, resultPath);
-                            return objectMapper.convertValue(result, Object.class);
-                        }
-                        return objectMapper.convertValue(body, Object.class);
-                    }
-                }
-            } catch (AsyncPollFailureException e) {
-                throw e;
-            } catch (Exception e) {
-                log.warn("AsyncPollExecutor: poll attempt {} failed for job {}: {}", attempt, jobId, e.getMessage());
+                checkPollTarget(pollUrl);
+            } catch (com.apimarketplace.common.web.UnresolvableHostException
+                     | com.apimarketplace.common.web.UrlResolutionException unresolved) {
+                resolved = false;
+                log.warn("AsyncPollExecutor: poll host for job {} did not resolve on attempt {}, nothing sent: {}",
+                        jobId, attempt, com.apimarketplace.common.web.UrlLogRedaction.redact(unresolved.getMessage()));
             }
+            if (resolved) {
+                try {
+                    ResponseEntity<Object> response = transport().exchange(
+                        java.net.URI.create(pollUrl),
+                        HttpMethod.valueOf(pollMethod),
+                        new HttpEntity<>(headers),
+                        Object.class
+                    );
+                    JsonNode body = objectMapper.valueToTree(response.getBody());
+                    String status = readPath(body, statusPath);
+
+                    if (status != null) {
+                        if (failureValues.contains(status)) {
+                            throw new AsyncPollFailureException("Async job " + jobId + " ended with failure status: " + status);
+                        }
+                        if (successValues.contains(status)) {
+                            log.info("AsyncPollExecutor: job {} completed after {} attempts", jobId, attempt);
+                            if (resultPath != null && !resultPath.isBlank()) {
+                                JsonNode result = navigatePath(body, resultPath);
+                                return objectMapper.convertValue(result, Object.class);
+                            }
+                            return objectMapper.convertValue(body, Object.class);
+                        }
+                    }
+                } catch (AsyncPollFailureException e) {
+                    throw e;
+                } catch (Exception e) {
+                    // The exception message of a client error quotes the full poll url, query included.
+                    log.warn("AsyncPollExecutor: poll attempt {} failed for job {}: {}", attempt, jobId,
+                            com.apimarketplace.common.web.UrlLogRedaction.redact(e.getMessage()));
+                }
+            }
+            // An interrupt that landed during the attempt (a DNS lookup keeps the flag and reports
+            // it as a failed lookup) ends the poll as what it is, not as a timeout at the deadline.
+            if (Thread.currentThread().isInterrupted()) {
+                throw new AsyncPollFailureException("Polling interrupted for job " + jobId);
+            }
+            // The pause never runs past the deadline, and one last attempt is made AT the deadline:
+            // a host that comes back during the final pause still gets its answer read.
+            long remainingMs = deadline - clock.getAsLong();
+            if (remainingMs <= 0) {
+                break;
+            }
+            long pauseMs = Math.min(resolved ? intervalMs : Math.max(intervalMs, UNRESOLVED_RETRY_MS), remainingMs);
             try {
-                Thread.sleep(intervalMs);
+                pauser.pause(pauseMs);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 throw new AsyncPollFailureException("Polling interrupted for job " + jobId);
             }
         }
         throw new AsyncPollFailureException("Async job " + jobId + " exceeded maxWaitMs=" + maxWaitMs + "ms");
+    }
+
+    /**
+     * The SSRF gate for one poll: the same check as every other outbound call of the catalog
+     * (egress policy + credential host binding). A refusal is final, never retried, and never
+     * echoes the url's query (it can carry the job token or an injected credential).
+     *
+     * <p>A name that did not resolve, or a lookup that timed out, is NOT a refusal: it is thrown
+     * as is, and the poll loop counts it as one failed attempt. The upstream holds a job the user
+     * already paid for, and one DNS incident during minutes of polling used to abandon it
+     * (regression review 2026-09-29); a poll host that never resolves (it can differ from the
+     * submit host) only waits out maxWaitMs. Nothing is sent on such an attempt, and an address
+     * that resolves private is still refused at once.
+     */
+    private static void checkPollTarget(String pollUrl) throws AsyncPollFailureException {
+        try {
+            com.apimarketplace.catalog.service.http.HttpExecutionService.validatedTarget(pollUrl);
+        } catch (com.apimarketplace.common.web.UnresolvableHostException
+                 | com.apimarketplace.common.web.UrlResolutionException unresolved) {
+            throw unresolved;
+        } catch (IllegalArgumentException e) {
+            throw new AsyncPollFailureException("Refusing to poll "
+                    + com.apimarketplace.common.web.UrlLogRedaction.origin(pollUrl) + ": "
+                    + com.apimarketplace.common.web.UrlLogRedaction.redact(e.getMessage()));
+        }
+    }
+
+    /**
+     * Wait after an attempt whose poll host did not resolve. The JVM caches a failed lookup for
+     * 10 s ({@code networkaddress.cache.negative.ttl}), so asking sooner learns nothing, while
+     * every lookup that hangs holds one of the few JVM-wide DNS slots every SSRF check needs.
+     */
+    static final long UNRESOLVED_RETRY_MS = 10_000;
+
+    /** Waits between attempts; replaced in tests so the deadline logic runs on a fake clock. */
+    interface Pauser {
+        void pause(long millis) throws InterruptedException;
+    }
+
+    /** Monotonic: a wall-clock step (NTP) must neither shorten nor stretch maxWaitMs. */
+    private java.util.function.LongSupplier clock = () -> System.nanoTime() / 1_000_000;
+    private Pauser pauser = Thread::sleep;
+
+    /** Test seam: a fake clock and the pause that advances it. */
+    void setTimeSource(java.util.function.LongSupplier clock, Pauser pauser) {
+        this.clock = clock;
+        this.pauser = pauser;
+    }
+
+    /** Pinned transport in production (OutboundHttpClients); the constructor one in unit tests. */
+    private RestTemplate outboundRestTemplate;
+
+    /** Required, as in HttpExecutionService: the poll carries the submit call's credentials. */
+    @org.springframework.beans.factory.annotation.Autowired
+    void setOutboundHttpClients(com.apimarketplace.catalog.service.http.OutboundHttpClients clients) {
+        this.outboundRestTemplate = clients == null ? null : clients.restTemplate();
+    }
+
+    RestTemplate transport() {
+        return outboundRestTemplate != null ? outboundRestTemplate : restTemplate;
     }
 
     /**

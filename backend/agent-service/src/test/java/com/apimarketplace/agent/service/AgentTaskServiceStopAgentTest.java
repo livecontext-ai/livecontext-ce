@@ -350,6 +350,59 @@ class AgentTaskServiceStopAgentTest {
                 .hasMessageContaining("role must be");
     }
 
+    @Test
+    @DisplayName("LC-066: stopping a RESTRICTED task's assignee resolves the task's own conversation, not the agent's")
+    void stopsRestrictedTaskInItsOwnConversation() {
+        UUID taskId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        String taskConversationId = UUID.randomUUID().toString();
+        String streamId = UUID.randomUUID().toString();
+
+        AgentTaskEntity task = buildTask(taskId, AgentTaskEntity.STATUS_IN_PROGRESS);
+        task.setAssigneeExecutionId(UUID.randomUUID());
+        task.setAssignedToAgentId(agentId);
+        task.setDataSensitivity(com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+
+        when(conversationClient.findTaskConversation(agentId.toString(), taskId.toString(), TENANT, ORG))
+                .thenReturn(taskConversationId);
+        when(valueOps.get("stream:conv:" + taskConversationId)).thenReturn(streamId);
+        when(taskRepository.forceUnlockAssigneeExecution(taskId)).thenReturn(1);
+        when(taskRepository.findByIdAndOrganizationIdStrict(taskId, ORG)).thenReturn(Optional.of(task));
+
+        TenantResolver.runWithOrgScope(ORG, () -> service.stopAgentExecution(TENANT, ORG, taskId, "assignee"));
+
+        verify(valueOps).set(eq("agent:cancel:" + streamId), eq("stopped_by_user"), eq(Duration.ofMinutes(5)));
+        verify(conversationClient, never()).findAgentConversation(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("LC-066: a RESTRICTED task tagged while its turn ran in the agent's conversation: no stream in the task's, the agent's is stopped")
+    void stopsRestrictedTaskRunningInAgentConversation() {
+        UUID taskId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        String taskConversationId = UUID.randomUUID().toString();
+        String agentConversationId = UUID.randomUUID().toString();
+        String streamId = UUID.randomUUID().toString();
+
+        AgentTaskEntity task = buildTask(taskId, AgentTaskEntity.STATUS_IN_PROGRESS);
+        task.setAssigneeExecutionId(UUID.randomUUID());
+        task.setAssignedToAgentId(agentId);
+        task.setDataSensitivity(com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+
+        // The task's conversation exists (an earlier turn) but runs nothing now.
+        when(conversationClient.findTaskConversation(agentId.toString(), taskId.toString(), TENANT, ORG))
+                .thenReturn(taskConversationId);
+        when(valueOps.get("stream:conv:" + taskConversationId)).thenReturn(null);
+        when(conversationClient.findAgentConversation(agentId.toString(), TENANT, ORG)).thenReturn(agentConversationId);
+        when(valueOps.get("stream:conv:" + agentConversationId)).thenReturn(streamId);
+        when(taskRepository.forceUnlockAssigneeExecution(taskId)).thenReturn(1);
+        when(taskRepository.findByIdAndOrganizationIdStrict(taskId, ORG)).thenReturn(Optional.of(task));
+
+        TenantResolver.runWithOrgScope(ORG, () -> service.stopAgentExecution(TENANT, ORG, taskId, "assignee"));
+
+        verify(valueOps).set(eq("agent:cancel:" + streamId), eq("stopped_by_user"), eq(Duration.ofMinutes(5)));
+    }
+
     private AgentTaskEntity buildTask(UUID id, String status) {
         AgentTaskEntity task = new AgentTaskEntity();
         task.setId(id);

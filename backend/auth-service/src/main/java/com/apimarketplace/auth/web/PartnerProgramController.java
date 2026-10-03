@@ -20,6 +20,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -36,6 +37,9 @@ import java.util.Map;
  * <ul>
  *   <li>{@code GET  /api/public/partner-program/terms}: the terms a new partner gets, for the
  *       public /partners page. Anonymous (on the gateway public allowlist).</li>
+ *   <li>{@code GET  /api/public/partner-program/codes/{code}}: what a partner code offers a new
+ *       account (its credits), for the page a partner's link opens. Anonymous; 404 for anything
+ *       but a partner code that can be redeemed now, and never who owns the code.</li>
  *   <li>{@code GET  /api/billing/partner/me}: the signed-in user's partner dashboard.</li>
  *   <li>{@code POST /api/billing/partner/applications}: apply to the program, accepting the
  *       Partner Program Terms (V557) in the same request.</li>
@@ -74,6 +78,14 @@ public class PartnerProgramController {
         // The Partner Program Terms version the application form sends back when it applies.
         terms.put("terms_version", termsService.currentVersion());
         return ResponseEntity.ok(terms);
+    }
+
+    @GetMapping("/api/public/partner-program/codes/{code}")
+    public ResponseEntity<Map<String, Object>> codeOffer(@PathVariable("code") String code) {
+        if (unlimited) return error(HttpStatus.SERVICE_UNAVAILABLE, "not_available_in_ce");
+        return service.codeOffer(code)
+                .map(o -> ResponseEntity.ok(Map.<String, Object>of("code", o.code(), "credits", o.credits())))
+                .orElseGet(() -> error(HttpStatus.NOT_FOUND, "unknown_code"));
     }
 
     @GetMapping("/api/billing/partner/me")
@@ -281,6 +293,8 @@ public class PartnerProgramController {
             return line;
         }).toList();
         p.put("lines", lines);
+        // The last 12 calendar months, oldest first: what the partner earned each month.
+        p.put("months", d.months().stream().map(mo -> Map.of("month", mo.month(), "commissions", mo.commissions())).toList());
         m.put("partner", p);
         return m;
     }

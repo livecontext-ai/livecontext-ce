@@ -82,6 +82,13 @@ gateway:
   filter:
     secret-key: ${GATEWAY_SECRET_KEY:}
     verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    # CASA LC-013: /api/agent-tools is a public path (no gateway HMAC), so POST .../execute trusted
+    # a forgeable X-User-ID from anything with network reach. Every in-cluster caller now signs
+    # (RemoteToolExecutionService, RemoteToolGateway, the conversation relay). Arm the gate on the
+    # NEXT deploy, once no caller pod runs the previous image, by setting
+    # AGENT_TOOLS_EXECUTE_HMAC_REQUIRED_PATH=/api/agent-tools/execute. Blank = not armed.
+    hmac-required-paths:
+      - ${AGENT_TOOLS_EXECUTE_HMAC_REQUIRED_PATH:}
     public-paths:
       - /health
       - /actuator
@@ -131,6 +138,10 @@ conversation:
   bridge:
     enabled: ${CONVERSATION_BRIDGE_ENABLED:true}
     url: ${BRIDGE_SERVICE_URL:http://localhost:8093}
+    # LC-022: when true, a run requested by a PLATFORM ADMIN (ADMIN in X-User-Roles) is signed
+    # UNRESTRICTED (native host tools, source checkout, repo/shell MCP tools) unless it is in
+    # restricted "API mode". Every other run is restricted whatever this says. Off by default.
+    host-tools-enabled: ${CONVERSATION_BRIDGE_HOST_TOOLS_ENABLED:false}
 
 # Credential encryption (shared common-security module)
 credential:

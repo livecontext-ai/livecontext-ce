@@ -27,6 +27,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { PageHeader } from './PageHeader';
+import { SettingRow } from './SettingRow';
 
 export const NOTIFICATION_PREFERENCES_QUERY_KEY = 'notification-preferences';
 
@@ -81,32 +83,29 @@ export function NotificationPreferencesPanel({ enabled }: { enabled: boolean }) 
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center space-x-3">
-        <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
-          <Bell className="w-5 h-5 text-theme-primary" />
-        </div>
-        <div>
-          <div className="flex items-center gap-1.5">
-            <h3 className="text-lg font-semibold text-theme-primary">{t('title')}</h3>
-            <InfoPopover
-              label={t('antiSpamInfo')}
-              accessibleName={t('antiSpamInfo')}
-              side="bottom"
-              align="start"
-              data-testid="notification-anti-spam-info"
-              contentTestId="notification-anti-spam-content"
-            >
-              <div className="space-y-2 text-sm text-theme-secondary">
-                <p className="font-semibold text-theme-primary">{t('antiSpamTitle')}</p>
-                <ul className="list-disc space-y-1 pl-4">
-                  {ANTI_SPAM_RULES.map((rule) => <li key={rule}>{t(rule)}</li>)}
-                </ul>
-              </div>
-            </InfoPopover>
-          </div>
-          <p className="text-sm text-theme-secondary">{t('description')}</p>
-        </div>
-      </div>
+      <PageHeader
+        icon={Bell}
+        headingLevel="h2"
+        title={t('title')}
+        subtitle={t('description')}
+        titleAddon={(
+          <InfoPopover
+            label={t('antiSpamInfo')}
+            accessibleName={t('antiSpamInfo')}
+            side="bottom"
+            align="start"
+            data-testid="notification-anti-spam-info"
+            contentTestId="notification-anti-spam-content"
+          >
+            <div className="space-y-2 text-sm text-theme-secondary">
+              <p className="font-semibold text-theme-primary">{t('antiSpamTitle')}</p>
+              <ul className="list-disc space-y-1 pl-4">
+                {ANTI_SPAM_RULES.map((rule) => <li key={rule}>{t(rule)}</li>)}
+              </ul>
+            </div>
+          </InfoPopover>
+        )}
+      />
 
       {isLoading && <p className="text-sm text-theme-secondary">{t('loading')}</p>}
       {isError && (
@@ -248,7 +247,7 @@ function NotificationChannelSection({ onDefaultChanged }: { onDefaultChanged: ()
   return (
     <section className="space-y-2" data-testid="notification-channel">
       <div>
-        <h4 className="text-sm font-medium text-theme-primary">{t('channelTitle')}</h4>
+        <h3 className="text-sm font-medium text-theme-primary">{t('channelTitle')}</h3>
         <p className="text-sm text-theme-secondary">{t('channelIntro')}</p>
       </div>
       {body}
@@ -270,7 +269,7 @@ function TopicRow({
   onChange: (delivery: NotificationDelivery) => void;
 }) {
   const t = useTranslations('settings.notifications');
-  const topicKey = pref.topic.toLowerCase() as 'failures' | 'credits' | 'account' | 'tasks';
+  const topicKey = pref.topic.toLowerCase() as Lowercase<NotificationTopicPreference['topic']>;
 
   // A person-scoped topic goes to the PERSONAL workspace's channel, which this screen (showing
   // the active workspace) cannot vouch for, so its channel options are never disabled here.
@@ -289,22 +288,25 @@ function TopicRow({
     : null;
 
   return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-      <div className="min-w-0">
-        <h4 className="font-medium text-theme-primary text-sm">{t(`topics.${topicKey}.title`)}</h4>
-        <p className="text-sm text-theme-secondary">{t(`topics.${topicKey}.description`)}</p>
-        {pref.personScoped && <p className="text-xs text-theme-secondary mt-1">{t('personScoped')}</p>}
-        {emailHint && <p className="text-xs text-theme-secondary mt-1">{emailHint}</p>}
-        {deliversNothing && (
-          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">{t('deliversNothing')}</p>
-        )}
-      </div>
+    <SettingRow
+      title={t(`topics.${topicKey}.title`)}
+      description={(
+        <>
+          <p className="text-sm text-theme-secondary">{t(`topics.${topicKey}.description`)}</p>
+          {pref.personScoped && <p className="text-xs text-theme-secondary mt-1">{t('personScoped')}</p>}
+          {emailHint && <p className="text-xs text-theme-secondary mt-1">{emailHint}</p>}
+          {deliversNothing && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">{t('deliversNothing')}</p>
+          )}
+        </>
+      )}
+    >
       <Select
         value={pref.delivery}
         onValueChange={(v) => onChange(v as NotificationDelivery)}
         disabled={busy}
       >
-        <SelectTrigger className="w-full sm:w-48 shrink-0" aria-label={t(`topics.${topicKey}.title`)}>
+        <SelectTrigger className="w-full" aria-label={t(`topics.${topicKey}.title`)}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -315,6 +317,6 @@ function TopicRow({
           ))}
         </SelectContent>
       </Select>
-    </div>
+    </SettingRow>
   );
 }

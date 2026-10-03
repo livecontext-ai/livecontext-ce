@@ -77,8 +77,16 @@ import java.util.Set;
         // AttachmentController stays mounted in CE because it uses the regular storage service.
         @ComponentScan.Filter(type = FilterType.REGEX,
             pattern = "com\\.apimarketplace\\.conversation\\.controller\\.v3\\.(ChatControllerV3|StreamControllerV3)"),
+        // The conversation-service internal surface is replaced by monolith re-hosts
+        // (MonolithInternalChatController, CeConversationStubController) because its chat and
+        // stream controllers need cloud streaming wiring. InternalTaskConversationController is the
+        // exception: it only uses ConversationCommandService (already mounted in CE through
+        // ConversationController), and without it agent-service's ConversationClient gets a 404 on
+        // /api/internal/conversations/agent/{a}/task/{t}, so every RESTRICTED delegated task is
+        // refused in CE (LC-066). Kept mounted as is rather than duplicated in a re-host.
         @ComponentScan.Filter(type = FilterType.REGEX,
-            pattern = "com\\.apimarketplace\\.conversation\\.controller\\.internal\\..*"),
+            pattern = "com\\.apimarketplace\\.conversation\\.controller\\.internal\\."
+                + "(?!InternalTaskConversationController$).*"),
         // Exclude conversation Redis config. CE defines servlet-safe Redis adapters explicitly.
         @ComponentScan.Filter(type = FilterType.REGEX,
             pattern = "com\\.apimarketplace\\.conversation\\.config\\.RedisConfig"),

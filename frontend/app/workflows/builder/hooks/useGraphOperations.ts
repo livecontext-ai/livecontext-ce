@@ -11,6 +11,7 @@ import { BuilderNodeData, PaletteDragItem, PaletteItem, createDefaultDecisionCon
 import type { ConnectionType } from '../components/ConnectionTypeSelector';
 import { stripRuntimeProps } from '../utils/nodeDataUtils';
 import { nodeRegistry } from '../registry/nodeRegistry';
+import { withAttachedNoteIds } from '../utils/noteAnchors';
 import { isAncestor as isAncestorOverForwardEdges } from '../utils/backEdgeDetection';
 import { track } from '@/lib/analytics/analytics';
 
@@ -57,7 +58,11 @@ export function useGraphOperations(
 
   const handleDeleteNode = React.useCallback(
     (nodeId: string) => {
-      setNodes((nds) => nds.filter((node) => node.id !== nodeId));
+      // The node's notes go with it (the context-menu and selection deletes do the same).
+      setNodes((nds) => {
+        const removed = new Set(withAttachedNoteIds(nds, [nodeId]));
+        return nds.filter((node) => !removed.has(node.id));
+      });
       setEdges((eds) =>
         eds.filter((edge) => edge.source !== nodeId && edge.target !== nodeId)
       );

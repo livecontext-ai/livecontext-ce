@@ -215,6 +215,25 @@ class HttpExecutionServiceTypedPathTest {
     @DisplayName("executeHttpCallTyped() - V52 fail-fast branches")
     class ExecuteHttpCallTypedFailFast {
 
+        /**
+         * Run {@code body} with only the DNS-resolving layer of the SSRF validator stubbed.
+         *
+         * <p>The typed path now runs that check before every outbound call (LC-006, security
+         * audit 2026-08-13); it previously ran NONE, which is why the tests below never needed
+         * this and started failing the moment the check was introduced. That failure is the
+         * evidence the path really was unguarded.
+         *
+         * <p>Applied per test rather than to the whole class ON PURPOSE: two tests here
+         * (dynamicUrlEndpointRejectsInternalAddress, dynamicUrlHappyPathSendsSignedUriVerbatim)
+         * exercise the REAL validator, and a class-wide stub would silently disarm them.
+         */
+        private <T> T withStubbedDns(java.util.function.Supplier<T> body) {
+            try (org.mockito.MockedStatic<com.apimarketplace.common.web.UrlSafetyValidator> ignored =
+                         org.mockito.Mockito.mockStatic(com.apimarketplace.common.web.UrlSafetyValidator.class)) {
+                return body.get();
+            }
+        }
+
         @Test
         @DisplayName("mode=webhook → falls through to unknown mode rejection (V145)")
         void webhookNowRejectedAsUnknownMode() {
@@ -436,9 +455,9 @@ class HttpExecutionServiceTypedPathTest {
                     .thenReturn(aggregated);
             injectStreamingHandler(streamingResponseHandler);
 
-            Map<String, Object> result = service.executeHttpCallTyped(
+            Map<String, Object> result = withStubbedDns(() -> service.executeHttpCallTyped(
                     api(), tool, objectMapper.createObjectNode(),
-                    new HashSet<>(), "user-1", null, "tenant-1");
+                    new HashSet<>(), "user-1", null, "tenant-1"));
 
             assertThat(result.get("success")).isEqualTo(true);
             assertThat(result.get("data")).isEqualTo(aggregated);
@@ -469,9 +488,9 @@ class HttpExecutionServiceTypedPathTest {
             ApiToolEntity tool = tool(spec);
             injectGraphqlEncoder(new com.apimarketplace.catalog.service.execution.GraphqlBodyEncoder(objectMapper));
 
-            Map<String, Object> result = service.executeHttpCallTyped(
+            Map<String, Object> result = withStubbedDns(() -> service.executeHttpCallTyped(
                     api(), tool, objectMapper.createObjectNode(),
-                    new HashSet<>(), "user-1", null, "tenant-1");
+                    new HashSet<>(), "user-1", null, "tenant-1"));
 
             assertThat(result.get("success")).isEqualTo(false);
             assertThat(result.get("error")).asString()
@@ -497,9 +516,9 @@ class HttpExecutionServiceTypedPathTest {
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class),
                     any(), eq(Object.class))).thenReturn(resp);
 
-            Map<String, Object> result = service.executeHttpCallTyped(
+            Map<String, Object> result = withStubbedDns(() -> service.executeHttpCallTyped(
                     api(), tool, objectMapper.createObjectNode(),
-                    new HashSet<>(), "user-1", null, "tenant-1");
+                    new HashSet<>(), "user-1", null, "tenant-1"));
 
             assertThat(result.get("success")).isEqualTo(true);
             // 'data' must be the inner data field, NOT the full envelope.
@@ -524,9 +543,9 @@ class HttpExecutionServiceTypedPathTest {
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class),
                     any(), eq(Object.class))).thenReturn(resp);
 
-            Map<String, Object> result = service.executeHttpCallTyped(
+            Map<String, Object> result = withStubbedDns(() -> service.executeHttpCallTyped(
                     api(), tool, objectMapper.createObjectNode(),
-                    new HashSet<>(), "user-1", null, "tenant-1");
+                    new HashSet<>(), "user-1", null, "tenant-1"));
 
             assertThat(result.get("success")).isEqualTo(false);
             assertThat(result.get("status")).isEqualTo(0);
@@ -551,9 +570,9 @@ class HttpExecutionServiceTypedPathTest {
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class),
                     any(), eq(Object.class))).thenReturn(resp);
 
-            Map<String, Object> result = service.executeHttpCallTyped(
+            Map<String, Object> result = withStubbedDns(() -> service.executeHttpCallTyped(
                     api(), tool, objectMapper.createObjectNode(),
-                    new HashSet<>(), "user-1", null, "tenant-1");
+                    new HashSet<>(), "user-1", null, "tenant-1"));
 
             assertThat(result.get("success")).isEqualTo(true);
             assertThat(result.get("data")).isEqualTo("<html>oops</html>");
@@ -576,9 +595,9 @@ class HttpExecutionServiceTypedPathTest {
             when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class),
                     any(), eq(Object.class))).thenReturn(resp);
 
-            Map<String, Object> result = service.executeHttpCallTyped(
+            Map<String, Object> result = withStubbedDns(() -> service.executeHttpCallTyped(
                     api(), tool, objectMapper.createObjectNode(),
-                    new HashSet<>(), "user-1", null, "tenant-1");
+                    new HashSet<>(), "user-1", null, "tenant-1"));
 
             // Even though `data` is present, any non-empty errors[] surfaces as failure.
             assertThat(result.get("success")).isEqualTo(false);
@@ -602,9 +621,9 @@ class HttpExecutionServiceTypedPathTest {
                     .thenReturn(aggregatedWithError);
             injectStreamingHandler(streamingResponseHandler);
 
-            Map<String, Object> result = service.executeHttpCallTyped(
+            Map<String, Object> result = withStubbedDns(() -> service.executeHttpCallTyped(
                     api(), tool, objectMapper.createObjectNode(),
-                    new HashSet<>(), "user-1", null, "tenant-1");
+                    new HashSet<>(), "user-1", null, "tenant-1"));
 
             assertThat(result.get("success")).isEqualTo(false);
             // The aggregated map is still surfaced in 'data' so the projector can see partials.

@@ -186,11 +186,11 @@ describe('agent:schedule', () => {
 });
 
 describe('rules that predate the subject', () => {
-  it('workflow:execute still shows the copy it always showed', () => {
+  it('workflow:execute without a subject says it is a workflow run (see ToolAuthorizationCard.runRules)', () => {
     renderCard('en', { rule: 'workflow:execute' });
 
-    expect(screen.getByText('Run this action?')).toBeInTheDocument();
-    expect(screen.getByText('The agent wants to run a sensitive action')).toBeInTheDocument();
+    expect(screen.getByText('Run this workflow?')).toBeInTheDocument();
+    expect(screen.queryByText(/sensitive action/)).not.toBeInTheDocument();
   });
 
   it('application:acquire still shows the install copy', () => {

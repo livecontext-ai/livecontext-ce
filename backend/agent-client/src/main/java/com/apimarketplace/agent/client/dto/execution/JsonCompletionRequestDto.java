@@ -25,11 +25,21 @@ public record JsonCompletionRequestDto(
     String model,
     String system,
     String user,
-    String tenantId
+    String tenantId,
+    /**
+     * {@code RESTRICTED} when the content carries Google restricted-scope data (Gmail, Drive).
+     * agent-service then refuses to run it on a provider outside the restricted-data allow-list,
+     * including when a model execution link would move it there. Null means NORMAL.
+     */
+    String dataSensitivity
 ) {
+    /** Pre-classification shape: NORMAL content. */
+    public JsonCompletionRequestDto(String provider, String model, String system, String user, String tenantId) {
+        this(provider, model, system, user, tenantId, null);
+    }
 
     /** Copy with the model pair replaced (a disabled model swapped for its replacement, V515). */
     public JsonCompletionRequestDto withModel(String newProvider, String newModel) {
-        return new JsonCompletionRequestDto(newProvider, newModel, system, user, tenantId);
+        return new JsonCompletionRequestDto(newProvider, newModel, system, user, tenantId, dataSensitivity);
     }
 }

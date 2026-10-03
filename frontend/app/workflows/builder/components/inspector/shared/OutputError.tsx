@@ -7,6 +7,7 @@
 import React from 'react';
 import { useTranslations } from 'next-intl';
 import { AlertCircleIcon, MinusCircleIcon } from 'lucide-react';
+import { isRestrictedDataRefusal } from '@/lib/api/error-utils';
 
 interface OutputErrorProps {
   error: string;
@@ -14,6 +15,7 @@ interface OutputErrorProps {
 
 export function OutputError({ error }: OutputErrorProps) {
   const t = useTranslations('workflowBuilder.inspector');
+  const tErrors = useTranslations('errors');
 
   return (
     <div className="flex flex-col items-start p-4 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg">
@@ -23,6 +25,13 @@ export function OutputError({ error }: OutputErrorProps) {
           {t('output.error', { defaultValue: 'Execution Error' })}
         </span>
       </div>
+      {/* Agent node refused to send Gmail / Google Drive data to this provider: explain the fix
+          in the reader's language above the raw backend message. */}
+      {isRestrictedDataRefusal(error) && (
+        <p className="text-sm text-red-700 dark:text-red-300 mb-2" data-testid="restricted-data-refusal">
+          {tErrors('restrictedDataProvider')}
+        </p>
+      )}
       <p className="text-sm text-red-700 dark:text-red-300 break-all">
         {error}
       </p>

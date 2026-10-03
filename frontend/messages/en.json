@@ -1,7 +1,7 @@
 {
   "partnerDashboard": {
     "title": "Partner program",
-    "subtitle": "Earn a share of every invoice your clients pay, and carry the official partner badge.",
+    "subtitle": "Recommend LiveContext to the businesses you build for, and carry the official partner badge on your profile and your templates.",
     "learnMore": "How the program works",
     "error": "Could not load your partner program. Try again in a moment.",
     "selfHosted": {
@@ -32,12 +32,22 @@
     "pending": {
       "title": "Application received",
       "body": "We are reviewing the application for {company}. You will get an e-mail as soon as it is decided, and this page will turn into your partner dashboard.",
-      "submittedOn": "Submitted on {date}"
+      "submittedOn": "Submitted on {date}",
+      "steps": {
+        "sent": "Application sent",
+        "review": "Under review",
+        "reply": "Answer by e-mail"
+      }
     },
     "rejected": {
       "title": "Your previous application was not accepted",
       "note": "Our note: {note}",
-      "again": "You can apply again below."
+      "again": "You can apply again whenever you like: tell us what has changed since."
+    },
+    "join": {
+      "title": "Earn up to <rate>{percent}%</rate> of every invoice your clients pay",
+      "apply": "Apply",
+      "reapply": "Apply again"
     },
     "errors": {
       "already_pending": "You already have an application under review.",
@@ -52,13 +62,21 @@
       "not_partner": "Only partners and applicants have terms to accept."
     },
     "toasts": {
-      "applied": "Application sent",
-      "appliedBody": "We will reply by e-mail.",
       "copied": "Copied",
       "copyFailed": "Could not copy"
     },
     "dashboard": {
       "inactive": "Your partner code is inactive, so new sign-ups are not attributed to you. Contact us if this is unexpected.",
+      "hero": {
+        "thisMonth": "Earned this month",
+        "payable": "Ready to be paid: {amount}"
+      },
+      "earnings": {
+        "title": "Your last 12 months",
+        "total": "{amount} over 12 months",
+        "chartLabel": "Your commission each month, from {from} to {to}",
+        "empty": "Your curve starts with your first paying client."
+      },
       "linkTitle": "Your partner link",
       "linkHint": "Share this link. New accounts created through it get {credits} free credits and are attributed to you.",
       "copyLink": "Copy link",
@@ -70,6 +88,70 @@
       "badgeTitle": "Official partner",
       "badgeBody": "Your gold badge shows next to your name on your profile and on the templates you publish.",
       "badgeInactive": "Your badge shows again as soon as your partner code is active.",
+      "conditions": {
+        "title": "Your conditions"
+      },
+      "builder": {
+        "title": "Create a link for a client",
+        "intro": "Recommend a plan: your client gets a page of their own, with that plan in front, its price, and your code included.",
+        "plan": "Plan",
+        "from": "From {price} a month",
+        "credits": "Credits per month",
+        "creditsOption": "{credits} credits",
+        "cycle": "Billing",
+        "monthly": "Monthly",
+        "yearly": "Yearly",
+        "clientSees": "What your client sees",
+        "planLine": "{plan} with {credits} credits a month",
+        "price": "{price} a month",
+        "priceYearly": "{price} a month, billed yearly",
+        "offer": "Plus {credits} free credits with your code {code}",
+        "forYou": "For you",
+        "commission": "About {amount} a month in commission on this client",
+        "commissionYearly": "About {amount} in commission on a yearly invoice",
+        "commissionDetail": "{percent}% of each paid invoice, for {months} months",
+        "copy": "Copy link",
+        "labelField": "Client (optional)",
+        "labelPlaceholder": "For example: Acme",
+        "create": "Create the link",
+        "creating": "Creating...",
+        "created": "Link ready:",
+        "offersTitle": "Your client links",
+        "offersEmpty": "No link yet: create one above.",
+        "unnamed": "Unnamed client",
+        "offerLine": "{plan}, {credits} credits a month, {cycle, select, yearly {yearly} other {monthly}}",
+        "deactivate": "Deactivate",
+        "errors": {
+          "not_partner": "Only a partner can create a link.",
+          "code_inactive": "Your partner code is inactive: a link would lead nowhere.",
+          "too_many_offers": "You have too many live links: deactivate some first.",
+          "too_long": "The client name is too long.",
+          "generic": "The link could not be created. Try again.",
+          "invalid_apps": "One of the chosen apps can no longer be offered (made private, withdrawn or not yours). Check the list and try again.",
+          "too_many_apps": "10 apps at most per link.",
+          "apps_unavailable": "Your apps could not be checked right now. Try again in a moment.",
+          "apps_need_higher_plan": "One of the chosen apps uses vector search, which this plan does not include. Recommend a higher plan or remove that app.",
+          "apps_exceed_plan": "These apps need more interfaces or app slots than this plan includes. Recommend a higher plan or choose fewer apps."
+        },
+        "offersLoading": "Loading your links...",
+        "offersError": "Your links could not be loaded. Reload the page to try again.",
+        "deactivateConfirm": "Deactivate this link? Your client will no longer be able to open it.",
+        "deactivateYes": "Yes, deactivate",
+        "cancel": "Cancel",
+        "deactivateError": "The link could not be deactivated. Try again.",
+        "apps": {
+          "title": "Apps included",
+          "hint": "Your client gets these apps installed in their workspace once they have paid. Only your public or unlisted apps can be offered.",
+          "count": "{count}/{max}",
+          "loading": "Loading your apps...",
+          "error": "Your apps could not be loaded. The link can still be created without them.",
+          "empty": "You have not published an app yet. Publish one from your workflows to offer it here.",
+          "private": "Private: make it unlisted to offer it",
+          "full": "{max} apps at most per link."
+        },
+        "appsLine": "{count, plural, one {# app installed in their workspace after payment} other {# apps installed in their workspace after payment}}",
+        "appsCount": "{count, plural, one {# app} other {# apps}}"
+      },
       "stats": {
         "signups": "Sign-ups",
         "paying": "Paying customers",
@@ -101,8 +183,13 @@
         },
         "founder": "Founding partner",
         "rate": "{percent}% on every paid invoice",
+        "rateShort": "{percent}%",
         "progressLabel": "Progress to {tier}",
         "progress": "{revenue} of {threshold} to reach {tier}",
+        "start": "From day one",
+        "from": "From {amount} in client revenue",
+        "fromShort": "From {amount}",
+        "here": "You are here",
         "top": "You are at the highest tier.",
         "topFounder": "Founding partner: Platinum for the whole of your participation, under the Partner Program Terms (clause 7.5).",
         "hint": "An invoice counts toward your tier once it is {days} days old and was not refunded. Your volume never lowers your tier.",
@@ -119,10 +206,119 @@
       "accepted": "You accepted the <link>Partner Program Terms</link> (version {version}) on {date}."
     }
   },
+  "partnerOffer": {
+    "eyebrow": "Partner offer",
+    "officialPartner": "Official LiveContext partner",
+    "title": "{partner} recommends <gold>{plan}</gold> for you",
+    "titleGeneric": "Your partner recommends <gold>{plan}</gold> for you",
+    "lead": "The plan chosen for you: {credits} credits a month{cycle, select, yearly {, billed yearly} other {}}.",
+    "gift": "Plus {credits} free credits with the code {code}",
+    "cycleLabel": "Billing",
+    "creditsLabel": "Credits per month",
+    "creditsOption": "{credits} credits",
+    "reset": "Back to {partner}'s choice",
+    "resetGeneric": "Back to your partner's choice",
+    "badge": "Recommended by {partner}",
+    "badgeGeneric": "Recommended by your partner",
+    "starterCap": "Starter goes up to {credits} credits a month",
+    "choose": "Choose {plan}",
+    "summaryTitle": "Your choice",
+    "summaryPlan": "{plan} with {credits} credits a month",
+    "pricePeriod": "a month{cycle, select, yearly {, billed yearly} other {}}",
+    "continue": "Continue with {plan}",
+    "opening": "Opening the payment...",
+    "checkoutError": "The payment page could not be opened. Try again.",
+    "alreadySubscribed": "You already have a subscription: change it from your pricing page.",
+    "alreadySubscribedLink": "Open my pricing page",
+    "allPlans": "See every plan",
+    "unavailableTitle": "This offer is no longer available",
+    "unavailableBody": "Your partner may have replaced this link. Our plans are still one click away.",
+    "unavailableCta": "See the plans",
+    "accountError": "Your account could not be read, so the payment cannot open yet.",
+    "retry": "Try again",
+    "metaTitle": "{partner} recommends {plan} for you",
+    "metaTitleGeneric": "Your partner recommends {plan} for you",
+    "metaDescription": "A LiveContext plan chosen for you, with its price and the free credits of the partner code.",
+    "loadErrorTitle": "This offer could not be loaded",
+    "loadErrorBody": "The link is probably fine: our servers did not answer in time. Try again in a moment.",
+    "appsTitle": "The apps {partner} gives you",
+    "appsTitleGeneric": "The apps that come with this offer",
+    "appsIncluded": "{count, plural, one {+ # app included} other {+ # apps included}}",
+    "appsNeedPlan": "The apps in this offer need {plan} or above.",
+    "planTooLow": "The apps in this offer need a higher plan. Choose another plan to continue.",
+    "appsNotForSubscribers": "These apps come with a first subscription taken through this link. Your account already has a subscription, so they are not included.",
+    "welcome": {
+      "title": "Welcome to {plan}",
+      "activating": "Activating your subscription...",
+      "activatingHint": "Your payment went through. This takes a few seconds.",
+      "planActive": "Your plan is active and your credits are ready.",
+      "slowPayment": "Your payment is still being confirmed. You can close this window: your plan and your apps arrive as soon as it is.",
+      "appsTitle": "Your apps from {partner}",
+      "appsTitleGeneric": "Your apps from your partner",
+      "appFallback": "Application",
+      "installing": "Installing...",
+      "open": "Open",
+      "failed": "Could not be installed",
+      "arrivingLater": "Your apps are still on their way: you will find them in Applications in a few minutes.",
+      "unreadable": "This window could not load everything. Your purchase is not affected: the apps your offer includes are installed in the background after the payment, and appear in Applications when ready.",
+      "partnerLine": "{partner} is your partner: ask them anything about your apps.",
+      "partnerLineGeneric": "Your partner is here to help with your apps.",
+      "write": "Write to {partner}",
+      "writeGeneric": "Write to your partner",
+      "writeError": "The conversation could not be opened. Try again from Messages.",
+      "start": "Get started"
+    }
+  },
+  "personalOfferPage": {
+    "metaTitle": "Your personal offer",
+    "loading": "Loading your offer...",
+    "eyebrow": "Personal offer",
+    "signInTitle": "Your personal offer is waiting",
+    "signInLead": "Sign in to see your price, the credits it adds and the time left.",
+    "signIn": "Sign in",
+    "signInError": "The sign-in page could not be opened. Try again.",
+    "seePlans": "See the plans",
+    "backToApp": "Back to LiveContext",
+    "retry": "Try again",
+    "noOffer": "There is no personal offer on this account right now.",
+    "title": "Your first subscription, with <accent>{credits} credits</accent> on top",
+    "titleNoBonus": "Your personal offer",
+    "titleUpTo": "Up to <accent>{credits} credits</accent> on top of your first subscription",
+    "tiersTitle": "Your bonus grows with the credits you choose",
+    "tierFrom": "From {credits} credits a month",
+    "tierBonus": "+{credits} credits",
+    "lead": "The bonus credits are added once your first payment goes through. The price of the plan does not change.",
+    "until": "Offer valid until {date}",
+    "summaryTitle": "Your choice",
+    "summaryPlan": "{plan} with {credits} credits a month",
+    "pricePeriod": "a month{cycle, select, yearly {, billed yearly} other {}}",
+    "bonus": "+{credits} bonus credits (worth {value})",
+    "continue": "Continue with {plan}",
+    "opening": "Opening the payment...",
+    "afterPayment": "Secure payment by Stripe. The bonus is added after the first payment.",
+    "allPlans": "See every plan",
+    "cycleLabel": "Billing",
+    "creditsLabel": "Credits per month",
+    "creditsOption": "{credits} credits",
+    "cardBonus": "+{credits} credits offered",
+    "cardNoBonus": "No bonus with this pack",
+    "starterCap": "Starter goes up to {credits} credits a month",
+    "choose": "Choose {plan}",
+    "checkoutError": "The payment page could not be opened. Try again.",
+    "countdown": {
+      "endsIn": "Ends in",
+      "days": "days",
+      "hours": "hours",
+      "minutes": "min",
+      "seconds": "sec",
+      "ended": "This offer has ended."
+    }
+  },
   "partnersLanding": {
     "metadata": {
       "title": "Partner program for agencies and consultants",
-      "description": "Bring your clients to LiveContext and earn a recurring share of every invoice they pay, rising with your partner tier. An official partner badge and the right to host LiveContext for your clients."
+      "description": "Bring your clients to LiveContext and earn a recurring share of every invoice they pay, rising with your tier. Free to join, official partner badge.",
+      "descriptionRate": "Earn up to {rate}% of every invoice your clients pay on LiveContext. A free partner program for agencies and consultants, with an official badge."
     },
     "hero": {
       "eyebrow": "Partner program",
@@ -272,7 +468,14 @@
       "search": "Search apps, workflows, agents",
       "profile": "Your profile",
       "profileApps": "{count, plural, one {# published app} other {# published apps}}",
-      "profileRating": "{rating} ({count, plural, one {# review} other {# reviews}})"
+      "profileRating": "{rating} ({count, plural, one {# review} other {# reviews}})",
+      "screen": {
+        "running": "Running",
+        "processed": "Invoices this month",
+        "booked": "Booked in QuickBooks",
+        "statusBooked": "Booked",
+        "statusReview": "To review"
+      }
     },
     "how": {
       "eyebrow": "How it works",
@@ -305,7 +508,7 @@
       },
       "hosting": {
         "title": "Host it for your clients",
-        "body": "The LiveContext license lets you install and run it for each client, on their servers or yours, and bill for that work."
+        "body": "The LiveContext license lets you install and run it for each client, on their servers or yours, as part of the services you provide them, and bill for that work."
       },
       "apps": {
         "title": "Deliver apps, not just workflows",
@@ -360,7 +563,7 @@
       },
       "hosting": {
         "question": "Can I install LiveContext for my clients?",
-        "answer": "Yes. The LiveContext license lets a service provider install, host and maintain it for each client, one deployment per client. Running it as your own multi-client platform needs a commercial license: write to us."
+        "answer": "Yes. The LiveContext license lets a service provider install, host and maintain it for its clients, each deployment serving one client, as part of the services it provides them. Selling LiveContext hosting as a product, or running it as your own multi-client platform, needs a commercial license: write to us."
       },
       "credits": {
         "question": "What do my clients get?",
@@ -596,9 +799,10 @@
         "notRedeemable": "This code isn't available right now.",
         "alreadyRedeemed": "You've already redeemed a code.",
         "exhausted": "This code has reached its redemption limit.",
-        "selfReferral": "You can't redeem your own referral code.",
+        "selfReferral": "You can't use your own code.",
         "alreadyPaid": "This code is for new subscriptions only.",
         "alreadyAttributed": "Your account already uses a partner code.",
+        "partnerAccount": "A partner cannot use another partner's code.",
         "emailNotVerified": "Verify your email address to use this code.",
         "notNewAccount": "This code is for new accounts.",
         "nothingToGrant": "Your account already has this plan or a better one.",
@@ -709,6 +913,7 @@
     "acceptError": "Could not accept the invitation. The link may be expired or already used.",
     "emailNotVerified": "Verify your email address before accepting or declining an invitation.",
     "declineError": "Could not decline the invitation. It may be expired or already used.",
+    "requiresLink": "This invitation was sent before your account existed. Open it from the link in the invitation email, or ask an admin to invite you again.",
     "signInRequired": "Please sign in to see your pending invitations.",
     "emptyState": "You have no pending invitations.",
     "invitedToJoin": "{inviter} invited you",
@@ -749,7 +954,7 @@
     "lastName": "Last name",
     "password": "Password",
     "confirmPassword": "Confirm password",
-    "passwordTooShort": "Password must be at least 8 characters",
+    "passwordTooShort": "Password must be at least 12 characters",
     "passwordMismatch": "Passwords do not match",
     "invalidTitle": "Invitation not available",
     "invalidBody": "This invitation link is invalid, expired, or has already been used.",
@@ -942,6 +1147,17 @@
     "file": "File",
     "noOptions": "No options",
     "selectPlaceholder": "Select...",
+    "noTags": "No tags",
+    "saveErrorTitle": "Error saving",
+    "saveErrorMessage": "Failed to save changes",
+    "rowAddedTitle": "Row added",
+    "rowAddedMessage": "New row has been added with priority {priority}",
+    "addRowErrorTitle": "Error adding row",
+    "addRowErrorMessage": "Failed to add row",
+    "rowsDeletedTitle": "Rows deleted",
+    "rowsDeletedMessage": "{count} row(s) have been deleted",
+    "deleteRowsErrorTitle": "Error deleting rows",
+    "deleteRowsErrorMessage": "Failed to delete the selected rows",
     "nameLabel": "Name *",
     "descriptionLabel": "Description",
     "rowsPerPage": "Rows per page:",
@@ -1006,14 +1222,14 @@
       "email": "Email",
       "emailPlaceholder": "you@example.com",
       "password": "Password",
-      "passwordPlaceholder": "At least 8 characters",
+      "passwordPlaceholder": "At least 12 characters",
       "confirmPassword": "Confirm Password",
       "confirmPasswordPlaceholder": "Re-enter your password",
       "submit": "Create Account",
       "hasAccount": "Already have an account?",
       "signIn": "Sign in",
       "passwordMismatch": "Passwords do not match",
-      "passwordTooShort": "Password must be at least 8 characters",
+      "passwordTooShort": "Password must be at least 12 characters",
       "error": "Registration failed"
     },
     "forgotPassword": {
@@ -1194,6 +1410,7 @@
     "signIn": "Sign In",
     "scheduledAgent": "Scheduled agent",
     "webhookAgent": "Webhook agent",
+    "taskConversation": "Task conversation",
     "more": {
       "title": "More",
       "back": "Back"
@@ -1404,6 +1621,7 @@
           "ORG_INVITATION_PENDING": "{count, plural, one {# organization invitation} other {# organization invitations}}",
           "BADGE_UNLOCKED": "{count, plural, one {# new trophy} other {# new trophies}}",
           "CREATOR_PUBLISHED": "{count, plural, one {New app from a creator you follow} other {# new apps from creators you follow}}",
+          "CREATOR_FOLLOWED": "{count, plural, one {New subscriber} other {# new subscribers}}",
           "BUDGET_REACHED": "{count, plural, one {# workflow stopped on its spending cap} other {# workflows stopped on their spending cap}}",
           "CREDIT_LOW": "{count, plural, one {Credits running low} other {Credits running low (#)}}",
           "CREDIT_EXHAUSTED": "{count, plural, one {Out of credits} other {Out of credits (#)}}",
@@ -2099,6 +2317,7 @@
   },
   "errors": {
     "retry": "Retry",
+    "signInUnreachable": "Could not reach the sign-in service. Check your connection and try again.",
     "dismiss": "Dismiss",
     "debugInfo": "Debug Info",
     "pleaseWait": "Please wait {seconds} seconds before retrying.",
@@ -2108,7 +2327,8 @@
     "notFound": "Not Found",
     "server": "Server Error",
     "maintenance": "Maintenance",
-    "unknown": "Error"
+    "unknown": "Error",
+    "restrictedDataProvider": "This conversation or workflow contains data from Gmail or Google Drive, which can only be processed by approved AI providers. Switch to an Anthropic or OpenAI model and try again."
   },
   "runs": {
     "never": "Never",
@@ -2500,6 +2720,7 @@
     "open": "Open",
     "noLandingPreview": "No preview available",
     "previewUnavailable": "Preview not available",
+    "previewWithheldRestrictedData": "No preview: this app's example run contains Gmail or Google Drive data, which is never shown publicly.",
     "skillInstructionsLabel": "Instructions",
     "skillNoInstructions": "No instructions provided.",
     "workflows": {
@@ -2781,6 +3002,10 @@
       "gotIt": "Got it",
       "technicalDetails": "Technical details",
       "kinds": {
+        "restrictedData": {
+          "title": "This data can't be sent to this AI provider",
+          "description": "This conversation or workflow contains data from Gmail or Google Drive, which can only be processed by approved AI providers. Switch to an Anthropic or OpenAI model and try again."
+        },
         "interrupted": {
           "title": "The answer was interrupted",
           "description": "The service restarted while the assistant was answering. The partial response has been saved. Send your message again to continue."
@@ -4577,10 +4802,10 @@
       "stateOff": "Off",
       "stateUnlisted": "Unlisted",
       "listing": {
-        "unlist": "Unlist: keep it available but stop offering it in the pickers",
+        "unlist": "Unlist: keep it available, show it only under Hidden models in the model pickers",
         "list": "List it again",
-        "unlistFromOff": "Make it available again, unlisted: what uses it runs on it, the pickers do not offer it",
-        "unlistedTooltip": "Unlisted: still available, so the agents, workflows and chats that use it keep running on it. Not offered in the pickers (the message composer shows it under hidden models) and never the default. Its replacement is paused."
+        "unlistFromOff": "Make it available again, unlisted: what uses it runs on it, and the pickers show it only under Hidden models",
+        "unlistedTooltip": "Unlisted: still available, so the agents, workflows and chats that use it keep running on it. The model pickers and the message composer show it only under Hidden models, and it is never the default. Its replacement is paused."
       },
       "replacementPaused": "(paused)",
       "replacementPausedTooltip": "Not applied while the model is unlisted: whatever uses it keeps running on it. It applies again if you switch the model off.",
@@ -4628,6 +4853,10 @@
         "browser_agent": {
           "label": "Browser Agent",
           "hint": "Models available to the Browser Agent. Rank sets the default order; disable removes the model from Browser Agent runs."
+        },
+        "free_tier": {
+          "label": "Free tier",
+          "hint": "Models open to the free tier, in the order a Free account sees them. The first one is the model a Free account opens on. This ranking is separate from the Chat / Agent one."
         }
       },
       "freeTierNoneOpen": "No model on this tab is open to the free tier, so the monthly credits the pricing page advertises for chat and agents cannot pay for a turn of this kind: a Free account is refused. Open at least one model with the Free chip above."
@@ -5565,6 +5794,8 @@
       "scopedAccess": "Limited access",
       "scopedAccessHint": "Only the tools you pick",
       "createdAt": "Created {date}",
+      "expiresAt": "Expires {date}",
+      "expired": "Expired {date}",
       "revoke": "Revoke",
       "revokeConfirm": "Revoke key",
       "revokedTitle": "Key revoked",
@@ -6489,6 +6720,12 @@
         "foundingUntilKept": "Founding price guaranteed until <b>{date}</b>, then kept for as long as you stay subscribed",
         "foundingUntil": "Founding price guaranteed until <b>{date}</b>"
       }
+    },
+    "partnerRecommendation": {
+      "title": "Recommended by your partner",
+      "body": "{plan} with {credits} credits a month{cycle, select, yearly {, billed yearly} other {}}: the plan your partner chose for you.",
+      "offer": "With the code {code}, your new account gets {credits} free credits.",
+      "badge": "Recommended by your partner"
     }
   },
   "storage": {
@@ -7198,7 +7435,7 @@
       "updatePassword": "Update Password",
       "changing": "Updating...",
       "passwordMismatch": "The new passwords don't match.",
-      "passwordTooShort": "Your new password must be at least 8 characters.",
+      "passwordTooShort": "Your new password must be at least 12 characters.",
       "currentPasswordIncorrect": "Your current password is incorrect.",
       "passwordChangeSuccess": "Password updated. Please sign in again with your new password.",
       "passwordChangeError": "We couldn't update your password. Please try again.",
@@ -7297,6 +7534,14 @@
         "tasks": {
           "title": "Tasks",
           "description": "A task was assigned to you, mentions you or waits for your review. Sent in the daily summary."
+        },
+        "following": {
+          "title": "Creators you follow",
+          "description": "A creator you subscribed to published a new app. Sent in the daily summary."
+        },
+        "audience": {
+          "title": "New subscribers",
+          "description": "Someone subscribed to you. Sent in the daily summary."
         }
       },
       "delivery": {
@@ -7309,7 +7554,8 @@
     "advanced": {
       "deleteTitle": "Delete Account",
       "deleteWarning": "Your account is deactivated right away, then permanently deleted after a grace period. At that point your data, subscriptions and configurations are gone for good.",
-      "deleteButton": "Delete My Account"
+      "deleteButton": "Delete My Account",
+      "description": "Actions on the account itself, some of which cannot be undone."
     },
     "deleteDialog": {
       "title": "Delete Account?",
@@ -9175,7 +9421,11 @@
       "note": {
         "text": "Note Text",
         "placeholder": "Enter your note text...",
-        "color": "Color"
+        "color": "Color",
+        "attachedTo": "Attached to",
+        "attachedToNone": "No node (free note)",
+        "attachedToHint": "The note sits next to this node, shows when the node is focused, and is deleted with it.",
+        "emptyText": "Double-click to edit..."
       },
       "choices": {
         "title": "Choices",
@@ -10017,7 +10267,28 @@
     "mailboxSendSubtitle": "The agent wants to send a message from the connected mailbox. It reaches the recipient immediately and cannot be recalled.",
     "mailboxDeleteTitle": "Delete this message?",
     "mailboxDeleteSubtitle": "The agent wants to delete a message from the connected mailbox. Only the mail provider still holds it.",
-    "runSubtitle": "The agent wants to run a sensitive action",
+    "runSubtitle": "The agent wants to use a tool that can spend credits or change things outside this chat, so it waits for your OK.",
+    "detailsToggle": "Show details",
+    "workflowExecuteTitle": "Run this workflow?",
+    "workflowExecuteTitleNamed": "Run “{name}”?",
+    "workflowExecuteSubtitle": "Its steps run now: this uses credits and can act on your connected accounts (send messages, write data).",
+    "restartFromNodeTitle": "Re-run part of this run?",
+    "restartFromNodeSubtitle": "A step and every step after it run again, with the same credits and side effects as a new run.",
+    "restartFromNodeSubtitleNamed": "“{node}” and every step after it run again, with the same credits and side effects as a new run.",
+    "runNodeTitle": "Run this step now?",
+    "runNodeSubtitle": "A single step runs right away with your connected accounts, outside any workflow.",
+    "runNodeSubtitleNamed": "A “{nodeType}” step runs right away with your connected accounts, outside any workflow.",
+    "applicationExecuteTitle": "Run this application?",
+    "applicationExecuteSubtitle": "It runs now: this uses credits and can act on your connected accounts.",
+    "agentExecuteTitle": "Start another agent?",
+    "agentExecuteTitleNamed": "Start “{name}”?",
+    "agentExecuteSubtitle": "The agent wants to hand a task to this agent. It uses AI credits while it works and can use its own tools.",
+    "catalogExecuteTitle": "Call an external service?",
+    "catalogExecuteSubtitle": "The agent wants to call a third-party API with your connected account. The call can change data on that service.",
+    "disarmTitle": "Stop this agent from asking you first?",
+    "disarmTitleNamed": "Stop “{name}” from asking you first?",
+    "disarmSubtitle": "The agent wants to turn off this permission prompt for that agent. It would then run paid or external actions without asking you.",
+    "mailboxSendSubtitleTo": "The agent wants to send a message to {to} from the connected mailbox. It reaches the recipient immediately and cannot be recalled.",
     "resolveApprovalTitle": "Resolve this approval?",
     "resolveApprovalSubtitle": "The agent wants to approve or reject a paused workflow run",
     "continueInterfaceTitle": "Continue this interface?",
@@ -11647,7 +11918,8 @@
     "otherConversations": "Other conversations",
     "deleteConversation": "Delete conversation",
     "deleteConversationMessage": "Delete the conversation with {name}? It only disappears from YOUR inbox - a new message brings it back.",
-    "searchPlaceholder": "Search conversations"
+    "searchPlaceholder": "Search conversations",
+    "yourPartner": "Your partner"
   },
   "version": {
     "title": "Version",
@@ -11680,9 +11952,15 @@
     "dismiss": "Got it",
     "learnMore": "See all updates",
     "latest": {
-      "title": "Browse a run epoch by epoch, in your own time zone",
-      "body": "On the canvas, the run pill now unfolds a timeline of every epoch: step through them, jump to the next failure, and the canvas, the Analysis tab and the Logs all follow the epoch you pick. Analysis compares any two epochs side by side. The time zone and language set in your account settings now drive every date in the app and every email you receive, sign-in pages included. And the layout wand now balances the branches on both sides of a fork.",
-      "mediaAlt": "Two icons side by side: a row of bars of different heights, captioned as browsing a run epoch by epoch across the canvas, Analysis and Logs, and a clock, captioned as your time zone and language applied everywhere"
+      "title": "Notes from your agents, and pages that survive a reload",
+      "body": "Agents now attach notes to the node they explain: the canvas places each note beside its node and highlights it when you select that node, in the editor or on a run. Searches, filters, sorts, tabs and page numbers are kept in the address, so a reload or a shared link reopens the page as you left it.\n\nAlso new:\n• Hovering an epoch in the run timeline or in the Analysis charts opens its card, with outcome, dates and duration. Node labels in an epoch comparison are clickable.\n• Before a sensitive action, the chat card names what is about to run and why it asks.\n• The model picker also offers the models an admin has hidden, listed last under their own heading.\n• Progress cells in tables show their caption, and a refused edit puts the stored value back.\n• Pausing a failing workflow ends its \"still failing\" reminders.",
+      "mediaAlt": "Two icons side by side: a sticky note, captioned as notes agents attach beside the node they explain, and a link, captioned as searches, filters, tabs and pages kept in the address"
+    },
+    "latestCloud": {
+      "title": "The LiveContext partner program is open",
+      "body": "Agencies, consultants and freelancers who build automation for clients can now become LiveContext partners. You earn a share of your clients' invoices for 12 months per client: 30% from the day you are approved, then 40% at Gold and 50% at Platinum. The gold partner badge appears next to your name on your marketplace profile, on every app you publish and in search, and your partner space in Settings builds a link for each client with the plan you recommend.\n\nAlso new:\n• Agents attach notes to the node they explain: the canvas places each note beside its node and highlights it when you select that node.\n• Searches, filters, sorts, tabs and page numbers are kept in the address, so a reload or a shared link reopens the page as you left it.\n• Hovering an epoch in the run timeline or in the Analysis charts opens its card, with outcome, dates and duration.\n• Before a sensitive action, the chat card names what is about to run and what it costs.\n• Creators are emailed about new subscribers, and followers about new apps from the creators they follow.\n• Pausing a failing workflow ends its \"still failing\" reminders.",
+      "mediaAlt": "On the left, a partner's marketplace profile with the gold partner badge next to the name and a Platinum chip, captioned as the partner badge on your marketplace profile. On the right, three rising bars in silver, gold and platinum marked 30%, 40% and 50%, captioned as up to 50% for 12 months per client",
+      "action": "Become a partner"
     }
   },
   "optionalComponents": {
@@ -12868,6 +13146,8 @@
     "selfHosted": "Self-hosted",
     "signIn": "Sign in",
     "getStarted": "Get started free",
+    "openApp": "Open the app",
+    "account": "Your account",
     "docs": "Docs",
     "product": "Product",
     "models": "Models",
@@ -16428,5 +16708,34 @@
     "dismiss": "Dismiss",
     "unavailable": "Live updates are not reaching this page.",
     "unavailableHint": "Pages still work, but changes made elsewhere only show after a reload. If this persists, a proxy or firewall may be blocking the live connection."
+  },
+  "securityDisclosure": {
+    "metadata": {
+      "title": "Security vulnerability disclosure",
+      "description": "How to report a security vulnerability in LiveContext, what we commit to, and the rules for good-faith research."
+    },
+    "title": "Security vulnerability disclosure",
+    "intro": "We welcome reports from security researchers and users. If you believe you have found a security vulnerability in LiveContext, please tell us privately so we can fix it before anyone can exploit it.",
+    "reportTitle": "How to report",
+    "reportBody": "Email <email>security@livecontext.ai</email> or use the security category of the <contact>contact form</contact>. Please include a description of the issue, the steps to reproduce it, the affected URL or component, and the impact you observed. Do not open a public issue. You can write in English or French.",
+    "commitTitle": "What we commit to",
+    "commitAck": "We acknowledge your report within 5 business days.",
+    "commitUpdates": "We keep you informed while we investigate and fix the issue, and tell you when it is resolved.",
+    "commitCredit": "If you wish, we credit you in the release notes once the fix ships.",
+    "rulesTitle": "Rules for good-faith research",
+    "rules": {
+      "ownAccount": "Test only against accounts and data you own or are explicitly allowed to use.",
+      "noData": "Do not access, modify or delete data that belongs to other users. If you reach someone else's data by accident, stop and mention it in your report.",
+      "noDisruption": "Do not run denial-of-service tests, send spam, or scan at a volume that degrades the service for other users.",
+      "noSocial": "Do not use social engineering, phishing or physical attacks against our team, our users or our premises.",
+      "disclosure": "Give us a reasonable time to fix the issue before any public disclosure, and agree the timing with us."
+    },
+    "safeHarborTitle": "Good-faith research",
+    "safeHarbor": "If you follow these rules and act in good faith, we will consider your research authorized and will not take legal action against you for it.",
+    "scopeTitle": "Scope",
+    "scopeIn": "In scope: livecontext.ai and its subdomains, and the source code of LiveContext Community Edition.",
+    "scopeOut": "Out of scope: vulnerabilities in third-party services we use (please report them to their vendor), and findings without a demonstrated security impact, such as a missing best-practice header on its own.",
+    "bountyNote": "We do not run a paid bug bounty program at this time.",
+    "machineReadable": "This policy is also referenced from our machine-readable <file>security.txt</file> file."
   }
 }

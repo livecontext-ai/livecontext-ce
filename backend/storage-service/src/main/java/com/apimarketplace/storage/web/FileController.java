@@ -2,6 +2,7 @@ package com.apimarketplace.storage.web;
 
 import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.common.web.ContentDispositions;
+import com.apimarketplace.common.web.SafeFileServeHeaders;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.common.storage.domain.StorageEntity;
 import com.apimarketplace.common.storage.exception.QuotaExceededException;
@@ -286,17 +287,19 @@ public class FileController {
         String fileName = entity.getFileName() != null ? entity.getFileName() : "file";
         String mimeType = entity.getMimeType() != null ? entity.getMimeType()
                 : (entity.getContentType() != null ? entity.getContentType() : "application/octet-stream");
+        // The stored type is whatever the uploader declared: active types (html, xml, js,
+        // unknown) are forced to attachment and every response is nosniff + sandboxed (LC-020).
         String contentDisposition = ContentDispositions.of(
-                "attachment".equalsIgnoreCase(disposition) ? "attachment" : "inline", fileName);
+                SafeFileServeHeaders.dispositionType(mimeType, disposition), fileName);
 
         if (entity.getS3Key() != null) {
             return fileStorageService.openStream(entity.getS3Key())
                 .map(ds -> {
                     final long len = ds.contentLength();
-                    ResponseEntity.BodyBuilder b = ResponseEntity.ok()
+                    ResponseEntity.BodyBuilder b = SafeFileServeHeaders.applyTo(ResponseEntity.ok()
                         .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
                         .header(HttpHeaders.CONTENT_TYPE, mimeType)
-                        .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300");
+                        .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300"), mimeType);
                     if (len >= 0) {
                         b.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(len));
                     }
@@ -323,11 +326,11 @@ public class FileController {
         }
         final byte[] copy = data;
         StreamingResponseBody body = out -> out.write(copy);
-        return ResponseEntity.ok()
+        return SafeFileServeHeaders.applyTo(ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
             .header(HttpHeaders.CONTENT_TYPE, mimeType)
             .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300")
-            .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(copy.length))
+            .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(copy.length)), mimeType)
             .body(body);
     }
 
@@ -442,12 +445,10 @@ public class FileController {
         return fileStorageService.openStream(entity.getS3Key())
             .map(ds -> {
                 final long len = ds.contentLength();
-                ResponseEntity.BodyBuilder b = ResponseEntity.ok()
+                ResponseEntity.BodyBuilder b = SafeFileServeHeaders.applyTo(ResponseEntity.ok()
                     .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
                     .header(HttpHeaders.CONTENT_TYPE, mimeType)
-                    .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400")
-                    .header("X-Content-Type-Options", "nosniff")
-                    .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");
+                    .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400"), mimeType);
                 if (len >= 0) {
                     b.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(len));
                 }

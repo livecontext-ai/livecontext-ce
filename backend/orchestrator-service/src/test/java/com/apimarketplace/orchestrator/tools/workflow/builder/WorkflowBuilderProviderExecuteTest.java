@@ -135,7 +135,7 @@ class WorkflowBuilderProviderExecuteTest {
         lenient().when(agentWorkflowFireService.createRun(any(), any(), eq(dataInputs), eq(TENANT_ID), isNull())).thenReturn(run);
         TriggerExecutionResult tr = TriggerExecutionResult.success(
                 "run-1", "trigger:start", TriggerType.MANUAL, Set.of(), 0);
-        lenient().when(agentWorkflowFireService.fire(run, trigger, dataInputs)).thenReturn(tr);
+        lenient().when(agentWorkflowFireService.fire(run, trigger, dataInputs, false)).thenReturn(tr);
         lenient().when(agentWorkflowFireService.buildResult(eq(run), eq(tr), any(), any(), any()))
                 .thenReturn(Map.of("status", "COMPLETED", "run_id", "run-1"));
         lenient().when(run.getRunIdPublic()).thenReturn("run-1");
@@ -335,7 +335,7 @@ class WorkflowBuilderProviderExecuteTest {
 
         // Critical: resolveTrigger and fire MUST NOT be called for bootstrap-only plans.
         verify(agentWorkflowFireService, never()).resolveTrigger(any(), any());
-        verify(agentWorkflowFireService, never()).fire(any(), any(), any());
+        verify(agentWorkflowFireService, never()).fire(any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -429,7 +429,49 @@ class WorkflowBuilderProviderExecuteTest {
         provider.execute("workflow", p, CTX);
 
         verify(agentWorkflowFireService).createRun(any(), any(), eq(dataInputs), eq(TENANT_ID), isNull());
-        verify(agentWorkflowFireService).fire(run, trigger, dataInputs);
+        verify(agentWorkflowFireService).fire(run, trigger, dataInputs, false);
+    }
+
+    @Test
+    @DisplayName("LC-066: execute from a restricted chat or agent fires the run as restricted")
+    void lc066RestrictedCallerFiresRestrictedRun() {
+        WorkflowEntity entity = manualTriggerWorkflow();
+        Trigger trigger = mock(Trigger.class);
+        WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+        Map<String, Object> dataInputs = Map.of("body", "mail text");
+        stubSuccessfulExecution(entity, trigger, run, dataInputs);
+        TriggerExecutionResult tr = TriggerExecutionResult.success(
+                "run-1", "trigger:start", TriggerType.MANUAL, Set.of(), 0);
+        when(agentWorkflowFireService.fire(run, trigger, dataInputs, true)).thenReturn(tr);
+        when(agentWorkflowFireService.buildResult(eq(run), eq(tr), any(), any(), any()))
+                .thenReturn(Map.of("status", "COMPLETED", "run_id", "run-1"));
+        ToolExecutionContext restricted = new ToolExecutionContext(TENANT_ID,
+                Map.of(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "RESTRICTED"),
+                Map.of(), Set.of(), null, null, null, null);
+
+        Map<String, Object> p = params();
+        p.put("data_inputs", dataInputs);
+        ToolExecutionResult result = provider.execute("workflow", p, restricted);
+
+        assertThat(result.success()).isTrue();
+        verify(agentWorkflowFireService).fire(run, trigger, dataInputs, true);
+        verify(agentWorkflowFireService, never()).fire(run, trigger, dataInputs, false);
+    }
+
+    @Test
+    @DisplayName("LC-066: execute from an ordinary context does not mark the run restricted")
+    void lc066NormalCallerFiresNormalRun() {
+        WorkflowEntity entity = manualTriggerWorkflow();
+        Trigger trigger = mock(Trigger.class);
+        WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+        Map<String, Object> dataInputs = Map.of("body", "public text");
+        stubSuccessfulExecution(entity, trigger, run, dataInputs);
+
+        Map<String, Object> p = params();
+        p.put("data_inputs", dataInputs);
+        provider.execute("workflow", p, CTX);
+
+        verify(agentWorkflowFireService, never()).fire(any(), any(), any(), eq(true));
     }
 
     @Test
@@ -443,7 +485,7 @@ class WorkflowBuilderProviderExecuteTest {
         when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), isNull())).thenReturn(run);
         TriggerExecutionResult tr = TriggerExecutionResult.success(
                 "run-1", "trigger:start", TriggerType.MANUAL, Set.of(), 0);
-        when(agentWorkflowFireService.fire(any(), any(), any())).thenReturn(tr);
+        when(agentWorkflowFireService.fire(any(), any(), any(), anyBoolean())).thenReturn(tr);
         when(agentWorkflowFireService.buildResult(any(), any(), any(), any()))
                 .thenReturn(Map.of("status", "COMPLETED"));
         lenient().when(run.getRunIdPublic()).thenReturn("run-1");
@@ -465,7 +507,7 @@ class WorkflowBuilderProviderExecuteTest {
 
         provider.execute("workflow", params(), CTX);   // no data_inputs param
 
-        verify(agentWorkflowFireService).fire(run, trigger, Map.of());
+        verify(agentWorkflowFireService).fire(run, trigger, Map.of(), false);
     }
 
     // ── exception handling ─────────────────────────────────────────────────
@@ -480,7 +522,7 @@ class WorkflowBuilderProviderExecuteTest {
         lenient().when(run.getRunIdPublic()).thenReturn("run-err");
         when(agentWorkflowFireService.resolveTrigger(any(), any())).thenReturn(trigger);
         when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), isNull())).thenReturn(run);
-        when(agentWorkflowFireService.fire(any(), any(), any()))
+        when(agentWorkflowFireService.fire(any(), any(), any(), anyBoolean()))
                 .thenThrow(new RuntimeException("Redis connection refused"));
 
         ToolExecutionResult result = provider.execute("workflow", params(), CTX);
@@ -537,7 +579,7 @@ class WorkflowBuilderProviderExecuteTest {
                 .thenReturn(run);
         TriggerExecutionResult tr = TriggerExecutionResult.success(
                 "run-replay-3", "trigger:start", TriggerType.MANUAL, Set.of(), 0);
-        when(agentWorkflowFireService.fire(run, trigger, Map.of())).thenReturn(tr);
+        when(agentWorkflowFireService.fire(run, trigger, Map.of(), false)).thenReturn(tr);
         when(agentWorkflowFireService.buildResult(eq(run), eq(tr), any(), any(), any()))
                 .thenReturn(Map.of("status", "COMPLETED", "plan_version", 3));
 
@@ -563,7 +605,7 @@ class WorkflowBuilderProviderExecuteTest {
         lenient().when(run.getRunIdPublic()).thenReturn("run-replay-3");
         when(agentWorkflowFireService.resolveTrigger(any(), any())).thenReturn(trigger);
         when(agentWorkflowFireService.createRunForVersion(any(), any(), eq(3), any(), eq(TENANT_ID), isNull())).thenReturn(run);
-        when(agentWorkflowFireService.fire(any(), any(), any())).thenReturn(
+        when(agentWorkflowFireService.fire(any(), any(), any(), anyBoolean())).thenReturn(
                 TriggerExecutionResult.success("run-replay-3", "trigger:start", TriggerType.MANUAL, Set.of(), 0));
         when(agentWorkflowFireService.buildResult(any(), any(), any(), any(), any())).thenReturn(Map.of());
 
@@ -902,7 +944,7 @@ class WorkflowBuilderProviderExecuteTest {
         when(agentWorkflowFireService.resolveTrigger(any(), any())).thenReturn(trigger);
         TriggerExecutionResult tr = TriggerExecutionResult.success(
                 "run-prod-4", "trigger:start", TriggerType.MANUAL, Set.of(), 0);
-        when(agentWorkflowFireService.fire(prodRun, trigger, Map.of())).thenReturn(tr);
+        when(agentWorkflowFireService.fire(prodRun, trigger, Map.of(), false)).thenReturn(tr);
         when(agentWorkflowFireService.buildResult(eq(prodRun), eq(tr), any(), any(), any()))
                 .thenReturn(Map.of("status", "COMPLETED", "plan_version", 4));
 
@@ -911,7 +953,7 @@ class WorkflowBuilderProviderExecuteTest {
         ToolExecutionResult result = provider.execute("workflow", p, CTX);
 
         assertThat(result.success()).isTrue();
-        verify(agentWorkflowFireService).fire(prodRun, trigger, Map.of());
+        verify(agentWorkflowFireService).fire(prodRun, trigger, Map.of(), false);
         // Critical: no editor run created - the prod run is reused directly.
         verify(agentWorkflowFireService, never()).createRun(any(), any(), any(), any(), any());
         verify(agentWorkflowFireService, never()).createRunForVersion(any(), any(), anyInt(), any(), any(), any());
@@ -935,7 +977,7 @@ class WorkflowBuilderProviderExecuteTest {
         // plan on its canvas is that run's before the (blocking) execute returns.
         inOrder.verify(conversationEventPublisher).publishVisualizationReady(
                 any(), any(), eq("workflow_run"), eq(WF_ID), eq("Execute Test Workflow"), eq("run-1"), eq(5));
-        inOrder.verify(agentWorkflowFireService).fire(any(), any(), any());
+        inOrder.verify(agentWorkflowFireService).fire(any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -1001,7 +1043,7 @@ class WorkflowBuilderProviderExecuteTest {
         when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), eq("all_mcp"))).thenReturn(run);
         TriggerExecutionResult tr = TriggerExecutionResult.success(
                 "run-1", "trigger:start", TriggerType.MANUAL, Set.of(), 0);
-        lenient().when(agentWorkflowFireService.fire(run, trigger, Map.of())).thenReturn(tr);
+        lenient().when(agentWorkflowFireService.fire(run, trigger, Map.of(), false)).thenReturn(tr);
         lenient().when(agentWorkflowFireService.buildResult(eq(run), eq(tr), any(), any(), any()))
                 .thenReturn(Map.of("status", "COMPLETED", "run_id", "run-1"));
         lenient().when(run.getRunIdPublic()).thenReturn("run-1");

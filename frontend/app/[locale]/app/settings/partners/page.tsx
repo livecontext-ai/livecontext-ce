@@ -14,7 +14,8 @@ import Toast, { useToast } from '@/components/Toast';
 import { ApiError } from '@/lib/api/api-client';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { PARTNER_TERMS_VERSION } from '@/lib/partners/terms';
-import { PARTNER_LINK_PARAM } from '@/lib/lifecycle/pendingRewardCode';
+import { SITE_URL } from '@/lib/seo/siteUrl';
+import { partnerLink } from '@/lib/partners/partnerLink';
 import {
   partnerAdminApi,
   type PartnerCodeRow,
@@ -148,7 +149,8 @@ export default function PartnersAdminPage() {
     );
   }
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  // The links an admin copies for a partner or a customer: always on the public site.
+  const origin = SITE_URL;
   const defaults = overview.data?.defaults;
 
   return (
@@ -209,7 +211,7 @@ export default function PartnersAdminPage() {
                     key={row.id}
                     row={row}
                     locale={locale}
-                    link={row.kind === 'partner' ? `${origin}/?${PARTNER_LINK_PARAM}=${row.code}` : `${origin}/redeem?code=${row.code}`}
+                    link={row.kind === 'partner' ? partnerLink(origin, row.code) : `${origin}/redeem?code=${encodeURIComponent(row.code)}`}
                     onCopy={copy}
                     onToggle={() => setActive.mutate({ id: row.id, active: !row.active })}
                     onMarkPaid={() => markPaid.mutate(row.id)}

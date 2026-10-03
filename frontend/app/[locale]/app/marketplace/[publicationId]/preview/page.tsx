@@ -142,6 +142,20 @@ export function MarketplacePreviewInner({ publicationId }: { publicationId: stri
   // publisher MUST see exactly what an anonymous visitor sees - that's why
   // publicPreviewMode is forced true regardless of auth state.
   if (type === 'WORKFLOW') {
+    // LC-066: the showcase is withheld (its run holds Gmail or Google Drive data). Every showcase
+    // read would answer 404, so say why instead of mounting a preview that can only fail.
+    if (publication.showcaseWithheld) {
+      return (
+        <div className="relative flex-1 flex items-center justify-center p-6">
+          <p className="max-w-md text-center text-sm text-theme-muted">
+            {publication.showcaseWithheld === 'RESTRICTED_DATA'
+              ? t('previewWithheldRestrictedData')
+              : t('previewUnavailable')}
+          </p>
+          <PreviewInfoOverlay publication={publication} remote={remote} />
+        </div>
+      );
+    }
     if (!publication.showcaseRunId || !publication.workflowId) {
       return (
         <div className="flex-1 flex items-center justify-center">

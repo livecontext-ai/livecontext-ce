@@ -76,7 +76,7 @@ public class V2TriggerLoadingService {
                 Map<String, Object> chatInput = execution.getChatTriggerInput(nodeId);
                 if (chatInput != null && !chatInput.isEmpty()) {
                     resolvedInputs = chatInput;
-                    log.info("[V2TriggerLoading] Using chat trigger input for {}: {}", nodeId, chatInput);
+                    log.info("[V2TriggerLoading] Using chat trigger input for {}: {}", nodeId, com.apimarketplace.common.logging.PayloadLogSafety.describeAny(chatInput));
                 }
             }
 

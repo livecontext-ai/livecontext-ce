@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select';
 import { matchesVisibilityFilter, type VisibilityFilter } from '@/lib/utils/visibility';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
+import { urlEnum, useUrlSearchState, useUrlState } from '@/hooks/useUrlState';
 import { useWorkflowBoard, type WorkflowBoardSource } from './useWorkflowBoard';
 import { WorkflowBoardCard } from './WorkflowBoardCard';
 import { PinVersionModal } from './PinVersionModal';
@@ -21,6 +22,11 @@ import { parseUtcAware } from '@/lib/utils/dateFormatters';
 type SortField = 'name' | 'lastExecutedAt' | 'runCount' | 'updatedAt';
 type ModifiedFilter = 'all' | '24h' | '7d' | '30d';
 type TriggerFilter = 'all' | 'manual' | 'webhook' | 'schedule' | 'datasource' | 'chat' | 'form' | 'workflow' | 'error';
+
+const SORT_FIELDS = ['name', 'lastExecutedAt', 'runCount', 'updatedAt'] as const;
+const MODIFIED_FILTERS = ['all', '24h', '7d', '30d'] as const;
+const TRIGGER_FILTERS = ['all', 'manual', 'webhook', 'schedule', 'datasource', 'chat', 'form', 'workflow', 'error'] as const;
+const VISIBILITY_FILTERS = ['all', 'public', 'private'] as const;
 
 // Maps backend nodeId (from WorkflowIconExtractor.TRIGGER_TYPE_TO_NODE_ID) → trigger type key
 const TRIGGER_NODE_ID_TO_TYPE: Record<string, TriggerFilter> = {
@@ -96,14 +102,21 @@ export function WorkflowKanbanBoard({ source = 'workflow' }: { source?: Workflow
     pinRequest, closePinRequest, confirmPin, loadMore,
   } = useWorkflowBoard(source);
 
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<SortField>('lastExecutedAt');
-  const [modifiedFilter, setModifiedFilter] = useState<ModifiedFilter>('all');
-  const [triggerFilter, setTriggerFilter] = useState<TriggerFilter>('all');
+  // The board's view lives in the address, so a reload reopens it as it was.
+  const [searchQuery, setSearchQuery] = useUrlSearchState('q');
+  const [sortBy, setSortBy] = useUrlState<SortField>('sort', 'lastExecutedAt', { codec: urlEnum(SORT_FIELDS) });
+  const [modifiedFilter, setModifiedFilter] = useUrlState<ModifiedFilter>('modified', 'all', {
+    codec: urlEnum(MODIFIED_FILTERS),
+  });
+  const [triggerFilter, setTriggerFilter] = useUrlState<TriggerFilter>('trigger', 'all', {
+    codec: urlEnum(TRIGGER_FILTERS),
+  });
   // Visibility filter - narrows to own published cards by marketplace visibility (Public / Private).
   // Cards with no publication (unpublished workflows, acquired apps) have no visibility, so any
   // narrowing drops them - same single-bucket split as /app/applications.
-  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>('all');
+  const [visibilityFilter, setVisibilityFilter] = useUrlState<VisibilityFilter>('visibility', 'all', {
+    codec: urlEnum(VISIBILITY_FILTERS),
+  });
   const [dragCard, setDragCard] = useState<CardType | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<WorkflowBoardColumn | null>(null);
   const [showCreateWorkflow, setShowCreateWorkflow] = useState(false);

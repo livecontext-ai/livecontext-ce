@@ -25,7 +25,7 @@ public final class GatewaySignatureVerifier {
     public static final String HEADER_USER_ID = "X-User-ID";
     public static final String HEADER_ORGANIZATION_ID = "X-Organization-ID";
 
-    /** Maximum allowed clock skew between gateway and this service (5 minutes). */
+    /** Maximum allowed clock skew between gateway and this service (5 minutes), either direction. */
     static final long MAX_TIMESTAMP_AGE_MS = 300_000;
 
     private static final String HMAC_ALGO = "HmacSHA256";
@@ -55,7 +55,9 @@ public final class GatewaySignatureVerifier {
             return false;
         }
         long requestTime = Long.parseLong(timestamp);
-        if (System.currentTimeMillis() - requestTime > MAX_TIMESTAMP_AGE_MS) {
+        // Bounded in BOTH directions (CASA LC-035): a signature dated ahead of now used to stay
+        // valid, and replayable, for as long as its future timestamp had not been reached.
+        if (Math.abs(System.currentTimeMillis() - requestTime) > MAX_TIMESTAMP_AGE_MS) {
             return false;
         }
         String expected = expectedSecret(providerId, timestamp, userId, organizationId);

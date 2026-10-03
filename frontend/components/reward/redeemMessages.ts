@@ -13,6 +13,7 @@ const ERROR_KEY_BY_CODE: Record<string, string> = {
   SELF_REFERRAL: 'errors.selfReferral',
   ALREADY_PAID: 'errors.alreadyPaid',
   ALREADY_ATTRIBUTED: 'errors.alreadyAttributed',
+  PARTNER_ACCOUNT: 'errors.partnerAccount',
   EMAIL_NOT_VERIFIED: 'errors.emailNotVerified',
   REDEEM_RETRY: 'errors.retry',
   NOT_NEW_ACCOUNT: 'errors.notNewAccount',

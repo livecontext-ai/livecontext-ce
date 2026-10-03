@@ -5,6 +5,7 @@ import {
   METADATA_ROUTES,
   PUBLIC_ASSET_DIRECTORIES,
   PUBLIC_ROOT_FILES,
+  PUBLIC_WELL_KNOWN_FILES,
   isServedFilePath,
 } from '../servedFiles';
 import { SITEMAP_PATHS } from '../sitemaps';
@@ -17,11 +18,20 @@ describe('servedFiles - the list matches what is on disk', () => {
   // disappears. Deriving both halves from disk turns that into a CI failure.
   it('names every directory under public/, and no others', () => {
     const onDisk = readdirSync(PUBLIC_DIR, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.isDirectory() && entry.name !== '.well-known')
       .map((entry) => entry.name)
       .sort();
 
     expect([...PUBLIC_ASSET_DIRECTORIES].sort()).toEqual(onDisk);
+  });
+
+  it('names every file under public/.well-known/ one by one, and no others', () => {
+    // .well-known is the one directory NOT served as a prefix (see the module header).
+    const onDisk = readdirSync(join(PUBLIC_DIR, '.well-known'))
+      .map((name) => `/.well-known/${name}`)
+      .sort();
+
+    expect([...PUBLIC_WELL_KNOWN_FILES].sort()).toEqual(onDisk);
   });
 
   it('names every dotted file at the root of public/, and no others', () => {
@@ -91,12 +101,15 @@ describe('servedFiles - what is refused', () => {
     expect(isServedFilePath('/en/sitemap.xml')).toBe(false);
   });
 
-  it('refuses the .well-known namespace, because this site serves nothing there', () => {
+  it('serves security.txt but refuses the rest of the .well-known namespace', () => {
     // Reserving a namespace in an RFC does not make a deployment answer it.
-    // Waving it through meant every ACME probe, security.txt scan and Chrome
-    // devtools lookup collected a 200 with an HTML body.
-    expect(isServedFilePath('/.well-known/security.txt')).toBe(false);
+    // Waving it through meant every ACME probe and Chrome devtools lookup
+    // collected a 200 with an HTML body. security.txt (RFC 9116) is a real file.
+    expect(isServedFilePath('/.well-known/security.txt')).toBe(true);
     expect(isServedFilePath('/.well-known/acme-challenge/x')).toBe(false);
+    expect(isServedFilePath('/.well-known/appspecific/com.chrome.devtools.json')).toBe(false);
+    expect(isServedFilePath('/.well-known/security.txt.bak')).toBe(false);
+    expect(isServedFilePath('/en/.well-known/security.txt')).toBe(false);
   });
 
   it('refuses the probes that hunt for another stack', () => {

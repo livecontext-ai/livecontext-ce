@@ -10,7 +10,8 @@ import { IS_CLOUD } from '@/lib/edition';
 import { useOptionalAuth } from '@/lib/providers/smart-providers';
 import { unifiedApiService } from '@/lib/api/unified-api-service';
 import { useCurrentOrg, useIsCurrentOrgOwner } from '@/lib/stores/current-org-store';
-import { useWorkspaceEntitlements } from '@/hooks/useWorkspaceEntitlements';
+import { organizationApi, type Organization } from '@/lib/api/organization-api';
+import { useSubscription } from '@/lib/hooks/smart-hooks-complete';
 import { readWorkspacePreference, workspacePreferenceKey } from '@/lib/preferences/workspacePreference';
 import { MFA_STATUS_QUERY_KEY, TWO_FACTOR_RETURN_TO } from '@/components/settings/TwoFactorSettingsCard';
 import { track } from '@/lib/analytics/analytics';
@@ -25,11 +26,30 @@ import { track } from '@/lib/analytics/analytics';
  * a new task. Members are not targeted: whether the whole team must use 2FA is the owner's
  * call (the "require two-factor" workspace policy), not ours.
  *
- * <p>Shown when ALL hold: cloud, a team workspace (not the personal one), the user owns it,
- * its plan is Team or above (the same strict rule that unlocks inviting teammates, so an
- * unknown plan never shows it), two-factor is available and off, no enrollment is already
+ * <p>Shown when ALL hold: cloud, an active workspace is resolved, the user owns it (OWNER only:
+ * an ADMIN manages people but never holds the billing), its plan is Team or above (the same
+ * strict rule that unlocks inviting teammates, so an unknown plan never shows it; a personal
+ * workspace counts when its owner is on Team, since the server lets that owner invite into
+ * it), two-factor is available and off, no enrollment is already
  * pending, and it was not dismissed. Dismissal is per user AND per workspace. It also goes
  * away by itself once two-factor is on: the status query is the settings card's own.
+ *
+ * <p>Ownership and plan are read from ONE record: the active workspace's own entry in the
+ * membership list, whose `currentUserRole` and `planCode` (the plan of THAT workspace's owner)
+ * the server computes per workspace. They must never come from two sources. The first version
+ * took the role from the active-workspace store and the plan from the subscription's
+ * `activeOrgPlanCode`, which the gateway derives from the user's DEFAULT workspace, not the
+ * active one: a member of a Team workspace whose browser was still on their own personal
+ * workspace (role OWNER there) combined "owner" from one workspace with "Team" from the other
+ * and was told "You own this team workspace".
+ *
+ * <p>Two cheap pre-filters keep the list request off almost every page load, and the record
+ * still decides: the store must see the user as owner, and the user's OWN subscription must be
+ * Team or above. The second is a necessary condition, not a guess: the plan of a workspace is
+ * its owner's plan, so for a workspace the user owns, it is their own (the two reads only part
+ * in rare billing states, such as a newer incomplete checkout, where the suggestion is skipped
+ * rather than shown to the wrong person). Both fail closed (an unknown or
+ * still-loading plan asks nothing), and neither can make a non-owner eligible.
  *
  * <p>Mounted in the /app layout next to IncidentStrip, for the same reason (a fixed overlay
  * needs no AppShell surgery and cannot remount a running canvas).
@@ -40,13 +60,28 @@ export const TWO_FACTOR_NUDGE_PREFIX = 'lc.twoFactorNudge';
 type NudgeState = 'dismissed';
 const isNudgeState = (value: string | null): value is NudgeState => value === 'dismissed';
 
+/**
+ * The active workspace's record says the user owns it and its owner is on Team or above (the
+ * same strict rule that unlocks inviting teammates). A missing record (list still loading,
+ * failed, or the workspace absent from it) is never an owner.
+ */
+function ownsTeamWorkspace(workspace: Organization | undefined): boolean {
+  return !!workspace && workspace.currentUserRole === 'OWNER' && isTeamPlan(workspace.planCode);
+}
+
+function isTeamPlan(plan: string | null | undefined): boolean {
+  return plan === 'TEAM' || (plan?.startsWith('ENTERPRISE') ?? false);
+}
+
 export default function TwoFactorNudge() {
   const t = useTranslations('twoFactorNudge');
   const locale = useLocale();
   const auth = useOptionalAuth();
   const { currentOrgId } = useCurrentOrg();
   const isOwner = useIsCurrentOrgOwner();
-  const { canInviteTeammates } = useWorkspaceEntitlements();
+  // The user's OWN plan (per-user subscription), never `activeOrgPlanCode` (default workspace).
+  const { subscription } = useSubscription();
+  const ownPlanCode: string | null = subscription?.subscription?.planCode ?? null;
   const userKey = auth?.user?.sub ?? null;
   const prefix = `${TWO_FACTOR_NUDGE_PREFIX}:${userKey ?? 'anonymous'}`;
 
@@ -62,15 +97,26 @@ export default function TwoFactorNudge() {
   }, [key, prefix, currentOrgId]);
   const dismissed = stored === null || stored.key !== key ? null : stored.dismissed;
 
-  const eligible =
+  const candidate =
     IS_CLOUD &&
     !!auth?.isAuthenticated &&
     !auth?.isLoading &&
     userKey !== null &&
     currentOrgId !== null &&
     isOwner &&
-    canInviteTeammates &&
+    isTeamPlan(ownPlanCode) &&
     dismissed === false;
+
+  // Same query (and cache key) as the workspace switcher and the settings selectors, so the
+  // list is fetched at most once for all of them.
+  const { data: workspaces } = useQuery({
+    queryKey: ['organizations', 'memberships'],
+    queryFn: () => organizationApi.getOrganizations(),
+    enabled: candidate,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const eligible = candidate && ownsTeamWorkspace(workspaces?.find((w) => w.id === currentOrgId));
 
   const { data } = useQuery({
     queryKey: MFA_STATUS_QUERY_KEY,

@@ -275,14 +275,34 @@ class InterfaceResourceStrategyTest {
                 null, null, null, null,
                 List.of(), null, null, null, null, null);
         when(dataSourceClient.findByIdAndTenantId(dsId, OWNER, OWNER_ORG)).thenReturn(embedded);
-        when(dataSourceClient.getAllItems(dsId, OWNER, OWNER_ORG)).thenReturn(List.of());
+        when(dataSourceClient.copyAllItems(dsId, OWNER, OWNER_ORG)).thenReturn(List.of());
 
         Map<String, Object> snapshot = strategy.buildSnapshot(id.toString(), OWNER, OWNER_ORG);
 
         assertThat(snapshot).containsKey("embeddedTable");
         verify(dataSourceClient).findByIdAndTenantId(dsId, OWNER, OWNER_ORG);
-        verify(dataSourceClient).getAllItems(dsId, OWNER, OWNER_ORG);
+        verify(dataSourceClient).copyAllItems(dsId, OWNER, OWNER_ORG);
         verify(dataSourceClient, never()).findByIdAndTenantId(dsId, OWNER);
+    }
+
+    @Test
+    @DisplayName("regression (silent empty publish): a failed copy of the embedded table refuses the publish, never ships the page without it")
+    void failedEmbeddedTableCopyRefusesThePublish() {
+        UUID id = UUID.randomUUID();
+        long dsId = 99L;
+        InterfaceDto iface = iface(id, OWNER, "Org page", "d");
+        iface.setDataSourceId(dsId);
+        when(interfaceClient.getInterface(id, OWNER, OWNER_ORG)).thenReturn(iface);
+        when(dataSourceClient.findByIdAndTenantId(dsId, OWNER, OWNER_ORG)).thenReturn(new DataSourceDto(
+                dsId, OWNER, "Embedded", "d", DataSourceTypeDto.INLINE, Map.of(),
+                null, null, null, null, List.of(), null, null, null, null, null));
+        when(dataSourceClient.copyAllItems(dsId, OWNER, OWNER_ORG))
+                .thenThrow(new com.apimarketplace.datasource.client.TableCopyException(dsId, "down", null));
+
+        assertThatThrownBy(() -> strategy.buildSnapshot(id.toString(), OWNER, OWNER_ORG))
+                .isInstanceOfSatisfying(com.apimarketplace.publication.service.PublicationValidationException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(
+                                com.apimarketplace.publication.service.PublicationValidationException.TABLE_COPY_FAILED));
     }
 
     private InterfaceDto iface(UUID id, String tenant, String name, String desc) {

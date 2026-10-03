@@ -57,7 +57,7 @@ oss@livecontext.ai.
 
 ## License of contributions
 
-LiveContext CE is licensed under the LiveContext Sustainable Use License 1.0,
+LiveContext CE is licensed under the LiveContext Sustainable Use License 1.1,
 see [LICENSE](LICENSE) and the plain-language [licensing FAQ](LICENSING.md).
 You keep whatever rights you hold in your contributions. The CLA grants
 LiveContext a license to them that also allows distributing them under other

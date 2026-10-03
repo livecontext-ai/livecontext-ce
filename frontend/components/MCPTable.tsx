@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Search, Plug, Plus, Trash2, FileText } from 'lucide-react';
 import { useUserApis } from '@/hooks/useUserApis';
+import { useUrlSearchState } from '@/hooks/useUrlState';
 import { useTranslations } from 'next-intl';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
@@ -34,7 +35,8 @@ export function MCPTable({ className = '' }: MCPTableProps) {
     const canMutate = useCanMutateInCurrentOrg();
     const locale = getClientLocale();
     const { apis, isLoading: loading, error, fetchUserApis } = useUserApis();
-    const [searchQuery, setSearchQuery] = useState('');
+    // In the address, so a reload keeps the search.
+    const [searchQuery, setSearchQuery] = useUrlSearchState('q');
     const [selectedMCPs, setSelectedMCPs] = useState<Set<string>>(new Set());
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);

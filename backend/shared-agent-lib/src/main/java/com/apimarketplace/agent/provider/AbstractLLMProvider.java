@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.provider;
 
+import com.apimarketplace.common.logging.PayloadLogSafety;
 import com.apimarketplace.agent.domain.*;
 import com.apimarketplace.agent.streaming.StreamingCallback;
 import com.apimarketplace.agent.streaming.StreamingEvent;
@@ -765,7 +766,8 @@ public abstract class AbstractLLMProvider implements LLMProvider {
             if (responseCode >= 400) {
                 String errorMessage = readErrorStream(connection);
                 log.error("HTTP {} from {} streaming - body length was {} chars, error: {}",
-                    responseCode, getProviderName(), requestJson.length(), errorMessage);
+                    responseCode, getProviderName(), requestJson.length(),
+                    PayloadLogSafety.describeText(errorMessage, 300));
                 // THE place to classify this: the streaming transport flattens the status into a
                 // string here, so by the time the agent loop sees it there is nothing left to
                 // branch on, and the route is right here on the request. Until this, a key that
@@ -856,7 +858,8 @@ public abstract class AbstractLLMProvider implements LLMProvider {
                     .onStatus(status -> status.isError(), response ->
                             response.bodyToMono(String.class)
                                     .doOnNext(body -> log.error("HTTP error from {}: {} - {}",
-                                            getProviderName(), response.statusCode(), body))
+                                            getProviderName(), response.statusCode(),
+                                            PayloadLogSafety.describeText(body, 300)))
                                     .map(body -> new LLMProviderException(getProviderName(),
                                             "HTTP " + response.statusCode() + ": " + extractErrorMessage(body))))
                     .bodyToFlux(String.class)
@@ -912,7 +915,8 @@ public abstract class AbstractLLMProvider implements LLMProvider {
 
                         // Check for error in response (some APIs return error in SSE format)
                         if (line.contains("\"error\"")) {
-                            log.error("💥 [STREAM] Error in SSE response from {}: {}", getProviderName(), line);
+                            log.error("💥 [STREAM] Error in SSE response from {}: {}", getProviderName(),
+                                PayloadLogSafety.describeText(line, 300));
                             String errorMsg = extractErrorMessage(line.startsWith("data: ") ? line.substring(6) : line);
                             sink.next(StreamingEvent.error(errorMsg, null));
                             hasEmittedContent.set(true);
@@ -941,7 +945,8 @@ public abstract class AbstractLLMProvider implements LLMProvider {
 
                         // If no content was emitted, there might be an error we missed
                         if (fullContent.length() == 0) {
-                            log.warn("⚠️ [STREAM] Completed with no content! Raw response:\n{}", rawResponse);
+                            log.warn("⚠️ [STREAM] Completed with no content! Raw response: {}",
+                                PayloadLogSafety.describeText(rawResponse.toString(), 2000));
                             if (!hasEmittedContent.get()) {
                                 sink.next(StreamingEvent.error("Stream completed with no content - possible API error", null));
                             }
@@ -1217,7 +1222,7 @@ public abstract class AbstractLLMProvider implements LLMProvider {
         String body = e.getResponseBodyAsString();
         Optional<Duration> retryAfter = parseRetryAfter(e.getResponseHeaders(), body);
 
-        log.error("{} API error: {} - {}", getProviderName(), status, body);
+        log.error("{} API error: {} - {}", getProviderName(), status, PayloadLogSafety.describeText(body, 300));
 
         String ownKeyProblem = ownKeyRejection(request, status.value());
         if (ownKeyProblem != null) {
@@ -1610,7 +1615,7 @@ public abstract class AbstractLLMProvider implements LLMProvider {
                     try {
                         args = objectMapper.readValue(argsJson, Map.class);
                     } catch (JsonProcessingException e) {
-                        log.warn("Failed to parse tool call arguments: {}", argsJson);
+                        log.warn("Failed to parse tool call arguments: {}", PayloadLogSafety.describeText(argsJson, 500));
                     }
                 }
 

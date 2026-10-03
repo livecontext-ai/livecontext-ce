@@ -27,6 +27,7 @@ public class MessageMapper {
         dto.setModel(message.getModel());
         dto.setAgentId(message.getAgentId());
         dto.setExecutionId(message.getExecutionId());
+        dto.setDataSensitivity(message.getDataSensitivity());
         dto.setFeedback(message.getFeedback() != null ? message.getFeedback().intValue() : null);
         dto.setTimestamp(message.getTimestamp());
         dto.setCreatedAt(message.getCreatedAt());
@@ -48,6 +49,7 @@ public class MessageMapper {
         message.setModel(dto.getModel());
         message.setAgentId(dto.getAgentId());
         message.setExecutionId(dto.getExecutionId());
+        message.setDataSensitivity(dto.getDataSensitivity());
         message.setTimestamp(dto.getTimestamp());
         return message;
     }

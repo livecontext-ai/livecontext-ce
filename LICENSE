@@ -1,4 +1,4 @@
-LiveContext Sustainable Use License 1.0
+LiveContext Sustainable Use License 1.1
 
 Copyright (c) 2026 LiveContext SAS
 
@@ -32,6 +32,10 @@ Licensed Work:   LiveContext Community Edition and its source code.
    Licensed Work in a competitive offering, or packaging the competitive
    offering in such a way that the Licensed Work must be accessed or
    downloaded for the competitive offering to operate.
+
+   Operating the Licensed Work so that third parties can use it, on any
+   infrastructure, including infrastructure they own or rent, is providing
+   it to them on a hosted basis.
 
    If your use of the Licensed Work does not comply with the requirements
    of this License, you must obtain a commercial license from the
@@ -103,11 +107,46 @@ Licensed Work:   LiveContext Community Edition and its source code.
    (d) You give the client a copy of this License, and the client's use
        of the deployment remains subject to it.
 
+   (e) You provide that client, under an agreement with that client,
+       services of your own beyond making the Licensed Work available,
+       such as setup, configuration, building workflows, interfaces or
+       integrations, training, maintenance or support. A deployment you
+       keep running for up to 90 days after those services end, to hand
+       it over to the client, still meets this condition.
+
+   This Section 7 does not cover hosting offerings. A "hosting offering"
+   is an offer made to customers generally, under any name or brand,
+   whose main purpose is to provide deployments of the Licensed Work that
+   you, or a platform or partner acting with you, run for the customer,
+   wherever those deployments run: for example one-click or marketplace
+   deployments run by the platform, hosting plans or tiers that anyone can
+   order, or deployments provisioned through self-service sign-up. Deployments
+   sold by advertising the hosting of the Licensed Work as a product of
+   its own (for example "LiveContext hosting" or "managed LiveContext")
+   are part of a hosting offering. A hosting offering made on a paid
+   basis is a competitive offering under Section 2 and requires a
+   commercial license.
+
+   Publishing templates, images, scripts or catalogue entries that let
+   others deploy the Licensed Work on infrastructure they control and
+   operate themselves is not a hosting offering. Describing publicly,
+   with prices, the services you provide clients under this Section,
+   hosting and maintenance included, is not by itself a hosting
+   offering.
+
    A service provider that operates separate deployments for several
-   clients, each meeting the conditions above, is not providing a
-   competitive offering under Section 2 by doing so. Notwithstanding
-   Section 5, a failure to meet these conditions for one deployment
-   terminates the permissions of this Section 7 for that deployment only.
+   clients, each meeting the conditions above and none of them part of a
+   hosting offering, is not providing a competitive offering under
+   Section 2 by doing so. Notwithstanding Section 5, a failure to meet
+   these conditions for one deployment terminates the permissions of this
+   Section 7 for that deployment only. If you stop a deployment or an
+   offering that does not meet this Section 7, or bring it in line, before
+   the Licensor notifies you or within 30 days of the Licensor's notice,
+   Section 5 does not apply to it, and a deployment brought in line keeps
+   the permissions of this Section 7. This applies to the first such
+   notice only.
+
    Building workflows, interfaces, templates or other content with the
-   Licensed Work, for yourself or for clients, is always permitted, and that content is not part of the Licensed Work,
-   except for any portion of the Licensed Work it contains or copies.
+   Licensed Work, for yourself or for clients, is always permitted, and
+   that content is not part of the Licensed Work, except for any portion
+   of the Licensed Work it contains or copies.

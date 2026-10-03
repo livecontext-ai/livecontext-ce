@@ -69,4 +69,61 @@ class InternalPublicationSupportControllerFullSnapshotTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isSameAs(snapshot);
     }
+
+    @Test
+    @DisplayName("LC-066: the run-restricted lookup answers the builder's verdict")
+    void runRestrictedAnswersTheVerdict() {
+        when(showcaseSnapshotBuilder.sourceRunExists("run-gmail")).thenReturn(true);
+        when(showcaseSnapshotBuilder.sourceRunExists("run-plain")).thenReturn(true);
+        when(showcaseSnapshotBuilder.isSourceRunRestricted("run-gmail")).thenReturn(true);
+        when(showcaseSnapshotBuilder.isSourceRunRestricted("run-plain")).thenReturn(false);
+
+        assertThat(controller.isRunRestricted("run-gmail").getBody())
+                .isEqualTo(Map.of("runExists", true, "restricted", true));
+        assertThat(controller.isRunRestricted("run-plain").getBody())
+                .isEqualTo(Map.of("runExists", true, "restricted", false));
+    }
+
+    @Test
+    @DisplayName("LC-066 r5-3: a restricted run also says when its first restricted payload was written")
+    void runRestrictedAnswersWhenItBecameRestricted() {
+        java.time.Instant first = java.time.Instant.parse("2026-09-20T10:15:30Z");
+        when(showcaseSnapshotBuilder.sourceRunExists("run-gmail")).thenReturn(true);
+        when(showcaseSnapshotBuilder.isSourceRunRestricted("run-gmail")).thenReturn(true);
+        when(showcaseSnapshotBuilder.sourceRunFirstRestrictedAt("run-gmail")).thenReturn(Optional.of(first));
+        when(showcaseSnapshotBuilder.sourceRunExists("run-plain")).thenReturn(true);
+        when(showcaseSnapshotBuilder.isSourceRunRestricted("run-plain")).thenReturn(false);
+
+        assertThat(controller.isRunRestricted("run-gmail").getBody()).isEqualTo(Map.of(
+                "runExists", true, "restricted", true, "firstRestrictedAt", "2026-09-20T10:15:30Z"));
+        // A clean run is never asked when it became restricted.
+        assertThat(controller.isRunRestricted("run-plain").getBody())
+                .isEqualTo(Map.of("runExists", true, "restricted", false));
+        org.mockito.Mockito.verify(showcaseSnapshotBuilder, org.mockito.Mockito.never())
+                .sourceRunFirstRestrictedAt("run-plain");
+    }
+
+    @Test
+    @DisplayName("LC-066 regression: a deleted run answers runExists=false and no restricted verdict (its payloads are gone too)")
+    void runRestrictedLookupOfADeletedRunSaysSo() {
+        when(showcaseSnapshotBuilder.sourceRunExists("run-gone")).thenReturn(false);
+
+        ResponseEntity<?> response = controller.isRunRestricted("run-gone");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isEqualTo(Map.of("runExists", false));
+        org.mockito.Mockito.verify(showcaseSnapshotBuilder, org.mockito.Mockito.never()).isSourceRunRestricted("run-gone");
+    }
+
+    @Test
+    @DisplayName("LC-066: a failed run-restricted lookup is a 500, never restricted=false")
+    void runRestrictedLookupFailureIsAServerError() {
+        when(showcaseSnapshotBuilder.sourceRunExists("run-x")).thenReturn(true);
+        when(showcaseSnapshotBuilder.isSourceRunRestricted("run-x")).thenThrow(new IllegalStateException("db down"));
+
+        ResponseEntity<?> response = controller.isRunRestricted("run-x");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        assertThat(response.getBody()).isNotEqualTo(Map.of("restricted", false));
+    }
 }

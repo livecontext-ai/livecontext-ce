@@ -28,6 +28,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import com.apimarketplace.common.classification.DataSensitivity;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -77,7 +78,7 @@ class AgentTaskServiceExecutionDispatchTest {
         when(conversationClient.findOrCreateAgentConversation(agentId.toString(), TENANT, "DeepSeek Worker", ORG))
                 .thenReturn(CONVERSATION_ID);
         when(conversationClient.sendChatSync(eq(TENANT), eq(CONVERSATION_ID), contains("Complete the assigned task"),
-                eq(agentId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK"), eq(taskId.toString()), eq(ORG), isNull(), anyString()))
+                eq(agentId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK"), eq(taskId.toString()), eq(ORG), isNull(), anyString(), eq(DataSensitivity.NORMAL)))
                 .thenReturn(Map.of("success", true));
 
         TenantResolver.runWithOrgScope(ORG, () -> invokePrivate("executeAgentForTask", task));
@@ -85,8 +86,31 @@ class AgentTaskServiceExecutionDispatchTest {
         verify(agentRepository).findTaskDispatchViewByIdAndOrganizationIdStrict(agentId, ORG);
         verify(agentRepository, never()).findByIdAndOrganizationIdStrict(any(UUID.class), anyString());
         verify(conversationClient).sendChatSync(eq(TENANT), eq(CONVERSATION_ID), contains("Complete the assigned task"),
-                eq(agentId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK"), eq(taskId.toString()), eq(ORG), isNull(), anyString());
+                eq(agentId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK"), eq(taskId.toString()), eq(ORG), isNull(), anyString(), eq(DataSensitivity.NORMAL));
         verify(self).unlockAssigneeExecution(eq(taskId), any(UUID.class));
+    }
+
+    @Test
+    @DisplayName("LC-066: a RESTRICTED task is dispatched RESTRICTED, in the task's own conversation")
+    void lc066RestrictedTaskIsDispatchedRestricted() {
+        UUID taskId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        AgentTaskEntity task = task(taskId, agentId);
+        task.setDataSensitivity(DataSensitivity.RESTRICTED.name());
+        when(self.tryLockAssigneeExecution(eq(taskId), any(UUID.class))).thenReturn(true);
+        when(agentRepository.findTaskDispatchViewByIdAndOrganizationIdStrict(agentId, ORG))
+                .thenReturn(Optional.of(new AgentTaskDispatchView(agentId, "Worker", "anthropic", "claude-sonnet-4-5", true)));
+        when(conversationClient.findOrCreateTaskConversation(eq(agentId.toString()), eq(taskId.toString()), eq(TENANT),
+                anyString(), eq(ORG))).thenReturn(CONVERSATION_ID);
+        when(conversationClient.sendChatSync(anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), isNull(), anyString(), any())).thenReturn(Map.of("success", true));
+
+        TenantResolver.runWithOrgScope(ORG, () -> invokePrivate("executeAgentForTask", task));
+
+        verify(conversationClient).sendChatSync(eq(TENANT), eq(CONVERSATION_ID), anyString(), eq(agentId.toString()),
+                eq("claude-sonnet-4-5"), eq("anthropic"), eq("TASK"), eq(taskId.toString()), eq(ORG), isNull(), anyString(),
+                eq(DataSensitivity.RESTRICTED));
+        verify(conversationClient, never()).findOrCreateAgentConversation(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -122,7 +146,7 @@ class AgentTaskServiceExecutionDispatchTest {
             when(conversationClient.findOrCreateAgentConversation(agentId.toString(), TENANT, "DeepSeek Worker", ORG))
                     .thenReturn(CONVERSATION_ID);
             when(conversationClient.sendChatSync(eq(TENANT), eq(CONVERSATION_ID), contains("Complete the assigned task"),
-                    eq(agentId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK"), eq(taskId.toString()), eq(ORG), isNull(), anyString()))
+                    eq(agentId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK"), eq(taskId.toString()), eq(ORG), isNull(), anyString(), eq(DataSensitivity.NORMAL)))
                     .thenReturn(Map.of("success", false, "error", "Agent execution failed"));
             when(taskRepository.findByIdAndOrganizationIdStrict(taskId, ORG)).thenReturn(Optional.of(submittedTask));
 
@@ -180,13 +204,13 @@ class AgentTaskServiceExecutionDispatchTest {
         when(conversationClient.findOrCreateAgentConversation(agentId.toString(), TENANT, "Worker", ORG))
                 .thenReturn(CONVERSATION_ID);
         when(conversationClient.sendChatSync(anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), isNull(), anyString())).thenReturn(Map.of("success", true));
+                anyString(), anyString(), anyString(), isNull(), anyString(), eq(DataSensitivity.NORMAL))).thenReturn(Map.of("success", true));
 
         TenantResolver.runWithOrgScope(ORG, () -> invokePrivate("executeAgentForTask", task));
 
         verify(conversationClient).sendChatSync(eq(TENANT), eq(CONVERSATION_ID), anyString(), eq(agentId.toString()),
                 eq("deepseek-chat"), eq("deepseek"), eq("TASK"), eq(taskId.toString()), eq(ORG), isNull(),
-                eq(lock.getValue().toString()));
+                eq(lock.getValue().toString()), eq(DataSensitivity.NORMAL));
     }
 
     @Test
@@ -205,7 +229,7 @@ class AgentTaskServiceExecutionDispatchTest {
         when(conversationClient.findOrCreateAgentConversation(reviewerId.toString(), TENANT, "Reviewer", ORG))
                 .thenReturn(CONVERSATION_ID);
         when(conversationClient.sendChatSync(anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyString(), anyString())).thenReturn(Map.of("success", true));
+                anyString(), anyString(), anyString(), anyString(), anyString(), eq(DataSensitivity.NORMAL))).thenReturn(Map.of("success", true));
         when(self.incrementReviewAttemptCount(eq(taskId), eq(TENANT), eq(reviewerId), any(UUID.class))).thenReturn(0);
 
         TenantResolver.runWithOrgScope(ORG, () -> invokePrivate("executeReviewerForTask", task));
@@ -213,7 +237,34 @@ class AgentTaskServiceExecutionDispatchTest {
         String lockId = lock.getValue().toString();
         verify(conversationClient).sendChatSync(eq(TENANT), eq(CONVERSATION_ID), anyString(), eq(reviewerId.toString()),
                 eq("deepseek-chat"), eq("deepseek"), eq("TASK_REVIEW"), eq(taskId.toString()), eq(ORG),
-                eq(lockId), eq(lockId));
+                eq(lockId), eq(lockId), eq(DataSensitivity.NORMAL));
+    }
+
+    @Test
+    @DisplayName("LC-066: the reviewer of a RESTRICTED task is dispatched RESTRICTED (it reads the task and its result)")
+    void lc066ReviewerOfRestrictedTaskIsDispatchedRestricted() {
+        UUID taskId = UUID.randomUUID();
+        UUID reviewerId = UUID.randomUUID();
+        AgentTaskEntity task = task(taskId, UUID.randomUUID());
+        task.setStatus(AgentTaskEntity.STATUS_IN_REVIEW);
+        task.setReviewerAgentId(reviewerId);
+        task.setDataSensitivity(DataSensitivity.RESTRICTED.name());
+        when(taskRepository.findByIdAndOrganizationIdStrict(taskId, ORG)).thenReturn(Optional.of(task));
+        when(self.tryLockReviewerExecution(eq(taskId), any(UUID.class))).thenReturn(true);
+        when(agentRepository.findTaskDispatchViewByIdAndOrganizationIdStrict(reviewerId, ORG))
+                .thenReturn(Optional.of(new AgentTaskDispatchView(reviewerId, "Reviewer", "openai", "gpt-5", true)));
+        when(conversationClient.findOrCreateTaskConversation(eq(reviewerId.toString()), eq(taskId.toString()), eq(TENANT),
+                anyString(), eq(ORG))).thenReturn(CONVERSATION_ID);
+        when(conversationClient.sendChatSync(anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), any())).thenReturn(Map.of("success", true));
+        when(self.incrementReviewAttemptCount(eq(taskId), eq(TENANT), eq(reviewerId), any(UUID.class))).thenReturn(0);
+
+        TenantResolver.runWithOrgScope(ORG, () -> invokePrivate("executeReviewerForTask", task));
+
+        verify(conversationClient).sendChatSync(eq(TENANT), eq(CONVERSATION_ID), anyString(), eq(reviewerId.toString()),
+                eq("gpt-5"), eq("openai"), eq("TASK_REVIEW"), eq(taskId.toString()), eq(ORG),
+                anyString(), anyString(), eq(DataSensitivity.RESTRICTED));
+        verify(conversationClient, never()).findOrCreateAgentConversation(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -235,7 +286,7 @@ class AgentTaskServiceExecutionDispatchTest {
                 .thenReturn(CONVERSATION_ID);
         when(conversationClient.sendChatSync(eq(TENANT), eq(CONVERSATION_ID), contains("Review this task result"),
                 eq(reviewerId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK_REVIEW"),
-                eq(taskId.toString()), eq(ORG), anyString(), anyString()))
+                eq(taskId.toString()), eq(ORG), anyString(), anyString(), eq(DataSensitivity.NORMAL)))
                 .thenReturn(Map.of("success", true));
         when(self.incrementReviewAttemptCount(eq(taskId), eq(TENANT), eq(reviewerId), any(UUID.class))).thenReturn(0);
 
@@ -245,7 +296,7 @@ class AgentTaskServiceExecutionDispatchTest {
         verify(agentRepository, never()).findByIdAndOrganizationIdStrict(any(UUID.class), anyString());
         verify(conversationClient).sendChatSync(eq(TENANT), eq(CONVERSATION_ID), contains("Review this task result"),
                 eq(reviewerId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK_REVIEW"),
-                eq(taskId.toString()), eq(ORG), anyString(), anyString());
+                eq(taskId.toString()), eq(ORG), anyString(), anyString(), eq(DataSensitivity.NORMAL));
         verify(self).unlockReviewerExecution(eq(taskId), any(UUID.class));
     }
 
@@ -280,7 +331,7 @@ class AgentTaskServiceExecutionDispatchTest {
                 "Current Reviewer", ORG)).thenReturn(CONVERSATION_ID);
         when(conversationClient.sendChatSync(eq(TENANT), eq(CONVERSATION_ID), contains("CURRENT_RESULT"),
                 eq(currentReviewerId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK_REVIEW"),
-                eq(taskId.toString()), eq(ORG), anyString(), anyString()))
+                eq(taskId.toString()), eq(ORG), anyString(), anyString(), eq(DataSensitivity.NORMAL)))
                 .thenReturn(Map.of("success", true));
         when(self.incrementReviewAttemptCount(eq(taskId), eq(TENANT), eq(currentReviewerId), any(UUID.class)))
                 .thenReturn(0);
@@ -291,7 +342,7 @@ class AgentTaskServiceExecutionDispatchTest {
         verify(agentRepository, never()).findTaskDispatchViewByIdAndOrganizationIdStrict(staleReviewerId, ORG);
         verify(conversationClient).sendChatSync(eq(TENANT), eq(CONVERSATION_ID), contains("CURRENT_RESULT"),
                 eq(currentReviewerId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK_REVIEW"),
-                eq(taskId.toString()), eq(ORG), anyString(), anyString());
+                eq(taskId.toString()), eq(ORG), anyString(), anyString(), eq(DataSensitivity.NORMAL));
         verify(self).incrementReviewAttemptCount(eq(taskId), eq(TENANT), eq(currentReviewerId), any(UUID.class));
         verify(self).unlockReviewerExecution(eq(taskId), any(UUID.class));
     }

@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.services.publication;
 
+import com.apimarketplace.common.publication.ShowcaseCaptureContract;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.interfaces.client.InterfaceClient;
 import com.apimarketplace.interfaces.client.dto.InterfaceSnapshotDto;
@@ -17,6 +18,7 @@ import com.apimarketplace.orchestrator.services.InterfaceRenderService;
 import com.apimarketplace.orchestrator.services.StepAggregationService;
 import com.apimarketplace.orchestrator.services.StorageSkeletonService;
 import com.apimarketplace.orchestrator.services.epoch.WorkflowEpochService;
+import com.apimarketplace.orchestrator.services.persistence.StepPayloadService;
 import com.apimarketplace.orchestrator.services.resume.WorkflowResumeService;
 import com.apimarketplace.orchestrator.services.resume.WorkflowRunState;
 import com.apimarketplace.orchestrator.services.state.StateSnapshotService;
@@ -60,6 +62,7 @@ public class ShowcaseSnapshotBuilder {
     private final WorkflowStepDataRepository workflowStepDataRepository;
     private final StorageSkeletonService storageSkeletonService;
     private final ObjectMapper objectMapper;
+    private final StepPayloadService stepPayloadService;
     private static final int RENUMBERED_EPOCH = 1;
 
     public ShowcaseSnapshotBuilder(
@@ -73,7 +76,8 @@ public class ShowcaseSnapshotBuilder {
             InterfaceClient interfaceClient,
             WorkflowStepDataRepository workflowStepDataRepository,
             StorageSkeletonService storageSkeletonService,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            StepPayloadService stepPayloadService) {
         this.workflowRunRepository = workflowRunRepository;
         this.workflowResumeService = workflowResumeService;
         this.stateSnapshotService = stateSnapshotService;
@@ -85,6 +89,7 @@ public class ShowcaseSnapshotBuilder {
         this.workflowStepDataRepository = workflowStepDataRepository;
         this.storageSkeletonService = storageSkeletonService;
         this.objectMapper = objectMapper;
+        this.stepPayloadService = stepPayloadService;
     }
 
     /**
@@ -145,6 +150,18 @@ public class ShowcaseSnapshotBuilder {
             return new CaptureOutcome(Optional.empty(), true);
         }
 
+        // LC-066 (Google Limited Use): a run holding Gmail or Google Drive data is never frozen
+        // into a showcase. The snapshot is served to anonymous visitors of a PUBLIC listing and
+        // outlives the run's retention window, so the capture answers a header-only snapshot
+        // marked withheld instead: the publication still goes through, without a preview. The
+        // lookup is strict: if it cannot answer, the capture fails (the publisher retries) rather
+        // than freezing a run whose class is unknown. With a chosen epoch, only that epoch's data
+        // is frozen, so only that epoch is judged (isSourceRunRestricted(run, epoch)).
+        if (isSourceRunRestricted(runIdPublic, epochFilter)) {
+            log.info("[ShowcaseSnapshot] run {} holds restricted (Gmail/Drive) data: showcase withheld", runIdPublic);
+            return new CaptureOutcome(Optional.of(withheldSnapshot(run, runIdPublic, epochFilter)), false);
+        }
+
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("version", SCHEMA_VERSION);
         snapshot.put("capturedAt", Instant.now().toString());
@@ -161,6 +178,7 @@ public class ShowcaseSnapshotBuilder {
         if (epochFilter != null) {
             snapshot.put("sourceEpoch", epochFilter);
         }
+        snapshot.put(ShowcaseCaptureContract.RESTRICTION_CHECKED_KEY, true);
 
         // When epochFilter is set, all sub-methods capture data for that epoch
         // but store it under key "1" so the marketplace always shows clean
@@ -175,6 +193,62 @@ public class ShowcaseSnapshotBuilder {
         snapshot.put("stepFiles", buildStepFiles(run, runIdPublic, epochFilter, snapshotEpochKey));
 
         return new CaptureOutcome(Optional.of(snapshot), false);
+    }
+
+    /**
+     * LC-066: whether this run holds Gmail or Google Drive data (RESTRICTED), so that no showcase
+     * may be built or served from it. Throws when the answer is unknown: callers treat that as
+     * "do not show it", never as "not restricted".
+     */
+    public boolean isSourceRunRestricted(String runIdPublic) {
+        return stepPayloadService.isRunRestrictedStrict(runIdPublic);
+    }
+
+    /**
+     * LC-066: {@link #isSourceRunRestricted(String)} for what a capture freezes: the whole run, or
+     * only the chosen epoch when there is one. An earlier epoch of a run restricted LATER holds
+     * none of the restricted data (the run's taint covers the payloads written from its first
+     * restricted one on, and every one of them carries its epoch), so it may still be shown.
+     */
+    public boolean isSourceRunRestricted(String runIdPublic, Integer epochFilter) {
+        return epochFilter == null
+                ? stepPayloadService.isRunRestrictedStrict(runIdPublic)
+                : stepPayloadService.isRunEpochRestrictedStrict(runIdPublic, epochFilter);
+    }
+
+    /**
+     * LC-066: when the run's first restricted payload was written, or empty when unknown (no
+     * restricted row: the run is not restricted, or only marked so by a fire in flight). Lets
+     * publication-service judge a snapshot captured BEFORE that moment as clean.
+     */
+    public Optional<Instant> sourceRunFirstRestrictedAt(String runIdPublic) {
+        return stepPayloadService.firstRestrictedPayloadAt(runIdPublic);
+    }
+
+    /**
+     * LC-066: whether the run still exists. A deleted run's restricted payloads are gone with it,
+     * so its answer to {@link #isSourceRunRestricted} would be a meaningless "no": the caller then
+     * judges what it copied from the run instead.
+     */
+    public boolean sourceRunExists(String runIdPublic) {
+        return workflowRunRepository.existsByRunIdPublic(runIdPublic);
+    }
+
+    /**
+     * The snapshot of a RESTRICTED run: the header keys and the withheld reason, nothing the run
+     * produced. publication-service stores it like any snapshot and serves "no preview".
+     */
+    private static Map<String, Object> withheldSnapshot(WorkflowRunEntity run, String runIdPublic, Integer epochFilter) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("version", SCHEMA_VERSION);
+        snapshot.put("capturedAt", Instant.now().toString());
+        snapshot.put("sourceRunId", runIdPublic);
+        snapshot.put("_sourceTenantId", run.getTenantId());
+        if (epochFilter != null) {
+            snapshot.put("sourceEpoch", epochFilter);
+        }
+        snapshot.put(ShowcaseCaptureContract.WITHHELD_KEY, ShowcaseCaptureContract.WITHHELD_RESTRICTED_DATA);
+        return snapshot;
     }
 
     private StateSnapshot loadStateSnapshot(String runIdPublic) {

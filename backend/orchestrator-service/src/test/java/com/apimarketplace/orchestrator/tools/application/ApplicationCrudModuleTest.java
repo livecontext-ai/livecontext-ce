@@ -1341,6 +1341,49 @@ class ApplicationCrudModuleTest {
     // ------------------------------------------------------------------
 
     @Nested
+    @DisplayName("create from a restricted execution (LC-066)")
+    class CreateRestricted {
+
+        private ToolExecutionContext restrictedCtx() {
+            Map<String, Object> creds = new HashMap<>();
+            creds.put(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY,
+                    com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+            return new ToolExecutionContext(TENANT_ID, creds, Map.of(), Set.of(), null, null, CALLER_ORG_ID, null);
+        }
+
+        @Test
+        @DisplayName("regression: create (the app publish) is refused before any workflow read or publication call")
+        void restrictedCreateIsRefused() {
+            ToolExecutionResult result = module.execute("create",
+                    Map.of("workflow_id", UUID.randomUUID().toString()), TENANT_ID, restrictedCtx()).orElseThrow();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.errorCode()).isEqualTo(ToolErrorCode.EXECUTION_FAILED);
+            assertThat(result.error())
+                    .startsWith(com.apimarketplace.common.classification.RestrictedDataPolicy.REFUSAL_CODE)
+                    .contains("no application can be published");
+            verify(publicationClient, never()).publishWorkflow(any(), any(), any());
+            verify(workflowRepository, never()).findById(any());
+        }
+
+        @Test
+        @DisplayName("the other actions are not refused: an acquire still reaches publication-service")
+        void restrictedAcquireIsNotRefused() {
+            Map<String, Object> stub = new HashMap<>();
+            stub.put("workflowId", "wf-9");
+            stub.put("title", "My Cloned App");
+            when(publicationClient.acquirePublication(eq(APP_PUB_ID), eq(TENANT_ID), eq(CALLER_ORG_ID)))
+                    .thenReturn(stub);
+
+            ToolExecutionResult result = module.execute("acquire",
+                    Map.of("application_id", APP_PUB_ID.toString()), TENANT_ID, restrictedCtx()).orElseThrow();
+
+            assertThat(result.success()).isTrue();
+            verify(publicationClient).acquirePublication(eq(APP_PUB_ID), eq(TENANT_ID), eq(CALLER_ORG_ID));
+        }
+    }
+
+    @Nested
     @DisplayName("uninstall - remove an acquired app's local clone")
     class Uninstall {
 

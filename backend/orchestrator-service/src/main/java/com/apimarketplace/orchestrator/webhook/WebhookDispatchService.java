@@ -21,10 +21,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Service for dispatching incoming webhook calls to workflow execution.
@@ -48,19 +52,125 @@ public class WebhookDispatchService {
     private final ReusableTriggerService triggerService;
     private final ProductionRunResolver productionRunResolver;
     private final WebhookResponseRegistry webhookResponseRegistry;
+    private final WebhookRateLimiter rateLimiter;
 
+    /**
+     * Runs whose sync dispatch is still blocking a request thread inside {@code executeTrigger}.
+     * The first half of what {@link #syncRequestStillParked} reports; entries live only for the
+     * duration of that call and are removed in a {@code finally}.
+     */
+    private final java.util.Set<String> syncDispatchInFlight = ConcurrentHashMap.newKeySet();
+
+    /**
+     * The four webhook ceilings are properties, not constants: an operator whose legitimate
+     * traffic hits one of them can raise it without a code change and a redeploy. Every default
+     * is the shipped value, and a non-positive override falls back to it rather than disabling
+     * the guard.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public WebhookDispatchService(TriggerClient triggerClient,
+                                  WorkflowRepository workflowRepository,
+                                  WorkflowRunRepository runRepository,
+                                  ReusableTriggerService triggerService,
+                                  ProductionRunResolver productionRunResolver,
+                                  WebhookResponseRegistry webhookResponseRegistry,
+                                  @org.springframework.beans.factory.annotation.Value(
+                                          "${webhook.rate-limit.fires-per-token:120}") int firesPerToken,
+                                  @org.springframework.beans.factory.annotation.Value(
+                                          "${webhook.rate-limit.fires-per-owner:600}") int firesPerOwner,
+                                  @org.springframework.beans.factory.annotation.Value(
+                                          "${webhook.rate-limit.concurrent-sync-per-owner:20}") int concurrentSyncPerOwner,
+                                  @org.springframework.beans.factory.annotation.Value(
+                                          "${webhook.rate-limit.concurrent-sync-total:200}") int concurrentSyncTotal,
+                                  @org.springframework.beans.factory.annotation.Value(
+                                          "${webhook.rate-limit.sync-slot-ttl-seconds:90}") long syncSlotTtlSeconds,
+                                  @org.springframework.beans.factory.annotation.Value(
+                                          "${scaling.backend:memory}") String scalingBackend,
+                                  org.springframework.beans.factory.ObjectProvider<
+                                          org.springframework.data.redis.core.StringRedisTemplate> redisTemplate) {
+        this(triggerClient, workflowRepository, runRepository, triggerService,
+                productionRunResolver, webhookResponseRegistry,
+                new WebhookRateLimiter(Clock.systemUTC(), firesPerToken, firesPerOwner,
+                        concurrentSyncPerOwner, concurrentSyncTotal,
+                        java.time.Duration.ofSeconds(syncSlotTtlSeconds))
+                        .withClusterCounter(RedisFireCounter.forBackend(scalingBackend,
+                                redisTemplate == null ? null : redisTemplate.getIfAvailable())));
+    }
+
+    /**
+     * Cluster-wide fire counter for the per-token and per-owner windows (LC-042, audit round 2).
+     *
+     * <p>With several orchestrator replicas behind the gateway, a per-instance window multiplied
+     * every ceiling by the replica count. When {@code scaling.backend=redis} (the multi-instance
+     * mode) the counts live in Redis instead: a fixed one-minute bucket per key, {@code INCR} then
+     * {@code EXPIRE} on the first hit, the same pattern the gateway rate limiter uses. Tokens are
+     * hashed before they become a key. Any Redis error answers {@code null}, and the caller falls
+     * back to its in-memory window rather than failing webhooks (CE runs without Redis and always
+     * uses the in-memory window).
+     */
+    static final class RedisFireCounter implements WebhookRateLimiter.ClusterFireCounter {
+        /**
+         * INCR and PEXPIRE in one atomic step: with two separate calls, a crash or a dropped
+         * connection between them left a bucket with no TTL that grew for ever.
+         */
+        static final org.springframework.data.redis.core.script.RedisScript<Long> INCR_WITH_TTL =
+                new org.springframework.data.redis.core.script.DefaultRedisScript<>(
+                        "local c = redis.call('INCR', KEYS[1]) "
+                                + "if c == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end "
+                                + "return c",
+                        Long.class);
+
+        private final org.springframework.data.redis.core.StringRedisTemplate redis;
+
+        RedisFireCounter(org.springframework.data.redis.core.StringRedisTemplate redis) {
+            this.redis = redis;
+        }
+
+        static WebhookRateLimiter.ClusterFireCounter forBackend(
+                String scalingBackend, org.springframework.data.redis.core.StringRedisTemplate redis) {
+            return "redis".equalsIgnoreCase(scalingBackend == null ? "" : scalingBackend.trim()) && redis != null
+                    ? new RedisFireCounter(redis) : null;
+        }
+
+        @Override
+        public Long hit(String key, java.time.Duration window, long nowMillis) {
+            try {
+                String bucketKey = "rl:webhook:" + key + ":" + (nowMillis / window.toMillis());
+                return redis.execute(INCR_WITH_TTL, java.util.List.of(bucketKey),
+                        String.valueOf(window.multipliedBy(2).toMillis()));
+            } catch (RuntimeException e) {
+                logger.warn("Webhook rate limit: Redis unavailable, using the in-memory window: {}", e.getMessage());
+                return null;
+            }
+        }
+    }
+
+    /** All ceilings at their shipped defaults. */
     public WebhookDispatchService(TriggerClient triggerClient,
                                   WorkflowRepository workflowRepository,
                                   WorkflowRunRepository runRepository,
                                   ReusableTriggerService triggerService,
                                   ProductionRunResolver productionRunResolver,
                                   WebhookResponseRegistry webhookResponseRegistry) {
+        this(triggerClient, workflowRepository, runRepository, triggerService,
+                productionRunResolver, webhookResponseRegistry, new WebhookRateLimiter(Clock.systemUTC()));
+    }
+
+    /** Test seam: lets a test drive the sliding window from a fixed clock instead of sleeping. */
+    WebhookDispatchService(TriggerClient triggerClient,
+                           WorkflowRepository workflowRepository,
+                           WorkflowRunRepository runRepository,
+                           ReusableTriggerService triggerService,
+                           ProductionRunResolver productionRunResolver,
+                           WebhookResponseRegistry webhookResponseRegistry,
+                           WebhookRateLimiter rateLimiter) {
         this.triggerClient = triggerClient;
         this.workflowRepository = workflowRepository;
         this.runRepository = runRepository;
         this.triggerService = triggerService;
         this.productionRunResolver = productionRunResolver;
         this.webhookResponseRegistry = webhookResponseRegistry;
+        this.rateLimiter = rateLimiter;
     }
 
     /**
@@ -78,6 +188,19 @@ public class WebhookDispatchService {
      * @return WebhookResponse with execution status
      */
     public WebhookResponse dispatch(String token, Map<String, Object> payload, boolean sync) {
+        // 0. Per-token sliding window, BEFORE anything that costs a lookup, a credit check or a
+        //    run. The only per-fire gate used to be a boolean credit check, so an unauthenticated
+        //    caller who knows one token could fire a workflow as fast as the network allowed;
+        //    the `rate_limited` response existed and was mapped to 429 but had no producer at all
+        //    (LC-042). Checking here also covers the standalone fallback below, which is reached
+        //    through this same entry point.
+        if (!rateLimiter.allowToken(token)) {
+            logger.warn("Webhook rate limit hit for token {}... ({} fires/{}s)",
+                    token != null ? token.substring(0, Math.min(8, token.length())) : "null",
+                    rateLimiter.maxFiresPerToken(), WebhookRateLimiter.WINDOW.getSeconds());
+            return WebhookResponse.rateLimited();
+        }
+
         // 1. Find token entity (new multi-DAG table or legacy fallback)
         WebhookTokenDto tokenDto = triggerClient.findByToken(token);
         if (tokenDto == null) {
@@ -102,6 +225,16 @@ public class WebhookDispatchService {
         if (workflow == null) {
             logger.warn("Workflow {} not found for webhook dispatch", workflowId);
             return WebhookResponse.notFound();
+        }
+
+        // Per-owner cap, applied once the owner is known. The per-token window alone is not
+        // enough: an owner with fifty webhook tokens gets fifty times the budget, and it is the
+        // OWNER's orchestrator capacity and credits that are being spent (LC-042).
+        if (!rateLimiter.allowOwner(workflow.getTenantId())) {
+            logger.warn("Webhook rate limit hit for owner {} ({} fires/{}s across all their tokens)",
+                    workflow.getTenantId(), rateLimiter.maxFiresPerOwner(),
+                    WebhookRateLimiter.WINDOW.getSeconds());
+            return WebhookResponse.rateLimited();
         }
 
         // Centralized: production webhook fires ONLY on the workflow's pinned version.
@@ -163,7 +296,27 @@ public class WebhookDispatchService {
         logger.info("Found waiting run {} for workflow {}, resolving trigger {}",
                    runId, workflowId, triggerId);
         if (sync) {
+            // Sync-run ceiling. A sync fire occupies a request for up to the sync timeout: first
+            // the calling thread, which blocks inside executeTrigger below, then a parked
+            // DeferredResult (and the servlet async context behind it) until a respond node
+            // answers or the timeout fires. The rate window alone does not bound how many are
+            // occupied AT ONCE (LC-042).
+            //
+            // The slot is held for exactly that union and released when it ends - see
+            // syncRequestStillParked. It is scoped per OWNER first so a tenant whose sync
+            // webhooks never answer spends only their own ceiling; the platform-wide number is a
+            // saturation backstop.
+            if (!rateLimiter.acquireSyncSlot(runId, workflow.getTenantId(), this::syncRequestStillParked)) {
+                logger.warn("Refusing sync webhook for run {} (owner {}): sync-run ceiling reached "
+                                + "({} held platform-wide, {} per owner, {} total)",
+                        runId, workflow.getTenantId(), rateLimiter.heldSyncSlots(),
+                        rateLimiter.maxConcurrentSyncPerOwner(), rateLimiter.maxConcurrentSync());
+                return WebhookResponse.rateLimited();
+            }
             webhookResponseRegistry.expect(runId);
+            // Marks the first half of the occupancy: this thread is about to block in
+            // executeTrigger, before any DeferredResult exists for the registry to report.
+            syncDispatchInFlight.add(runId);
         }
 
         // 4. Delegate to ReusableTriggerService.
@@ -177,6 +330,7 @@ public class WebhookDispatchService {
             if (result.success()) {
                 return WebhookResponse.triggered(runId);
             } else {
+                rateLimiter.releaseSyncSlot(runId);
                 webhookResponseRegistry.cancelExpectation(runId);
                 // The documented 402 for an out-of-credit webhook is preserved, but it
                 // is now derived from the trigger node's real failure instead of a
@@ -188,11 +342,37 @@ public class WebhookDispatchService {
                 return WebhookResponse.error(result.message());
             }
         } catch (Exception e) {
+            rateLimiter.releaseSyncSlot(runId);
             webhookResponseRegistry.cancelExpectation(runId);
             logger.error("Failed to resolve webhook trigger for run {}: {}",
                         runId, e.getMessage(), e);
             return WebhookResponse.error("Failed to trigger workflow: " + e.getMessage());
+        } finally {
+            if (sync) {
+                // This thread is done blocking. From here the occupancy, if any, is the
+                // DeferredResult the controller is about to register, which the registry reports.
+                syncDispatchInFlight.remove(runId);
+            }
         }
+    }
+
+    /**
+     * Whether the sync request for {@code runId} still occupies a request.
+     *
+     * <p>This is what makes the sync ceiling a measure of concurrency rather than of fires per
+     * TTL. A sync request occupies a request in two consecutive phases and this service can
+     * observe both: while {@code executeTrigger} blocks the calling thread it is in
+     * {@link #syncDispatchInFlight}, and once the controller has parked its {@code DeferredResult}
+     * the registry reports it {@link WebhookResponseRegistry#hasPending pending}. When neither
+     * holds, the caller has been answered and the slot is free - a sync webhook that answers in
+     * 200ms no longer costs its owner a slot for the whole TTL.
+     *
+     * <p>The handoff between the two phases (this method returning, the controller registering)
+     * is a few method returns with no I/O in between, which the reclaim grace covers; see
+     * {@link WebhookRateLimiter#SETTLE_GRACE}.
+     */
+    private boolean syncRequestStillParked(String runId) {
+        return syncDispatchInFlight.contains(runId) || webhookResponseRegistry.hasPending(runId);
     }
 
     /**
@@ -215,6 +395,15 @@ public class WebhookDispatchService {
         String webhookIdStr = standaloneWebhook.getId().toString();
         String tenantId = standaloneWebhook.getTenantId();
         String webhookOrgIdScope = standaloneWebhook.getOrganizationId();
+
+        // Per-owner cap, same contract as the pinned branch. This path is worse per fire than
+        // that one: it scans the owner's workflows and can trigger SEVERAL runs from a single
+        // request, so the owner budget matters more here, not less (LC-042).
+        if (!rateLimiter.allowOwner(tenantId)) {
+            logger.warn("Standalone webhook rate limit hit for owner {} ({} fires/{}s)",
+                    tenantId, rateLimiter.maxFiresPerOwner(), WebhookRateLimiter.WINDOW.getSeconds());
+            return WebhookResponse.rateLimited();
+        }
 
         // BATCH-B (2026-05-20) - strict-org scoping. The legacy
         // findByTenantId(tenantId) returned every workflow the user owns across
@@ -325,6 +514,306 @@ public class WebhookDispatchService {
      * @param token The webhook token
      * @return WebhookConfig or null if not found
      */
+    /**
+     * Sliding-window counters for the webhook fire path.
+     *
+     * <p>Deliberately in-process rather than Redis-backed: the fire path already runs entirely
+     * in this service, and an in-memory window is a correct (if per-replica) bound, whereas
+     * adding a Redis round trip to the hot path would put a network dependency in front of every
+     * customer webhook. With N replicas the effective ceiling is N times these numbers, which is
+     * still a bound where there was none.
+     *
+     * <p>The window is a timestamp deque per key, not a fixed bucket: a fixed bucket lets a
+     * caller fire the full budget in the last instant of one bucket and again in the first
+     * instant of the next, which is exactly the burst this is meant to stop.
+     */
+    static class WebhookRateLimiter {
+
+        /** Fires one token may make per {@link #WINDOW}. Well above any provider's retry cadence. */
+        static final int DEFAULT_MAX_FIRES_PER_TOKEN = 120;
+        /** Fires one owner may make per {@link #WINDOW} across every token they own. */
+        static final int DEFAULT_MAX_FIRES_PER_OWNER = 600;
+        /**
+         * Sync runs ONE OWNER may hold at a time. This is the ceiling that actually protects
+         * anything: it is what stops a single tenant whose sync webhooks never reach a respond
+         * node from consuming the shared budget, and it cannot take another tenant's webhooks
+         * down with it.
+         */
+        static final int DEFAULT_MAX_CONCURRENT_SYNC_PER_OWNER = 20;
+        /**
+         * Platform-wide backstop across all owners, sized so it is reached only when the process
+         * really is saturated with parked sync requests. Deliberately far above the per-owner
+         * ceiling: a global number low enough to bite in normal operation would mean one busy
+         * tenant 429s every other tenant's sync webhooks, which is a worse outage than the abuse
+         * it prevents.
+         */
+        static final int DEFAULT_MAX_CONCURRENT_SYNC = 200;
+        static final java.time.Duration WINDOW = java.time.Duration.ofMinutes(1);
+        /**
+         * BACKSTOP for how long a sync slot may stay held. The slot is normally released as soon
+         * as the request it represents is answered (the {@code stillParked} probe passed to
+         * {@link #acquireSyncSlot}); the TTL only catches a slot whose probe never goes false,
+         * which means an occupancy nobody ever ended.
+         *
+         * <p>It used to be the ONLY reclaim, which made the ceiling count "distinct sync runs
+         * STARTED within the TTL" rather than requests occupied at once: a sync webhook answered
+         * in 200ms still cost its owner a slot for 90 seconds.
+         */
+        static final java.time.Duration DEFAULT_SYNC_SLOT_TTL = java.time.Duration.ofSeconds(90);
+
+        /**
+         * A slot younger than this is never reclaimed on the probe, only on the TTL.
+         *
+         * <p>The probe reads two sources that hand over to each other: the dispatch thread stops
+         * reporting the run the instant it returns, and the controller starts reporting it a few
+         * method returns later when it parks the DeferredResult. Nothing does I/O in between, so
+         * any observation of "not occupied" that is younger than this grace is the handoff, not
+         * an answered request. Erring here is cheap in one direction only: too short would
+         * reclaim a live request's slot (over-admitting), too long only delays a release.
+         */
+        static final java.time.Duration SETTLE_GRACE = java.time.Duration.ofSeconds(2);
+
+        private final Clock clock;
+        private final int maxFiresPerToken;
+        private final int maxFiresPerOwner;
+        private final int maxConcurrentSyncPerOwner;
+        private final int maxConcurrentSync;
+        private final java.time.Duration syncSlotTtl;
+        private final Map<String, Deque<Long>> tokenWindows = new ConcurrentHashMap<>();
+        private final Map<String, Deque<Long>> ownerWindows = new ConcurrentHashMap<>();
+        private final Map<String, SyncSlot> syncSlots = new ConcurrentHashMap<>();
+        /** Amortises the quiet-key sweep: see {@link #allow}. */
+        private final java.util.concurrent.atomic.AtomicInteger sinceSweep =
+                new java.util.concurrent.atomic.AtomicInteger();
+
+        private static final int SWEEP_EVERY_N_FIRES = 256;
+
+        /** One held sync run: when it was acquired and who owns it. */
+        private record SyncSlot(long acquiredAtMillis, String ownerId) {}
+
+        WebhookRateLimiter(Clock clock) {
+            this(clock, DEFAULT_MAX_FIRES_PER_TOKEN, DEFAULT_MAX_FIRES_PER_OWNER,
+                    DEFAULT_MAX_CONCURRENT_SYNC_PER_OWNER, DEFAULT_MAX_CONCURRENT_SYNC,
+                    DEFAULT_SYNC_SLOT_TTL);
+        }
+
+        WebhookRateLimiter(Clock clock, int maxFiresPerToken, int maxFiresPerOwner,
+                           int maxConcurrentSyncPerOwner, int maxConcurrentSync,
+                           java.time.Duration syncSlotTtl) {
+            this.clock = clock;
+            // A non-positive configured value would disable the guard silently, which is the one
+            // outcome a limit must never have: fall back to the shipped default instead.
+            this.maxFiresPerToken = maxFiresPerToken > 0 ? maxFiresPerToken : DEFAULT_MAX_FIRES_PER_TOKEN;
+            this.maxFiresPerOwner = maxFiresPerOwner > 0 ? maxFiresPerOwner : DEFAULT_MAX_FIRES_PER_OWNER;
+            this.maxConcurrentSyncPerOwner = maxConcurrentSyncPerOwner > 0
+                    ? maxConcurrentSyncPerOwner : DEFAULT_MAX_CONCURRENT_SYNC_PER_OWNER;
+            this.maxConcurrentSync = maxConcurrentSync > 0 ? maxConcurrentSync : DEFAULT_MAX_CONCURRENT_SYNC;
+            this.syncSlotTtl = syncSlotTtl != null && !syncSlotTtl.isNegative() && !syncSlotTtl.isZero()
+                    ? syncSlotTtl : DEFAULT_SYNC_SLOT_TTL;
+        }
+
+        int maxFiresPerToken() {
+            return maxFiresPerToken;
+        }
+
+        int maxFiresPerOwner() {
+            return maxFiresPerOwner;
+        }
+
+        int maxConcurrentSyncPerOwner() {
+            return maxConcurrentSyncPerOwner;
+        }
+
+        int maxConcurrentSync() {
+            return maxConcurrentSync;
+        }
+
+        java.time.Duration syncSlotTtl() {
+            return syncSlotTtl;
+        }
+
+        /** Cluster-wide counter; {@code null} answer means "unavailable, use the local window". */
+        interface ClusterFireCounter {
+            Long hit(String key, java.time.Duration window, long nowMillis);
+        }
+
+        private ClusterFireCounter clusterCounter;
+
+        /** Makes the fire windows cluster-wide (null keeps them in-memory). */
+        WebhookRateLimiter withClusterCounter(ClusterFireCounter counter) {
+            this.clusterCounter = counter;
+            return this;
+        }
+
+        boolean allowToken(String token) {
+            String key = token == null ? "" : token;
+            Boolean cluster = clusterAllows("token:" + sha256(key), maxFiresPerToken);
+            return cluster != null ? cluster : allow(tokenWindows, key, maxFiresPerToken);
+        }
+
+        /** The cluster verdict, or {@code null} when there is no cluster counter or it failed. */
+        private Boolean clusterAllows(String key, int limit) {
+            if (clusterCounter == null) {
+                return null;
+            }
+            Long count = clusterCounter.hit(key, WINDOW, clock.millis());
+            return count == null ? null : count <= limit;
+        }
+
+        private static String sha256(String value) {
+            try {
+                byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                return java.util.HexFormat.of().formatHex(digest);
+            } catch (java.security.NoSuchAlgorithmException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        boolean allowOwner(String ownerId) {
+            // No owner (legacy row with no tenant) means no owner budget to spend against; the
+            // per-token window above still applies, so this is not an unguarded path.
+            if (ownerId == null || ownerId.isBlank()) {
+                return true;
+            }
+            Boolean cluster = clusterAllows("owner:" + ownerId, maxFiresPerOwner);
+            return cluster != null ? cluster : allow(ownerWindows, ownerId, maxFiresPerOwner);
+        }
+
+        /**
+         * Take a sync slot for {@code runId}, owned by {@code ownerId}, with no way to observe
+         * when the request ends: every held slot then lives until the TTL. Tests of the ceiling
+         * arithmetic itself use this; the fire path uses the probing overload.
+         */
+        boolean acquireSyncSlot(String runId, String ownerId) {
+            return acquireSyncSlot(runId, ownerId, held -> true);
+        }
+
+        /**
+         * Take a sync slot for {@code runId}, owned by {@code ownerId}.
+         *
+         * @param stillParked answers, for a run that holds a slot, whether its request is still
+         *                    occupied. Slots it reports free (for longer than {@link #SETTLE_GRACE})
+         *                    are reclaimed before the ceilings are tested, which is what makes
+         *                    this a concurrency ceiling instead of a fires-per-TTL one.
+         * @return false when the owner's ceiling, or the platform-wide backstop, is reached.
+         */
+        boolean acquireSyncSlot(String runId, String ownerId, java.util.function.Predicate<String> stillParked) {
+            long now = clock.millis();
+            reclaimSettledSlots(now, stillParked);
+            if (runId == null || runId.isBlank()) {
+                return true;
+            }
+            // A repeat fire on a run that already holds a slot re-arms the same slot rather than
+            // consuming a second one: one parked DeferredResult per run is the real resource.
+            SyncSlot existing = syncSlots.get(runId);
+            if (existing != null) {
+                syncSlots.put(runId, new SyncSlot(now, existing.ownerId()));
+                return true;
+            }
+            if (syncSlots.size() >= maxConcurrentSync) {
+                return false;
+            }
+            if (ownerId != null && !ownerId.isBlank()) {
+                long held = syncSlots.values().stream()
+                        .filter(slot -> ownerId.equals(slot.ownerId()))
+                        .count();
+                if (held >= maxConcurrentSyncPerOwner) {
+                    return false;
+                }
+            }
+            syncSlots.put(runId, new SyncSlot(now, ownerId));
+            return true;
+        }
+
+        void releaseSyncSlot(String runId) {
+            if (runId != null) {
+                syncSlots.remove(runId);
+            }
+        }
+
+        /**
+         * Drop every slot whose request has ended, plus any that outlived the TTL backstop.
+         *
+         * <p>Runs on the acquire path only: a slot costs nothing until someone needs one, so
+         * there is no timer to schedule and no state to keep between requests. Removal is
+         * value-conditional ({@code remove(key, value)}) so a slot re-armed by a concurrent
+         * repeat fire is not dropped by this sweep.
+         */
+        private void reclaimSettledSlots(long now, java.util.function.Predicate<String> stillParked) {
+            for (Map.Entry<String, SyncSlot> entry : syncSlots.entrySet()) {
+                SyncSlot slot = entry.getValue();
+                long age = now - slot.acquiredAtMillis();
+                if (age > syncSlotTtl.toMillis()) {
+                    syncSlots.remove(entry.getKey(), slot);
+                    continue;
+                }
+                if (age > SETTLE_GRACE.toMillis() && !stillParked.test(entry.getKey())) {
+                    syncSlots.remove(entry.getKey(), slot);
+                }
+            }
+        }
+
+        /** Slots currently held, for tests and for the refusal log line. */
+        int heldSyncSlots() {
+            return syncSlots.size();
+        }
+
+        /**
+         * Expire, test and record one hit atomically for {@code key}.
+         *
+         * <p>The whole read-modify-write runs inside {@code ConcurrentHashMap.compute}, which
+         * holds the key's bin lock, so it is serialised against the sweep below. The previous
+         * shape (a {@code computeIfAbsent} then a monitor on the returned deque) left a window
+         * in which the sweep could drop a deque a concurrent caller had just obtained and not
+         * yet appended to, silently losing that hit and its budget.
+         */
+        private boolean allow(Map<String, Deque<Long>> windows, String key, int limit) {
+            long now = clock.millis();
+            long cutoff = now - WINDOW.toMillis();
+            boolean[] allowed = new boolean[1];
+            windows.compute(key, (k, existing) -> {
+                Deque<Long> hits = existing != null ? existing : new ArrayDeque<>();
+                while (!hits.isEmpty() && hits.peekFirst() <= cutoff) {
+                    hits.pollFirst();
+                }
+                if (hits.size() >= limit) {
+                    allowed[0] = false;
+                } else {
+                    hits.addLast(now);
+                    allowed[0] = true;
+                }
+                return hits.isEmpty() ? null : hits;
+            });
+            if (allowed[0]) {
+                sweepQuietKeys(windows, cutoff);
+            }
+            return allowed[0];
+        }
+
+        /**
+         * Drop keys that went quiet so a caller cycling through tokens cannot grow the map
+         * without bound.
+         *
+         * <p>Amortised, not per fire: the sweep is O(n) over an attacker-influenced map (the
+         * token window is keyed on the raw caller-supplied token, before any lookup validates
+         * it), so running it on every accepted fire put an attacker-scaled cost on the hot path.
+         *
+         * <p>Removal goes through {@code computeIfPresent}, i.e. under the same bin lock
+         * {@link #allow} mutates the deque with, so a key cannot be dropped in between a
+         * concurrent caller's expire and append.
+         */
+        private void sweepQuietKeys(Map<String, Deque<Long>> windows, long cutoff) {
+            if (sinceSweep.incrementAndGet() < SWEEP_EVERY_N_FIRES) {
+                return;
+            }
+            sinceSweep.set(0);
+            for (String key : List.copyOf(windows.keySet())) {
+                windows.computeIfPresent(key, (k, d) -> d.isEmpty() || d.peekLast() <= cutoff ? null : d);
+            }
+        }
+    }
+
     public WebhookConfig getWebhookConfigByToken(String token) {
         // First try legacy webhook_tokens table
         WebhookTokenDto tokenDto = triggerClient.findByToken(token);

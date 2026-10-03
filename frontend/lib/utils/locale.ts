@@ -51,6 +51,16 @@ const readNextLocaleCookie = (): string | undefined => {
 };
 
 /**
+ * Persist the user's language choice in the `NEXT_LOCALE` cookie for a year, site-wide. The ONE
+ * client writer: SameSite=Lax always, and `Secure` on an HTTPS page (a browser refuses a Secure
+ * cookie set from plain HTTP, which a CE install may be served over).
+ */
+export const writeLocaleCookie = (locale: string, protocol: string = window.location.protocol): void => {
+  const secure = protocol === 'https:' ? '; Secure' : '';
+  document.cookie = `NEXT_LOCALE=${encodeURIComponent(locale)}; path=/; max-age=31536000; SameSite=Lax${secure}`;
+};
+
+/**
  * Resolve the app's ACTIVE locale on the client, defaulting to the app default
  * ('en'). Use this for locale-aware formatting (dates, numbers) in code that
  * cannot call a React hook (plain utils, module-level helpers).

@@ -160,7 +160,7 @@ class TriggerControllerTest {
             when(runRepository.findByRunIdPublic("nonexistent")).thenReturn(Optional.empty());
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("nonexistent", null, null, CALLER, null);
+                controller.triggerManual("nonexistent", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
@@ -174,7 +174,7 @@ class TriggerControllerTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-1", null, null, CALLER, null);
+                controller.triggerManual("run-1", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode().value()).isEqualTo(409);
         }
@@ -193,7 +193,7 @@ class TriggerControllerTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-1", null, null, CALLER, null);
+                controller.triggerManual("run-1", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode().value()).isEqualTo(409);
             // The run is never handed to the trigger service when terminal - no cycling.
@@ -214,7 +214,7 @@ class TriggerControllerTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-1", null, null, CALLER, null);
+                controller.triggerManual("run-1", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode().value()).isEqualTo(409);
             verifyNoInteractions(triggerService);
@@ -231,7 +231,7 @@ class TriggerControllerTest {
                 when(runRepository.findByRunIdPublic("run-" + terminal)).thenReturn(Optional.of(run));
 
                 ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerManual("run-" + terminal, null, null, CALLER, null);
+                    controller.triggerManual("run-" + terminal, null, null, CALLER, null, "OWNER");
 
                 assertThat(response.getStatusCode().value())
                     .as("status %s must be rejected", terminal)
@@ -254,7 +254,7 @@ class TriggerControllerTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-1", null, null, CALLER, null);
+                controller.triggerManual("run-1", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode().value()).isEqualTo(409);
             verifyNoInteractions(triggerService);
@@ -274,7 +274,7 @@ class TriggerControllerTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-1", null, null, CALLER, null);
+                controller.triggerManual("run-1", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode().value())
                 .as("WAITING_TRIGGER must pass canTrigger (not return 409)")
@@ -292,7 +292,7 @@ class TriggerControllerTest {
                 when(runRepository.findByRunIdPublic("run-" + fireable)).thenReturn(Optional.of(run));
 
                 ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerManual("run-" + fireable, null, null, CALLER, null);
+                    controller.triggerManual("run-" + fireable, null, null, CALLER, null, "OWNER");
 
                 assertThat(response.getStatusCode().value())
                     .as("status %s must pass canTrigger (not return 409)", fireable)
@@ -309,7 +309,7 @@ class TriggerControllerTest {
         @DisplayName("Should return 400 when payload missing message")
         void shouldReturn400WhenNoMessage() {
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerChat("run-1", Map.of("other", "data"), null, CALLER, null);
+                controller.triggerChat("run-1", Map.of("other", "data"), null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             assertThat(response.getBody()).isNotNull();
@@ -320,7 +320,7 @@ class TriggerControllerTest {
         @DisplayName("Should return 400 when payload is null")
         void shouldReturn400WhenPayloadNull() {
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerChat("run-1", null, null, CALLER, null);
+                controller.triggerChat("run-1", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         }
@@ -335,7 +335,7 @@ class TriggerControllerTest {
         void shouldReturn404WhenRunNotFound() {
             when(runRepository.findByRunIdPublic("nonexistent")).thenReturn(Optional.empty());
 
-            var response = controller.getAvailableTriggers("nonexistent", CALLER, null);
+            var response = controller.getAvailableTriggers("nonexistent", CALLER, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
@@ -348,7 +348,7 @@ class TriggerControllerTest {
             when(run.getPlan()).thenReturn(null);
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
-            var response = controller.getAvailableTriggers("run-1", CALLER, null);
+            var response = controller.getAvailableTriggers("run-1", CALLER, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).isEmpty();
@@ -369,7 +369,7 @@ class TriggerControllerTest {
                 when(run.getStatus()).thenReturn(terminal);
                 when(runRepository.findByRunIdPublic("run-" + terminal)).thenReturn(Optional.of(run));
 
-                var response = controller.getAvailableTriggers("run-" + terminal, CALLER, null);
+                var response = controller.getAvailableTriggers("run-" + terminal, CALLER, null, null);
 
                 assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
                 assertThat(response.getBody())
@@ -443,7 +443,7 @@ class TriggerControllerTest {
                 .thenReturn(TriggerExecutionResult.accepted("run-auto", "trigger:manual_trigger", TriggerType.MANUAL));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-auto", null, null, CALLER, null);
+                controller.triggerManual("run-auto", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode().value()).isEqualTo(202);
             assertThat(response.getBody()).isNotNull();
@@ -467,7 +467,7 @@ class TriggerControllerTest {
                     Set.of("mcp:step1"), 0));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-sbs", null, null, CALLER, null);
+                controller.triggerManual("run-sbs", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode().value()).isEqualTo(202);
             assertThat(response.getBody()).isNotNull();
@@ -494,7 +494,7 @@ class TriggerControllerTest {
                     com.apimarketplace.orchestrator.services.credit.CreditExhaustion.MESSAGE));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-broke", null, null, CALLER, null);
+                controller.triggerManual("run-broke", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode().value())
                 .as("the frontend modal keys on the status code, not the message")
@@ -524,7 +524,7 @@ class TriggerControllerTest {
                         "run-broke-log", "trigger:manual_trigger", TriggerType.MANUAL,
                         com.apimarketplace.orchestrator.services.credit.CreditExhaustion.MESSAGE));
 
-                controller.triggerManual("run-broke-log", null, null, CALLER, null);
+                controller.triggerManual("run-broke-log", null, null, CALLER, null, null);
 
                 assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
                 assertThat(appender.list).anySatisfy(e ->
@@ -551,7 +551,7 @@ class TriggerControllerTest {
                         "run-npe-log", "trigger:manual_trigger", TriggerType.MANUAL,
                         "NullPointerException in core:transform"));
 
-                controller.triggerManual("run-npe-log", null, null, CALLER, null);
+                controller.triggerManual("run-npe-log", null, null, CALLER, null, null);
 
                 assertThat(appender.list).anySatisfy(e ->
                     assertThat(e.getLevel()).isEqualTo(ch.qos.logback.classic.Level.ERROR));
@@ -582,7 +582,7 @@ class TriggerControllerTest {
                         com.apimarketplace.orchestrator.services.credit.CreditExhaustion.MESSAGE));
 
                 controller.triggerSpecific("run-spec-broke", "manual", "trigger:manual_trigger",
-                    null, null, CALLER, null);
+                    null, null, CALLER, null, null);
 
                 assertThat(appender.list).noneMatch(e -> e.getLevel() == ch.qos.logback.classic.Level.ERROR);
                 assertThat(appender.list).anySatisfy(e ->
@@ -602,7 +602,7 @@ class TriggerControllerTest {
                     "run-noplan", "trigger:manual_trigger", TriggerType.MANUAL, "Run has no plan"));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-noplan", null, null, CALLER, null);
+                controller.triggerManual("run-noplan", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode().value()).isEqualTo(400);
         }
@@ -618,7 +618,7 @@ class TriggerControllerTest {
                     "run-auto-spec", "trigger:manual_trigger", TriggerType.MANUAL));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerSpecific("run-auto-spec", "manual", "trigger:manual_trigger", null, null, CALLER, null);
+                controller.triggerSpecific("run-auto-spec", "manual", "trigger:manual_trigger", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode().value()).isEqualTo(202);
             verify(triggerService).executeTriggerAsync(eq(run), eq("trigger:manual_trigger"),
@@ -639,7 +639,7 @@ class TriggerControllerTest {
                     Set.of("mcp:next"), 0));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerSpecific("run-sbs-spec", "manual", "trigger:manual_trigger", null, null, CALLER, null);
+                controller.triggerSpecific("run-sbs-spec", "manual", "trigger:manual_trigger", null, null, CALLER, null, "OWNER");
 
             assertThat(response.getStatusCode().value()).isEqualTo(202);
             assertThat(response.getBody().readySteps()).containsExactly("mcp:next");
@@ -664,9 +664,9 @@ class TriggerControllerTest {
 
             // triggerManual and triggerSpecific must BOTH reject a foreign caller before firing.
             ResponseEntity<TriggerController.TriggerResponse> manual =
-                    controller.triggerManual("run-1", null, null, "attacker-tenant", null);
+                    controller.triggerManual("run-1", null, null, "attacker-tenant", null, "OWNER");
             ResponseEntity<TriggerController.TriggerResponse> specific =
-                    controller.triggerSpecific("run-1", "manual", "trigger:x", null, null, "attacker-tenant", null);
+                    controller.triggerSpecific("run-1", "manual", "trigger:x", null, null, "attacker-tenant", null, "OWNER");
 
             assertThat(manual.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
             assertThat(specific.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
@@ -682,7 +682,7 @@ class TriggerControllerTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerManual("run-1", null, null, "owner-tenant", null);
+                    controller.triggerManual("run-1", null, null, "owner-tenant", null, "OWNER");
 
             // Passes the scope guard (not 404); downstream may reject for other reasons, never the guard.
             assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.NOT_FOUND);
@@ -696,7 +696,7 @@ class TriggerControllerTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<java.util.List<TriggerInfo>> response =
-                    controller.getAvailableTriggers("run-1", "attacker-tenant", null);
+                    controller.getAvailableTriggers("run-1", "attacker-tenant", null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
@@ -721,7 +721,7 @@ class TriggerControllerTest {
                     new org.springframework.web.context.request.ServletRequestAttributes(req));
             try {
                 ResponseEntity<TriggerController.TriggerResponse> response =
-                        controller.triggerManual("run-1", null, null, "owner-tenant", null);
+                        controller.triggerManual("run-1", null, null, "owner-tenant", null, "OWNER");
                 // The share binding passes -> NOT 404 (downstream may 400/409, never the guard's 404).
                 assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.NOT_FOUND);
             } finally {
@@ -745,7 +745,7 @@ class TriggerControllerTest {
                     new org.springframework.web.context.request.ServletRequestAttributes(req));
             try {
                 ResponseEntity<TriggerController.TriggerResponse> response =
-                        controller.triggerManual("run-1", null, null, "owner-tenant", null);
+                        controller.triggerManual("run-1", null, null, "owner-tenant", null, "OWNER");
                 assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
             } finally {
                 org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();

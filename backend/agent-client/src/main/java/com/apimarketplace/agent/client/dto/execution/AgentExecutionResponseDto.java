@@ -111,6 +111,20 @@ public record AgentExecutionResponseDto(
         return noContent && noTools && noThinking;
     }
 
+    /** {@link #metrics} key set on a run the platform refused before sending it to a bridge. */
+    public static final String REFUSED_BEFORE_DISPATCH = "refusedBeforeDispatch";
+
+    /**
+     * True when the platform refused this run for budget before sending it to a bridge: the
+     * balance and agent budget of the BILLED model, the same values the direct API's guards read,
+     * so a retry there is refused again and only records a false execution-link fallback. A
+     * budget stop by the bridge itself is not this: the bridge prices the model it executes,
+     * and the billed pair's guards may still allow the run.
+     */
+    public boolean wasRefusedBeforeDispatch() {
+        return metrics != null && Boolean.TRUE.equals(metrics.get(REFUSED_BEFORE_DISPATCH));
+    }
+
     /**
      * True when this run ended because a human asked it to stop.
      *

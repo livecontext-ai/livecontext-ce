@@ -711,6 +711,60 @@ class WorkflowResumeServiceCancelTest {
             verify(runEntity).setStatus(RunStatus.CANCELLED);
         }
 
+        @Test
+        @DisplayName("Regression (reminder after a stop): cancelling the run closes the workflow's failure incident")
+        void cancelClosesTheFailureIncident() throws Exception {
+            var delivery = mock(com.apimarketplace.orchestrator.services.notification.delivery
+                    .NotificationDeliveryService.class);
+            Field deliveryField = WorkflowResumeService.class.getDeclaredField("notificationDelivery");
+            deliveryField.setAccessible(true);
+            deliveryField.set(service, delivery);
+            java.util.UUID workflowId = java.util.UUID.randomUUID();
+            com.apimarketplace.orchestrator.domain.WorkflowEntity wf =
+                    mock(com.apimarketplace.orchestrator.domain.WorkflowEntity.class);
+            when(wf.getId()).thenReturn(workflowId);
+            when(wf.getWorkflowType())
+                    .thenReturn(com.apimarketplace.orchestrator.domain.WorkflowEntity.WorkflowType.WORKFLOW);
+            WorkflowRunEntity runEntity = createRunEntity(RunStatus.RUNNING);
+            lenient().when(runEntity.getRunIdPublic()).thenReturn(RUN_ID);
+            lenient().when(runEntity.getWorkflow()).thenReturn(wf);
+            when(runRepository.findByRunIdPublicForUpdate(RUN_ID))
+                    .thenReturn(Optional.of(runEntity));
+            when(cacheRegistry.cleanupRun(eq(RUN_ID), anySet())).thenReturn(1);
+            when(triggerClient.suspendSchedulesByWorkflow(eq(workflowId), anyString(), anyString())).thenReturn(1);
+
+            service.cancelWorkflow(RUN_ID);
+
+            verify(delivery).onWorkflowStopped(workflowId);
+        }
+
+        @Test
+        @DisplayName("A cancel whose schedule suspension stopped nothing (trigger service down) closes nothing")
+        void cancelWithNothingSuspendedClosesNothing() throws Exception {
+            var delivery = mock(com.apimarketplace.orchestrator.services.notification.delivery
+                    .NotificationDeliveryService.class);
+            Field deliveryField = WorkflowResumeService.class.getDeclaredField("notificationDelivery");
+            deliveryField.setAccessible(true);
+            deliveryField.set(service, delivery);
+            java.util.UUID workflowId = java.util.UUID.randomUUID();
+            com.apimarketplace.orchestrator.domain.WorkflowEntity wf =
+                    mock(com.apimarketplace.orchestrator.domain.WorkflowEntity.class);
+            when(wf.getId()).thenReturn(workflowId);
+            when(wf.getWorkflowType())
+                    .thenReturn(com.apimarketplace.orchestrator.domain.WorkflowEntity.WorkflowType.WORKFLOW);
+            WorkflowRunEntity runEntity = createRunEntity(RunStatus.RUNNING);
+            lenient().when(runEntity.getRunIdPublic()).thenReturn(RUN_ID);
+            lenient().when(runEntity.getWorkflow()).thenReturn(wf);
+            when(runRepository.findByRunIdPublicForUpdate(RUN_ID))
+                    .thenReturn(Optional.of(runEntity));
+            when(cacheRegistry.cleanupRun(eq(RUN_ID), anySet())).thenReturn(1);
+            when(triggerClient.suspendSchedulesByWorkflow(eq(workflowId), anyString(), anyString())).thenReturn(0);
+
+            service.cancelWorkflow(RUN_ID);
+
+            verify(delivery, never()).onWorkflowStopped(any());
+        }
+
         // Pause path: structurally covered. Both pauseWorkflow:404 and cancelWorkflow:578
         // call the same {@code applyApplicationSingleRunPolicyOnTermination(runEntity,
         // "<caller>")} method, so the {@code RUN_TERMINATION} source emission is

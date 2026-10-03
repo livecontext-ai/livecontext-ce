@@ -164,8 +164,9 @@ public class ChatTriggerResolver implements TriggerTypeHandler {
         payload.put("data", List.of(dataItem));
         payload.put("count", 1);
 
-        log.info("Chat trigger {} matched with match_type={}, message='{}', extracted_message='{}'",
-                trigger.id(), matchConfig.type(), message, extractedMessage);
+        log.info("Chat trigger {} matched with match_type={}, message={}, extracted_message={}",
+                trigger.id(), matchConfig.type(), com.apimarketplace.common.logging.PayloadLogSafety.describeText(message, 80),
+                com.apimarketplace.common.logging.PayloadLogSafety.describeText(extractedMessage, 80));
     }
 
     private void buildUnmatchedPayload(Map<String, Object> payload, Trigger trigger, String message,
@@ -181,7 +182,7 @@ public class ChatTriggerResolver implements TriggerTypeHandler {
         payload.put("data", List.of());
         payload.put("count", 0);
 
-        log.info("Chat trigger {} did NOT match - match_type={}, match_value='{}', message='{}'",
-                trigger.id(), matchConfig.type(), matchConfig.value(), message);
+        log.info("Chat trigger {} did NOT match - match_type={}, match_value='{}', message={}",
+                trigger.id(), matchConfig.type(), matchConfig.value(), com.apimarketplace.common.logging.PayloadLogSafety.describeText(message, 80));
     }
 }

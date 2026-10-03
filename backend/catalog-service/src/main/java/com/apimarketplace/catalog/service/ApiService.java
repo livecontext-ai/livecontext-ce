@@ -61,6 +61,7 @@ public class ApiService {
     private final ProtocolConfigService protocolConfigService;
     private final ApiResponseConverter responseConverter;
     private final RestTemplate restTemplate;
+    private final CustomApiCredentialGuard credentialGuard;
 
     /**
      * Self-reference so we can invoke {@code @Transactional} methods through the
@@ -108,6 +109,45 @@ public class ApiService {
         log.info("Processing API submission: {}", command.apiName());
         ApiEntity savedApi = submissionOrchestrator.process(command);
         return convertToApiResponse(savedApi);
+    }
+
+    /**
+     * The user-facing entry point of {@code POST /api/apis/configuration/process} (LC-002, CASA
+     * readiness). The body is caller-written, and it used to be persisted as given: a user could
+     * submit {@code source:"import"} (which exempted the row from every custom-API rule),
+     * {@code iconSlug:"gmail"} (the credential key of the built-in Gmail integration), a base URL
+     * of their choosing and a stable {@code apiId}. Unless the caller is the platform itself (the
+     * catalog importer, identified by its gateway identity or the internal admin token), the
+     * submission is forced to {@code source="custom"}, may not name its own credential key or
+     * primary key, and is refused when the key it derives belongs to anybody else. A lookup that
+     * cannot run refuses too.
+     */
+    public ApiResponse processSubmittedApiConfiguration(ApiConfigurationRequest request, String userId,
+                                                        boolean internalAdminCaller) {
+        if (internalAdminCaller || credentialGuard.isPlatformOwner(userId)) {
+            return self.processApiConfiguration(request, userId);
+        }
+        ApiConfigurationRequest sanitized = new ApiConfigurationRequest(
+                request.apiName(), request.apiDescription(), request.selectedCategory(),
+                request.categoryDescription(), request.selectedSubcategory(), request.subcategoryDescription(),
+                request.subcategoryIconUrl(), request.categoryId(), request.subcategoryId(),
+                request.isCustomCategory(), request.isCustomSubcategory(), request.isLocal(),
+                request.iconSlug(), request.apiSlug(), request.credentialMode(),
+                null,        // platformCredentialName: derived, never caller-chosen
+                "custom",    // source: a user submission is a custom API, whatever the body says
+                request.iconUrl(), request.toolCategoryIconUrl(), request.apiConfig(),
+                request.monetization(), request.mcpTools(),
+                null,        // apiId: the primary key is generated, never caller-chosen
+                request.errorPolicy());
+        String key = request.iconSlug() != null && !request.iconSlug().isBlank()
+                ? com.apimarketplace.catalog.util.IconSlugNormalizer.normalize(request.iconSlug())
+                : com.apimarketplace.catalog.util.IconSlugNormalizer.normalizeForKey(request.apiName());
+        if (key != null && !key.isBlank() && credentialGuard.isKeyTakenByAnother(key, userId)) {
+            throw new IllegalArgumentException("The credential key '" + key + "' derived from this API is already "
+                    + "in use on this installation (a built-in integration or another user's API). Choose a "
+                    + "different API name or icon slug.");
+        }
+        return self.processApiConfiguration(sanitized, userId);
     }
 
     @Transactional
@@ -175,6 +215,19 @@ public class ApiService {
             }
 
             CredentialRequirement credReq = getRequiredCredentialInfo(tool.getId());
+            // LC-002 (CASA readiness): a user-created API may not resolve a credential filed under
+            // someone else's key, except host-bound to the owning shipped integration.
+            CustomApiCredentialGuard.Decision keyDecision = credentialGuard.decide(
+                    api, credReq != null ? credReq.credentialName() : null, toolName);
+            if (keyDecision.refusal() != null) return keyDecision.refusal();
+            if (keyDecision.withoutPlatformFallback()) {
+                // A DETACHED copy: the loaded entity is never mutated, so nothing can flush the
+                // cleared column back (CE runs with open-in-view).
+                api = withoutPlatformFallback(api);
+            }
+            if (keyDecision.binding() != null) {
+                com.apimarketplace.catalog.service.http.CredentialHostBinding.set(keyDecision.binding());
+            }
             Map<String, Object> credError = validateCredentials(api, tool, credReq, userId, toolName);
             if (credError != null) return credError;
 
@@ -256,14 +309,24 @@ public class ApiService {
             // account the workflow asked for.
             throw e;
         } catch (Exception e) {
-            log.error("Error executing tool: {}", e.getMessage(), e);
+            log.error("Error executing tool: {}", com.apimarketplace.common.web.UrlLogRedaction.redact(e.getMessage()));
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
             errorResult.put("error", e.getMessage() != null ? e.getMessage() : "Unknown error");
             errorResult.put("toolName", toolName);
             errorResult.put("apiId", apiId);
             return errorResult;
+        } finally {
+            com.apimarketplace.catalog.service.http.CredentialHostBinding.clear();
         }
+    }
+
+    /** A detached copy of {@code api} with no platform credential fallback. */
+    private static ApiEntity withoutPlatformFallback(ApiEntity api) {
+        ApiEntity copy = new ApiEntity();
+        org.springframework.beans.BeanUtils.copyProperties(api, copy);
+        copy.setPlatformCredentialName(null);
+        return copy;
     }
 
     private record CredentialRequirement(String credentialName, String credentialType) {}
@@ -390,6 +453,8 @@ public class ApiService {
             long startTime = System.currentTimeMillis();
 
             try {
+                // Same SSRF guard as tool execution: the base url of a custom API is caller-chosen.
+                com.apimarketplace.common.web.UrlSafetyValidator.validateEgressUrl(healthUrl);
                 ResponseEntity<Object> response = restTemplate.getForEntity(healthUrl, Object.class);
                 return Map.of("success", true, "status", response.getStatusCode().value(),
                         "responseTime", System.currentTimeMillis() - startTime, "url", healthUrl);

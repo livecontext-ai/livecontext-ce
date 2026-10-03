@@ -1,6 +1,8 @@
 package com.apimarketplace.orchestrator.controllers.workflow;
 
+import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.common.scope.ScopeGuard;
+import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.common.web.SharedApplicationScope;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
@@ -56,6 +58,10 @@ public class WorkflowControllerHelper {
     @Autowired
     private TriggerClient triggerClient;
 
+    /** Intra-organization access guard (LC-012) - see {@link #mayExposeWebhookTokens}. */
+    @Autowired
+    private OrgAccessGuard orgAccessGuard;
+
     @Autowired
     private com.apimarketplace.orchestrator.lifecycle.LocalRunExecutionTracker runTracker;
 
@@ -89,6 +95,114 @@ public class WorkflowControllerHelper {
                 callerUserId, callerOrgId,
                 run.getTenantId(), run.getOrganizationId())
             && shareContextPermitsRun(run);
+    }
+
+    /**
+     * Layer 2 for the run surface: may this caller EXECUTE something on this run?
+     *
+     * <p>{@link #isRunInScope} answers "is the caller in the right workspace", which says
+     * nothing about their role inside it. Advancing a run is a mutation, and for a Gmail
+     * workflow it means a fresh fetch of the owner's mailbox, so it is gated with
+     * {@code canWrite}, which also folds in the read-only VIEWER role. The gate is keyed on the
+     * run's PARENT WORKFLOW: denying a member the Gmail workflow must deny them every run of it.
+     *
+     * <p>This lives here, next to the scope predicate, because "execute on a run" is reachable
+     * through many controllers (trigger fire, step-by-step execute, schedule execute-now,
+     * interface action fire, rerun, signal). Gating one of them and leaving the others is how
+     * the surface ended up protected on paper only: the frontend hides the launcher for VIEWER
+     * on the belief the backend refuses, which was true for exactly one endpoint
+     * (LC-012, security audit 2026-08-13).
+     *
+     * @param orgRole the gateway-injected {@code X-Organization-Role}; the gateway strips any
+     *                client-supplied copy, so it cannot be forged.
+     * @return true when the caller may execute. Personal (non-org) runs always return true:
+     *         there is no role to enforce outside a workspace.
+     */
+    public static boolean canExecuteRun(WorkflowRunEntity run, String callerUserId, String orgRole,
+                                        OrgAccessGuard orgAccessGuard) {
+        if (run == null) {
+            return false;
+        }
+        String runOrgId = run.getOrganizationId();
+        if (runOrgId == null || runOrgId.isBlank()) {
+            return true;
+        }
+        if (orgAccessGuard == null) {
+            // Fail CLOSED. An authorization check that silently does not run is worse than no
+            // check, because every call site reads as if it did.
+            return false;
+        }
+        WorkflowEntity workflow = run.getWorkflow();
+        if (workflow == null || workflow.getId() == null) {
+            return false;
+        }
+        return orgAccessGuard.canWrite(
+                runOrgId, callerUserId, "workflow", String.valueOf(workflow.getId()), orgRole);
+    }
+
+    /**
+     * Layer 2 for the run surface, READ side: may this caller SEE this run?
+     *
+     * <p>Sibling of {@link #canExecuteRun}, and the only difference is the verb:
+     * {@code canAccess} instead of {@code canWrite}, so a member holding a READ-level
+     * restriction still reads while a DENY-listed member does not. The gate is keyed on
+     * the run's PARENT WORKFLOW, because that is the resource an owner/admin denies a
+     * member: denying somebody the Gmail workflow must hide every run of it, including the
+     * step data and the recorded step outputs, which is where the mailbox contents
+     * actually live (LC-012, security audit 2026-08-13).
+     *
+     * @param orgRole the gateway-injected {@code X-Organization-Role}; the gateway strips
+     *                any client-supplied copy, so it cannot be forged.
+     * @return true when the caller may read. Personal (non-org) runs always return true:
+     *         there is no role or deny-list to enforce outside a workspace.
+     */
+    public static boolean canReadRun(WorkflowRunEntity run, String callerUserId, String orgRole,
+                                     OrgAccessGuard orgAccessGuard) {
+        if (run == null) {
+            return false;
+        }
+        String runOrgId = run.getOrganizationId();
+        if (runOrgId == null || runOrgId.isBlank()) {
+            return true; // personal run: no role and no deny-list to enforce
+        }
+        WorkflowEntity workflow = run.getWorkflow();
+        if (workflow == null || workflow.getId() == null) {
+            // workflow_runs.workflow_id is NOT NULL and the association is optional=false,
+            // so an org-tagged run with no workflow is an anomaly, not a shape to trust.
+            // Fail closed, exactly as canExecuteRun does.
+            return false;
+        }
+        return canReadWorkflowResource(runOrgId, callerUserId, String.valueOf(workflow.getId()),
+                orgRole, orgAccessGuard);
+    }
+
+    /**
+     * The same read gate for handlers that hold a workflow id rather than a run entity
+     * (the per-workflow run listings, and the storage row whose owning workflow is
+     * recorded on the row itself).
+     *
+     * @param resourceOrgId the workspace the resource belongs to; blank/null means a
+     *                      personal resource, where no role and no deny-list apply
+     * @param workflowId    the owning workflow. Blank on an ORG resource FAILS CLOSED (audit
+     *                      round 2): the deny-list cannot be evaluated without the key it is
+     *                      stored under, and an authorization question that cannot be
+     *                      answered is a refusal, not a pass
+     */
+    public static boolean canReadWorkflowResource(String resourceOrgId, String callerUserId,
+                                                  String workflowId, String orgRole,
+                                                  OrgAccessGuard orgAccessGuard) {
+        if (resourceOrgId == null || resourceOrgId.isBlank()) {
+            return true;
+        }
+        if (workflowId == null || workflowId.isBlank()) {
+            return false;
+        }
+        if (orgAccessGuard == null) {
+            // Fail CLOSED. An authorization check that silently does not run is worse than
+            // no check, because every call site reads as if it did.
+            return false;
+        }
+        return orgAccessGuard.canAccess(resourceOrgId, callerUserId, "workflow", workflowId, orgRole);
     }
 
     /**
@@ -160,6 +274,66 @@ public class WorkflowControllerHelper {
             return false;
         }
         return "true".equalsIgnoreCase(attrs.getRequest().getHeader("X-Share-Context"));
+    }
+
+    /**
+     * Whether the current caller may be shown a workflow's webhook tokens (LC-012, security
+     * audit 2026-08-13).
+     *
+     * <p>A webhook token IS the credential that fires the workflow: {@code POST /webhook/{token}}
+     * is deliberately unauthenticated, because the callers are external systems. So handing the
+     * token to somebody who is not allowed to run the workflow hands them exactly the capability
+     * the role gates are there to withhold, in a form no later check can take back. A read-only
+     * member still sees that a webhook trigger exists, just not its token.
+     *
+     * <p>This is the same reasoning the anonymous-share check next to it already applies, now
+     * extended to the read-only role inside the workspace.
+     *
+     * <p><b>Same rule as {@link #canExecuteRun}, deliberately.</b> Both answer "may this caller
+     * make this workflow run", so both go through {@code canWrite} rather than the role-only
+     * shortcut. The difference is not theoretical: a member holding a READ-level per-resource
+     * restriction passes {@code canAccess} but fails {@code canWrite}, so a role-only check here
+     * would refuse them the trigger endpoint and then hand them the token that fires it anyway.
+     *
+     * @param workflow the workflow whose tokens are about to be serialised; {@code null} refuses,
+     *                 since an undecidable question about a credential is a refusal
+     */
+    public static boolean mayExposeWebhookTokens(WorkflowEntity workflow, OrgAccessGuard orgAccessGuard) {
+        if (isShareContext() || workflow == null) {
+            return false;
+        }
+        String workflowOrgId = workflow.getOrganizationId();
+        if (workflowOrgId == null || workflowOrgId.isBlank()) {
+            return true; // personal workflow: no role to enforce
+        }
+        if (orgAccessGuard == null || workflow.getId() == null) {
+            return false; // fail closed, exactly as canExecuteRun does
+        }
+        return orgAccessGuard.canWrite(workflowOrgId, TenantResolver.currentRequestUserId(),
+                "workflow", String.valueOf(workflow.getId()),
+                TenantResolver.currentRequestOrganizationRole());
+    }
+
+    /**
+     * Variant for the two response builders that hold a {@link WorkflowPlan} rather than the
+     * entity (the execute/reuse bootstrap responses). The plan carries the workflow id but not
+     * its organization, so the workspace comes from the request, which for these endpoints is
+     * the same value: the run being bootstrapped belongs to the caller's active workspace, the
+     * scope check upstream having already established that.
+     */
+    public static boolean mayExposeWebhookTokens(String workflowId, OrgAccessGuard orgAccessGuard) {
+        if (isShareContext() || workflowId == null || workflowId.isBlank()) {
+            return false;
+        }
+        String orgId = TenantResolver.currentRequestOrganizationId();
+        if (orgId == null || orgId.isBlank()) {
+            return true; // personal workspace: no role to enforce
+        }
+        if (orgAccessGuard == null) {
+            return false;
+        }
+        return orgAccessGuard.canWrite(orgId, TenantResolver.currentRequestUserId(),
+                "workflow", workflowId, TenantResolver.currentRequestOrganizationRole());
     }
 
     /**
@@ -287,7 +461,7 @@ public class WorkflowControllerHelper {
         // Webhook tokens are owner secrets - never expose them to an anonymous share
         // visitor. This response is reached under the allow-listed bootstrap POST
         // (/api/v2/workflows/dag/execute), which an APPLICATION share holder may call.
-        if (!isShareContext() && triggerTypeDetector.hasWebhookTrigger(plan)) {
+        if (mayExposeWebhookTokens(plan.getId(), orgAccessGuard) && triggerTypeDetector.hasWebhookTrigger(plan)) {
             try {
                 UUID wfId = UUID.fromString(execution.getPlan().getId());
                 Map<String, String> tokens = triggerClient.getTokensForWorkflow(wfId);
@@ -336,7 +510,7 @@ public class WorkflowControllerHelper {
         // Webhook tokens are owner secrets - never expose them to an anonymous share
         // visitor. This reused-run response is reached under the allow-listed bootstrap
         // POST (/api/v2/workflows/dag/execute), which an APPLICATION share holder may call.
-        if (!isShareContext() && triggerTypeDetector.hasWebhookTrigger(plan)) {
+        if (mayExposeWebhookTokens(plan.getId(), orgAccessGuard) && triggerTypeDetector.hasWebhookTrigger(plan)) {
             try {
                 UUID wfId = UUID.fromString(plan.getId());
                 Map<String, String> tokens = triggerClient.getTokensForWorkflow(wfId);
@@ -399,7 +573,7 @@ public class WorkflowControllerHelper {
         // its webhook URL). Never expose them to an anonymous share-link visitor - the
         // /s/{token} application viewer can read the shared workflow definition but has
         // no legitimate use for its webhook tokens.
-        if (!isShareContext()) {
+        if (mayExposeWebhookTokens(workflow, orgAccessGuard)) {
             Map<String, String> tokens = triggerClient.getTokensForWorkflow(workflow.getId());
             if (!tokens.isEmpty()) {
                 response.put("webhookTokens", tokens);

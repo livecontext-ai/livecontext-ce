@@ -101,14 +101,14 @@ describe('AcceptInvitationPage - CE invite-by-link register branch', () => {
     embeddedRegister.mockResolvedValue({ success: true });
     fireEvent.change(screen.getByLabelText('invitationAccept.firstName'), { target: { value: 'New' } });
     fireEvent.change(screen.getByLabelText('invitationAccept.lastName'), { target: { value: 'Comer' } });
-    fireEvent.change(screen.getByLabelText('invitationAccept.password'), { target: { value: 'password123' } });
-    fireEvent.change(screen.getByLabelText('invitationAccept.confirmPassword'), { target: { value: 'password123' } });
+    fireEvent.change(screen.getByLabelText('invitationAccept.password'), { target: { value: 'password1234' } });
+    fireEvent.change(screen.getByLabelText('invitationAccept.confirmPassword'), { target: { value: 'password1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'invitationAccept.registerCta' }));
 
     await waitFor(() =>
       expect(embeddedRegister).toHaveBeenCalledWith(
         'newcomer@example.com',
-        'password123',
+        'password1234',
         'New',
         'Comer',
         'tok-xyz'

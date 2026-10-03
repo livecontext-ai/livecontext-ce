@@ -84,17 +84,42 @@ class PartnerProgramControllerTest {
     }
 
     @Test
+    @DisplayName("GET code offer is anonymous: the code and its credits, nothing about the partner")
+    void codeOfferAnonymous() throws Exception {
+        when(service.codeOffer("NORTHWIND")).thenReturn(java.util.Optional.of(new PartnerProgramService.CodeOffer("NORTHWIND", 8000)));
+
+        mvc.perform(get("/api/public/partner-program/codes/NORTHWIND"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("NORTHWIND"))
+                .andExpect(jsonPath("$.credits").value(8000))
+                .andExpect(jsonPath("$.owner_user_id").doesNotExist())
+                .andExpect(jsonPath("$.partner").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET code offer: 404 for a code that offers nothing (unknown, not a partner code, not redeemable)")
+    void codeOfferUnknown() throws Exception {
+        when(service.codeOffer("NOPE")).thenReturn(java.util.Optional.empty());
+
+        mvc.perform(get("/api/public/partner-program/codes/NOPE"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("unknown_code"));
+    }
+
+    @Test
     @DisplayName("self-hosted (credits unlimited): every endpoint answers 503 and touches nothing")
     void ceRefuses() throws Exception {
         MockMvc ce = MockMvcBuilders.standaloneSetup(new PartnerProgramController(service, termsService, auditLogger, true)).build();
 
         ce.perform(get("/api/public/partner-program/terms")).andExpect(status().isServiceUnavailable());
+        ce.perform(get("/api/public/partner-program/codes/NORTHWIND")).andExpect(status().isServiceUnavailable());
         ce.perform(get("/api/billing/partner/me").header("X-User-ID", "7")).andExpect(status().isServiceUnavailable());
         ce.perform(post("/api/billing/partner/applications").header("X-User-ID", "7")
                         .contentType(MediaType.APPLICATION_JSON).content("{\"company_name\":\"Acme\"}"))
                 .andExpect(status().isServiceUnavailable());
         verify(service, never()).dashboard(any());
         verify(service, never()).apply(any(), any(), any());
+        verify(service, never()).codeOffer(any());
     }
 
     @Test
@@ -108,7 +133,7 @@ class PartnerProgramControllerTest {
     @Test
     @DisplayName("GET me for a non-partner: state and terms, no partner block")
     void meNone() throws Exception {
-        when(service.dashboard(7L)).thenReturn(new Dashboard("none", TERMS, null, null, 0, 0, null, List.of(), null, null, NO_AGREEMENT));
+        when(service.dashboard(7L)).thenReturn(new Dashboard("none", TERMS, null, null, 0, 0, null, List.of(), null, null, NO_AGREEMENT, List.of()));
 
         mvc.perform(get("/api/billing/partner/me").header("X-User-ID", "7"))
                 .andExpect(status().isOk())
@@ -134,7 +159,9 @@ class PartnerProgramControllerTest {
                 List.of(new Line(paid, "eur", 2000, 800, "on_hold", paid.plusSeconds(86400 * 14), null)),
                 new com.apimarketplace.auth.service.PartnerTierService.Standing(com.apimarketplace.auth.domain.PartnerTier.GOLD,
                         false, 600_000L, "usd", com.apimarketplace.auth.domain.PartnerTier.PLATINUM, 2_500_000L, 4000),
-                45.0, NO_AGREEMENT);
+                45.0, NO_AGREEMENT, List.of(
+                        new com.apimarketplace.auth.service.PartnerProgramService.Month("2026-09", Map.of("eur", 800L)),
+                        new com.apimarketplace.auth.service.PartnerProgramService.Month("2026-10", Map.of())));
         when(service.dashboard(7L)).thenReturn(d);
 
         mvc.perform(get("/api/billing/partner/me").header("X-User-ID", "7"))
@@ -164,7 +191,12 @@ class PartnerProgramControllerTest {
                 .andExpect(jsonPath("$.partner.lines[0].due_at").value("2026-09-15T10:00:00Z"))
                 .andExpect(jsonPath("$.partner.lines[0].commission_minor").value(800))
                 .andExpect(jsonPath("$.partner.lines[0].status").value("on_hold"))
-                .andExpect(jsonPath("$.partner.lines[0].customer_user_id").doesNotExist());
+                .andExpect(jsonPath("$.partner.lines[0].customer_user_id").doesNotExist())
+                // The monthly earnings the dashboard charts, oldest first, an empty month included.
+                .andExpect(jsonPath("$.partner.months[0].month").value("2026-09"))
+                .andExpect(jsonPath("$.partner.months[0].commissions.eur").value(800))
+                .andExpect(jsonPath("$.partner.months[1].month").value("2026-10"))
+                .andExpect(jsonPath("$.partner.months[1].commissions").isEmpty());
     }
 
     @Test
@@ -177,7 +209,7 @@ class PartnerProgramControllerTest {
         c.setHoldDays(14);
         c.setBenefitAmount(10_000);
         when(service.dashboard(7L)).thenReturn(new Dashboard("active", TERMS, null, c, 0, 0,
-                new Amounts(Map.of(), Map.of(), Map.of(), Map.of()), List.of(), null, null, NO_AGREEMENT));
+                new Amounts(Map.of(), Map.of(), Map.of(), Map.of()), List.of(), null, null, NO_AGREEMENT, List.of()));
 
         mvc.perform(get("/api/billing/partner/me").header("X-User-ID", "7"))
                 .andExpect(status().isOk())
@@ -405,7 +437,7 @@ class PartnerProgramControllerTest {
     @DisplayName("GET me: someone who is not a partner is never asked to accept anything from the dashboard")
     void meAgreementNotPartner() throws Exception {
         when(service.dashboard(7L)).thenReturn(new Dashboard("pending", TERMS, null, null, 0, 0, null, List.of(), null, null,
-                NO_AGREEMENT));
+                NO_AGREEMENT, List.of()));
 
         mvc.perform(get("/api/billing/partner/me").header("X-User-ID", "7"))
                 .andExpect(jsonPath("$.agreement.required").value(false))
@@ -417,6 +449,6 @@ class PartnerProgramControllerTest {
         c.setCode("ACME");
         c.setPayoutBps(3000);
         return new Dashboard("active", TERMS, null, c, 0, 0,
-                new Amounts(Map.of(), Map.of(), Map.of(), Map.of()), List.of(), null, 30.0, agreement);
+                new Amounts(Map.of(), Map.of(), Map.of(), Map.of()), List.of(), null, 30.0, agreement, List.of());
     }
 }

@@ -5,6 +5,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -30,7 +34,7 @@ class NonceUtilTest {
             String nonce = nonceUtil.generateNonce(1L);
 
             assertThat(nonce).isNotNull();
-            assertThat(nonce).startsWith("n_");
+            assertThat(nonce).startsWith("n2_").matches("n2_[A-Za-z0-9_-]+");
         }
 
         @Test
@@ -214,6 +218,60 @@ class NonceUtilTest {
 
             assertThat(first.decodeNonce(nonce)).isEqualTo(123L);
             assertThat(second.decodeNonce(nonce)).isNull();
+        }
+
+        @Test
+        @DisplayName("LC-026: a missing NONCE_ENCRYPTION_KEY is not fatal but is exported as auth.nonce.key.ephemeral=1")
+        void ephemeralKeyIsExportedAsGauge() {
+            io.micrometer.core.instrument.simple.SimpleMeterRegistry unset = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+            io.micrometer.core.instrument.simple.SimpleMeterRegistry set = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+            NonceUtil ephemeral = new NonceUtil("");
+            NonceUtil configured = new NonceUtil("deployment-specific-key");
+            ephemeral.bindTo(unset);
+            configured.bindTo(set);
+
+            assertThat(ephemeral.isUsingEphemeralKey()).isTrue();
+            assertThat(configured.isUsingEphemeralKey()).isFalse();
+            assertThat(unset.get("auth.nonce.key.ephemeral").gauge().value()).isEqualTo(1.0);
+            assertThat(set.get("auth.nonce.key.ephemeral").gauge().value()).isEqualTo(0.0);
+        }
+
+        @Test
+        @DisplayName("LC-026: a legacy n_ (AES-128-ECB) nonce already stored in Stripe metadata still decodes")
+        void legacyEcbNonceStillDecodes() throws Exception {
+            String key = "a-much-longer-key-than-sixteen-bytes";
+            byte[] aesKey = java.util.Arrays.copyOf(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8)), 16);
+            Cipher ecb = Cipher.getInstance("AES/ECB/PKCS5Padding");
+            ecb.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(aesKey, "AES"));
+            String legacy = "n_" + Base64.getEncoder().encodeToString(
+                    ecb.doFinal(("4242:" + System.currentTimeMillis() + ":AbCdEfGh").getBytes(StandardCharsets.UTF_8)));
+
+            assertThat(new NonceUtil(key).decodeNonce(legacy)).isEqualTo(4242L);
+        }
+
+        @Test
+        @DisplayName("LC-026: the written format is authenticated GCM, not ECB: a flipped byte is rejected")
+        void tamperedGcmNonceIsRejected() {
+            NonceUtil writer = new NonceUtil("deployment-specific-key");
+            String nonce = writer.generateNonce(99L);
+            byte[] body = Base64.getUrlDecoder().decode(nonce.substring("n2_".length()));
+            body[14] ^= 0x01;
+            String tampered = "n2_" + Base64.getUrlEncoder().withoutPadding().encodeToString(body);
+
+            assertThat(new NonceUtil("deployment-specific-key").decodeNonce(tampered)).isNull();
+        }
+
+        @Test
+        @DisplayName("LC-026: equal plaintext blocks no longer produce equal ciphertext (random IV per nonce)")
+        void noDeterministicBlocks() {
+            NonceUtil a = new NonceUtil("deployment-specific-key");
+            NonceUtil b = new NonceUtil("deployment-specific-key");
+            String first = a.generateNonce(1234567890123L);
+            String second = b.generateNonce(1234567890123L);
+            // ECB encrypted the leading "1234567890123:17" block identically for the same user
+            // in the same time window; GCM output shares no prefix beyond the marker.
+            assertThat(first.substring(3, 15)).isNotEqualTo(second.substring(3, 15));
         }
 
         @Test

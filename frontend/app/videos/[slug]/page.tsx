@@ -97,7 +97,8 @@ export async function generateMetadata({
     // Self-hosted deployments never index marketing pages. `follow: false` like
     // /marketplace, /compare, /about, /changelog, /models and /status; robots.ts
     // already disallows everything on CE, so this is the belt for those braces.
-    robots: IS_CE ? { index: false, follow: false } : undefined,
+    // Only on CE: on the cloud an explicit 'robots: undefined' wiped the root layout's directives.
+    ...(IS_CE ? { robots: { index: false, follow: false } } : {}),
   };
 }
 

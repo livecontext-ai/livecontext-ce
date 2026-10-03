@@ -253,7 +253,7 @@ class CrudExecutorServiceTest {
             when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(ds));
 
             List<Long> insertedIds = List.of(10L, 11L);
-            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any()))
+            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any(), any()))
                 .thenReturn(insertedIds);
 
             CreateRowRequest request = mock(CreateRowRequest.class);
@@ -721,7 +721,7 @@ class CrudExecutorServiceTest {
             columns.put("embedding", embedding);
 
             List<Long> insertedIds = List.of(42L);
-            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any()))
+            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any(), any()))
                 .thenReturn(insertedIds);
 
             CreateRowRequest request = mock(CreateRowRequest.class);
@@ -748,7 +748,7 @@ class CrudExecutorServiceTest {
             when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(ds));
 
             List<Long> insertedIds = List.of(10L);
-            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any()))
+            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any(), any()))
                 .thenReturn(insertedIds);
 
             CreateRowRequest request = mock(CreateRowRequest.class);
@@ -780,7 +780,7 @@ class CrudExecutorServiceTest {
             cols2.put("embedding", emb2);
 
             List<Long> insertedIds = List.of(100L, 101L);
-            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any()))
+            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any(), any()))
                 .thenReturn(insertedIds);
 
             CreateRowRequest request = mock(CreateRowRequest.class);
@@ -857,7 +857,7 @@ class CrudExecutorServiceTest {
         @DisplayName("CREATE: rows are stamped with the owner's tenant, not the workflow executor's")
         void createRowStampsOwnerTenantNotExecutorTenant() {
             when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(createOrgDataSource()));
-            when(crudRepository.createRows(eq(1L), eq(OWNER_TENANT), any())).thenReturn(List.of(10L));
+            when(crudRepository.createRows(eq(1L), eq(OWNER_TENANT), any(), any())).thenReturn(List.of(10L));
 
             CreateRowRequest request = mock(CreateRowRequest.class);
             when(request.getDataSourceId()).thenReturn(1L);
@@ -867,15 +867,15 @@ class CrudExecutorServiceTest {
             CrudResult result = executorService.execute(request, EXECUTOR_TENANT, ORG_ID);
 
             assertThat(result.success()).isTrue();
-            verify(crudRepository).createRows(eq(1L), eq(OWNER_TENANT), any());
-            verify(crudRepository, never()).createRows(anyLong(), eq(EXECUTOR_TENANT), any());
+            verify(crudRepository).createRows(eq(1L), eq(OWNER_TENANT), any(), any());
+            verify(crudRepository, never()).createRows(anyLong(), eq(EXECUTOR_TENANT), any(), any());
         }
 
         @Test
         @DisplayName("CREATE: storage accounting increments the owner's tenant")
         void createRowAttributesStorageToOwnerTenant() {
             when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(createOrgDataSource()));
-            when(crudRepository.createRows(eq(1L), eq(OWNER_TENANT), any())).thenReturn(List.of(10L));
+            when(crudRepository.createRows(eq(1L), eq(OWNER_TENANT), any(), any())).thenReturn(List.of(10L));
 
             CreateRowRequest request = mock(CreateRowRequest.class);
             when(request.getDataSourceId()).thenReturn(1L);
@@ -914,7 +914,7 @@ class CrudExecutorServiceTest {
         void updateRowsScopeToOwnerTenant() {
             when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(createOrgDataSource()));
             when(crudRepository.findIdsMatching(eq(1L), eq(OWNER_TENANT), any())).thenReturn(List.of(42L));
-            when(crudRepository.updateRows(eq(1L), eq(OWNER_TENANT), any(), any())).thenReturn(1);
+            when(crudRepository.updateRows(eq(1L), eq(OWNER_TENANT), any(), any(), anyBoolean())).thenReturn(1);
 
             UpdateRowRequest request = mock(UpdateRowRequest.class);
             when(request.getDataSourceId()).thenReturn(1L);
@@ -925,8 +925,8 @@ class CrudExecutorServiceTest {
             CrudResult result = executorService.execute(request, EXECUTOR_TENANT, ORG_ID);
 
             assertThat(result.success()).isTrue();
-            verify(crudRepository).updateRows(eq(1L), eq(OWNER_TENANT), any(), any());
-            verify(crudRepository, never()).updateRows(anyLong(), eq(EXECUTOR_TENANT), any(), any());
+            verify(crudRepository).updateRows(eq(1L), eq(OWNER_TENANT), any(), any(), anyBoolean());
+            verify(crudRepository, never()).updateRows(anyLong(), eq(EXECUTOR_TENANT), any(), any(), anyBoolean());
         }
 
         @Test
@@ -976,7 +976,7 @@ class CrudExecutorServiceTest {
         @DisplayName("CREATE: row_created events carry the owner's tenant, consistent with the stored row")
         void createRowEventsCarryOwnerTenant() {
             when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(createOrgDataSource()));
-            when(crudRepository.createRows(eq(1L), eq(OWNER_TENANT), any())).thenReturn(List.of(10L));
+            when(crudRepository.createRows(eq(1L), eq(OWNER_TENANT), any(), any())).thenReturn(List.of(10L));
             when(crudRepository.findRowsByIds(eq(1L), eq(OWNER_TENANT), eq(List.of(10L))))
                 .thenReturn(List.of(Map.of("id", 10, "data", Map.of("label", "Finance"))));
 
@@ -987,7 +987,142 @@ class CrudExecutorServiceTest {
 
             executorService.execute(request, EXECUTOR_TENANT, ORG_ID);
 
-            verify(rowEventPublisher).publishCreated(eq(1L), eq(10L), eq(OWNER_TENANT), eq(ORG_ID), anyMap());
+            verify(rowEventPublisher).publishCreated(eq(1L), eq(10L), eq(OWNER_TENANT), eq(ORG_ID), anyMap(), anyString());
+        }
+    }
+
+    // ==================== LC-066 re-audit item 1/2: table-trigger + similarity-search taint ====================
+
+    @Nested
+    @DisplayName("LC-066 re-audit: table-trigger row snapshots and similarity search propagate data_sensitivity")
+    class RestrictedRowPropagationTests {
+        // Residual closed by this batch: findRowsByIds and similaritySearch previously omitted
+        // data_sensitivity entirely, so a RESTRICTED row firing a datasource trigger (or matched by
+        // a similarity search) reached its consumer with no way to classify it.
+
+        private DataSource createDs() {
+            return new DataSource(1L, "tenant-1", "docs", null, null, null, null, null, null, null,
+                null, null, null, null, null, null);
+        }
+
+        @Test
+        @DisplayName("CREATE: row_created event carries the freshly-inserted row's own RESTRICTED tag")
+        void createRowEventCarriesRestrictedSensitivity() {
+            when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(createDs()));
+            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any(), any())).thenReturn(List.of(10L));
+            when(crudRepository.findRowsByIds(eq(1L), eq("tenant-1"), eq(List.of(10L))))
+                .thenReturn(List.of(Map.of("id", 10, "data", Map.of("subject", "wire transfer"),
+                    "data_sensitivity", "RESTRICTED")));
+
+            CreateRowRequest request = mock(CreateRowRequest.class);
+            when(request.getDataSourceId()).thenReturn(1L);
+            when(request.getOperation()).thenReturn(CrudOperation.CREATE_ROW);
+            when(request.getRows()).thenReturn(List.of(new CreateRowRequest.RowData(null, Map.of("subject", "wire transfer"))));
+
+            executorService.execute(request, "tenant-1");
+
+            verify(rowEventPublisher).publishCreated(eq(1L), eq(10L), eq("tenant-1"), isNull(),
+                anyMap(), eq("RESTRICTED"));
+        }
+
+        @Test
+        @DisplayName("CREATE: row_created event carries NORMAL when the row has no restricted tag")
+        void createRowEventCarriesNormalSensitivity() {
+            when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(createDs()));
+            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any(), any())).thenReturn(List.of(11L));
+            when(crudRepository.findRowsByIds(eq(1L), eq("tenant-1"), eq(List.of(11L))))
+                .thenReturn(List.of(Map.of("id", 11, "data", Map.of("subject", "lunch"))));
+
+            CreateRowRequest request = mock(CreateRowRequest.class);
+            when(request.getDataSourceId()).thenReturn(1L);
+            when(request.getOperation()).thenReturn(CrudOperation.CREATE_ROW);
+            when(request.getRows()).thenReturn(List.of(new CreateRowRequest.RowData(null, Map.of("subject", "lunch"))));
+
+            executorService.execute(request, "tenant-1");
+
+            verify(rowEventPublisher).publishCreated(eq(1L), eq(11L), eq("tenant-1"), isNull(),
+                anyMap(), eq("NORMAL"));
+        }
+
+        @Test
+        @DisplayName("UPDATE: row_updated event carries RESTRICTED from the post-update (after) row snapshot")
+        void updateRowEventCarriesRestrictedSensitivityFromAfterSnapshot() {
+            when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(createDs()));
+            when(crudRepository.findIdsMatching(eq(1L), eq("tenant-1"), any())).thenReturn(List.of(42L));
+            when(crudRepository.findRowsByIds(eq(1L), eq("tenant-1"), eq(List.of(42L))))
+                .thenReturn(
+                    List.of(Map.of("id", 42, "data", Map.of("status", "pending"))),   // before snapshot
+                    List.of(Map.of("id", 42, "data", Map.of("status", "closed"),      // after snapshot
+                        "data_sensitivity", "RESTRICTED")));
+            when(crudRepository.updateRows(eq(1L), eq("tenant-1"), any(), any(), anyBoolean())).thenReturn(1);
+
+            UpdateRowRequest request = mock(UpdateRowRequest.class);
+            when(request.getDataSourceId()).thenReturn(1L);
+            when(request.getOperation()).thenReturn(CrudOperation.UPDATE_ROW);
+            when(request.getWhere()).thenReturn(new WhereConditionDto("id", "=", 42));
+            when(request.getSet()).thenReturn(new java.util.LinkedHashMap<>(Map.of("status", "closed")));
+
+            executorService.execute(request, "tenant-1");
+
+            verify(rowEventPublisher).publishUpdated(eq(1L), eq(42L), eq("tenant-1"), isNull(),
+                anyMap(), anyMap(), eq("RESTRICTED"));
+        }
+
+        @Test
+        @DisplayName("DELETE: row_deleted event carries RESTRICTED from the pre-delete (last-known) row snapshot")
+        void deleteRowEventCarriesRestrictedSensitivityFromLastKnownSnapshot() {
+            when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(createDs()));
+            when(crudRepository.findIdsMatching(eq(1L), eq("tenant-1"), any())).thenReturn(List.of(7L));
+            when(crudRepository.findRowsByIds(eq(1L), eq("tenant-1"), eq(List.of(7L))))
+                .thenReturn(List.of(Map.of("id", 7, "data", Map.of("name", "Charlie"),
+                    "data_sensitivity", "RESTRICTED")));
+            when(crudRepository.deleteRows(eq(1L), eq("tenant-1"), any())).thenReturn(1);
+
+            DeleteRowRequest request = mock(DeleteRowRequest.class);
+            when(request.getDataSourceId()).thenReturn(1L);
+            when(request.getOperation()).thenReturn(CrudOperation.DELETE_ROW);
+            when(request.getWhere()).thenReturn(new WhereConditionDto("id", "=", 7));
+
+            executorService.execute(request, "tenant-1");
+
+            verify(rowEventPublisher).publishDeleted(eq(1L), eq(7L), eq("tenant-1"), isNull(),
+                anyMap(), eq("RESTRICTED"));
+        }
+
+        @Test
+        @DisplayName("SIMILARITY SEARCH: a RESTRICTED matched row tags the result RESTRICTED even when the calling context is NOT restricted")
+        void similaritySearchTagsResultFromMatchedRowSensitivity() {
+            Map<String, Object> display = Map.of("dimension", 2, "metric", "cosine");
+            com.apimarketplace.datasource.domain.DataSourceModels.ColumnMappingSpec vectorSpec =
+                new com.apimarketplace.datasource.domain.DataSourceModels.ColumnMappingSpec(
+                    "embedding", com.apimarketplace.datasource.domain.ColumnType.VECTOR,
+                    com.apimarketplace.datasource.domain.ColumnStructure.SCALAR, Map.of(), display);
+            DataSource ds = new DataSource(1L, "tenant-1", "docs", null, null, null, null, null, null, null,
+                null, Map.of("embedding", vectorSpec), null, null, null, null);
+            when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(ds));
+            when(vectorRepository.similaritySearch(eq(1L), eq("tenant-1"), eq("embedding"),
+                    any(float[].class), eq(2), eq("cosine"), anyInt(), any(), any(), any()))
+                .thenReturn(List.of(Map.of("id", 5, "data", Map.of("text", "secret"),
+                    "data_sensitivity", "RESTRICTED")));
+
+            SimilarityQueryDto similarity = new SimilarityQueryDto();
+            similarity.setColumn("embedding");
+            similarity.setQueryVector(new float[]{0.1f, 0.2f});
+            similarity.setTopK(5);
+
+            ReadRowRequest request = mock(ReadRowRequest.class);
+            when(request.getDataSourceId()).thenReturn(1L);
+            when(request.getOperation()).thenReturn(CrudOperation.READ_ROW);
+            when(request.getSimilarity()).thenReturn(similarity);
+            when(request.getWhere()).thenReturn(null);
+
+            CrudResult result = executorService.execute(request, "tenant-1");
+
+            assertThat(result.success()).isTrue();
+            assertThat(result.data().dataSensitivity())
+                .as("pre-fix, similaritySearch never joined data_sensitivity so this could only "
+                    + "ever be NORMAL unless the CALLING context itself was restricted")
+                .isEqualTo("RESTRICTED");
         }
     }
 
@@ -1009,7 +1144,7 @@ class CrudExecutorServiceTest {
         void createRowFailureSuppressesEvent() {
             DataSource ds = createDataSource(1L, "users", "tenant-1");
             when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(ds));
-            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any()))
+            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any(), any()))
                 .thenThrow(new RuntimeException("unique violation"));
 
             CreateRowRequest request = mock(CreateRowRequest.class);
@@ -1033,7 +1168,7 @@ class CrudExecutorServiceTest {
                 .thenReturn(List.of(42L));
             when(crudRepository.findRowsByIds(eq(1L), eq("tenant-1"), eq(List.of(42L))))
                 .thenReturn(List.of(Map.of("id", 42, "data", Map.of("status", "pending"))));
-            when(crudRepository.updateRows(eq(1L), eq("tenant-1"), any(), any()))
+            when(crudRepository.updateRows(eq(1L), eq("tenant-1"), any(), any(), anyBoolean()))
                 .thenThrow(new RuntimeException("DB write failed"));
 
             UpdateRowRequest request = mock(UpdateRowRequest.class);
@@ -1109,7 +1244,7 @@ class CrudExecutorServiceTest {
             when(dataSourceColumnRepository.loadMappingSpec(1L, "tenant-1")).thenReturn(ds.mappingSpec());
             when(columnValueCoercer.coerce(any(), any(), any()))
                     .thenAnswer(inv -> CoercionResult.ok(inv.getArgument(0)));
-            when(crudRepository.updateRows(any(), any(), any(), any())).thenReturn(1);
+            when(crudRepository.updateRows(any(), any(), any(), any(), anyBoolean())).thenReturn(1);
 
             WhereConditionDto where = new WhereConditionDto("id", "=", "1");
             UpdateRowRequest request = mock(UpdateRowRequest.class);
@@ -1134,7 +1269,7 @@ class CrudExecutorServiceTest {
             when(dataSourceColumnRepository.loadMappingSpec(1L, "tenant-1")).thenReturn(ds.mappingSpec());
             when(columnValueCoercer.coerce(any(), any(), any()))
                     .thenAnswer(inv -> CoercionResult.ok(inv.getArgument(0)));
-            when(crudRepository.updateRows(any(), any(), any(), any())).thenReturn(1);
+            when(crudRepository.updateRows(any(), any(), any(), any(), anyBoolean())).thenReturn(1);
 
             WhereConditionDto where = new WhereConditionDto("id", "=", "1");
             UpdateRowRequest request = mock(UpdateRowRequest.class);
@@ -1157,7 +1292,7 @@ class CrudExecutorServiceTest {
             DataSource ds = dataSourceWithFileColumn();
             when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(ds));
             when(dataSourceColumnRepository.loadMappingSpec(1L, "tenant-1")).thenReturn(ds.mappingSpec());
-            when(crudRepository.updateRows(any(), any(), any(), any())).thenReturn(1);
+            when(crudRepository.updateRows(any(), any(), any(), any(), anyBoolean())).thenReturn(1);
 
             WhereConditionDto where = new WhereConditionDto("id", "=", "1");
             UpdateRowRequest request = mock(UpdateRowRequest.class);
@@ -1171,6 +1306,162 @@ class CrudExecutorServiceTest {
             executorService.execute(request, "tenant-1");
 
             verify(columnValueCoercer, never()).coerce(any(), any(), any());
+        }
+    }
+
+    /**
+     * LC-066/LC-011 CASA re-audit item 2: {@link CrudExecutorService#readResultSensitivity} and
+     * its wiring through create/update/read. Pre-fix, none of these calls threaded a sensitivity
+     * tag at all: a row written during a restricted run was stored exactly like any other, and a
+     * read result never carried the "this run/conversation is restricted" interim guard.
+     */
+    @Nested
+    @DisplayName("LC-066/LC-011 restricted-data classification")
+    class RestrictedDataClassificationTests {
+
+        @Test
+        @DisplayName("readResultSensitivity: RESTRICTED when a row's own stored tag says so, request not restricted")
+        void readResultSensitivityFromRowTag() {
+            List<Map<String, Object>> rows = List.of(
+                Map.of("id", 1L, "data_sensitivity", "RESTRICTED"),
+                Map.of("id", 2L, "data_sensitivity", "NORMAL")
+            );
+            assertThat(CrudExecutorService.readResultSensitivity(rows, false)).isEqualTo("RESTRICTED");
+        }
+
+        @Test
+        @DisplayName("readResultSensitivity: RESTRICTED when the request itself is restricted, every row NORMAL "
+            + "(interim guard - a step in a restricted run can echo restricted content into a table "
+            + "without the row's own write having been flagged)")
+        void readResultSensitivityFromRequestFlag() {
+            List<Map<String, Object>> rows = List.of(Map.of("id", 1L, "data_sensitivity", "NORMAL"));
+            assertThat(CrudExecutorService.readResultSensitivity(rows, true)).isEqualTo("RESTRICTED");
+        }
+
+        @Test
+        @DisplayName("readResultSensitivity: NORMAL when neither witness says restricted")
+        void readResultSensitivityNormal() {
+            List<Map<String, Object>> rows = List.of(Map.of("id", 1L, "data_sensitivity", "NORMAL"));
+            assertThat(CrudExecutorService.readResultSensitivity(rows, false)).isEqualTo("NORMAL");
+        }
+
+        @Test
+        @DisplayName("readResultSensitivity: a missing/null data_sensitivity value on a row reads as NORMAL, not a crash")
+        void readResultSensitivityMissingColumnIsNormal() {
+            List<Map<String, Object>> rows = List.of(Map.of("id", 1L));
+            assertThat(CrudExecutorService.readResultSensitivity(rows, false)).isEqualTo("NORMAL");
+            assertThat(CrudExecutorService.readResultSensitivity(null, false)).isEqualTo("NORMAL");
+        }
+
+        @Test
+        @DisplayName("READ: executeReadRow surfaces the aggregate tag on CrudResult.ResultData.dataSensitivity, "
+            + "and data_sensitivity is never flattened into row content")
+        void executeReadRowSurfacesAggregateTag() {
+            DataSource ds = createDataSource(1L, "users", "tenant-1");
+            when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(ds));
+
+            List<Map<String, Object>> rows = List.of(
+                Map.of("id", 1, "data", Map.of("subject", "wire transfer"), "data_sensitivity", "RESTRICTED")
+            );
+            when(crudRepository.readRows(eq(1L), eq("tenant-1"), isNull(), eq(21), eq(0))).thenReturn(rows);
+
+            ReadRowRequest request = mock(ReadRowRequest.class);
+            when(request.getDataSourceId()).thenReturn(1L);
+            when(request.getOperation()).thenReturn(CrudOperation.READ_ROW);
+            when(request.getWhere()).thenReturn(null);
+            when(request.getLimit()).thenReturn(null);
+            when(request.getOffset()).thenReturn(null);
+            when(request.isRestricted()).thenReturn(false);
+
+            CrudResult result = executorService.execute(request, "tenant-1");
+
+            assertThat(result.success()).isTrue();
+            assertThat(result.data().dataSensitivity()).isEqualTo("RESTRICTED");
+            assertThat(result.data().rows().get(0))
+                .as("data_sensitivity is internal classification metadata, not a user column")
+                .doesNotContainKey("data_sensitivity");
+        }
+
+        @Test
+        @DisplayName("READ: an ordinary read is tagged NORMAL")
+        void executeReadRowOrdinaryIsNormal() {
+            DataSource ds = createDataSource(1L, "users", "tenant-1");
+            when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(ds));
+
+            List<Map<String, Object>> rows = List.of(
+                Map.of("id", 1, "data", Map.of("name", "github"), "data_sensitivity", "NORMAL")
+            );
+            when(crudRepository.readRows(eq(1L), eq("tenant-1"), isNull(), eq(21), eq(0))).thenReturn(rows);
+
+            ReadRowRequest request = mock(ReadRowRequest.class);
+            when(request.getDataSourceId()).thenReturn(1L);
+            when(request.getOperation()).thenReturn(CrudOperation.READ_ROW);
+            when(request.getWhere()).thenReturn(null);
+            when(request.getLimit()).thenReturn(null);
+            when(request.getOffset()).thenReturn(null);
+            when(request.isRestricted()).thenReturn(false);
+
+            CrudResult result = executorService.execute(request, "tenant-1");
+
+            assertThat(result.data().dataSensitivity()).isEqualTo("NORMAL");
+        }
+
+        @Test
+        @DisplayName("CREATE: request.isRestricted()=true is threaded into crudRepository.createRows as RESTRICTED")
+        void executeCreateRowThreadsRestrictedFlag() {
+            DataSource ds = createDataSource(1L, "users", "tenant-1");
+            when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(ds));
+            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any(), any())).thenReturn(List.of(10L));
+
+            CreateRowRequest request = mock(CreateRowRequest.class);
+            when(request.getDataSourceId()).thenReturn(1L);
+            when(request.getOperation()).thenReturn(CrudOperation.CREATE_ROW);
+            when(request.getRows()).thenReturn(List.of(new CreateRowRequest.RowData(null, Map.of("subject", "wire"))));
+            when(request.isRestricted()).thenReturn(true);
+
+            executorService.execute(request, "tenant-1");
+
+            verify(crudRepository).createRows(eq(1L), eq("tenant-1"), any(),
+                eq(com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name()));
+        }
+
+        @Test
+        @DisplayName("CREATE: request.isRestricted()=false (default) is threaded as NORMAL")
+        void executeCreateRowDefaultsToNormal() {
+            DataSource ds = createDataSource(1L, "users", "tenant-1");
+            when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(ds));
+            when(crudRepository.createRows(eq(1L), eq("tenant-1"), any(), any())).thenReturn(List.of(10L));
+
+            CreateRowRequest request = mock(CreateRowRequest.class);
+            when(request.getDataSourceId()).thenReturn(1L);
+            when(request.getOperation()).thenReturn(CrudOperation.CREATE_ROW);
+            when(request.getRows()).thenReturn(List.of(new CreateRowRequest.RowData(null, Map.of("name", "ok"))));
+
+            executorService.execute(request, "tenant-1");
+
+            verify(crudRepository).createRows(eq(1L), eq("tenant-1"), any(),
+                eq(com.apimarketplace.common.classification.DataSensitivity.NORMAL.name()));
+        }
+
+        @Test
+        @DisplayName("UPDATE: request.isRestricted()=true is threaded into crudRepository.updateRows")
+        void executeUpdateRowThreadsRestrictedFlag() {
+            DataSource ds = createDataSource(1L, "users", "tenant-1");
+            when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(ds));
+            when(crudRepository.findIdsMatching(eq(1L), eq("tenant-1"), any())).thenReturn(List.of(1L));
+            when(crudRepository.updateRows(eq(1L), eq("tenant-1"), any(), any(), eq(true))).thenReturn(1);
+
+            UpdateRowRequest request = mock(UpdateRowRequest.class);
+            when(request.getDataSourceId()).thenReturn(1L);
+            when(request.getOperation()).thenReturn(CrudOperation.UPDATE_ROW);
+            when(request.getWhere()).thenReturn(new WhereConditionDto("id", "=", 1));
+            when(request.getSet()).thenReturn(new java.util.LinkedHashMap<>(Map.of("status", "closed")));
+            when(request.isRestricted()).thenReturn(true);
+
+            CrudResult result = executorService.execute(request, "tenant-1");
+
+            assertThat(result.success()).isTrue();
+            verify(crudRepository).updateRows(eq(1L), eq("tenant-1"), any(), any(), eq(true));
         }
     }
 }

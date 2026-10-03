@@ -2,8 +2,11 @@
 # Base images are ARG-overridable so CI can substitute the GHCR mirror
 # (ghcr.io/<repo>/base/*) and dodge Docker Hub anonymous pull rate limits;
 # the Docker Hub defaults keep local/CE builds working unauthenticated.
-ARG MAVEN_IMAGE=maven:3.9-eclipse-temurin-21
-ARG JRE_IMAGE=eclipse-temurin:21-jre-alpine
+# The defaults are pinned by digest (the multi-arch index digest, so every platform
+# resolves). This ARG is the only copy of each digest: the GHCR mirror and the CI build
+# read it from here (scripts/ci/base-images.sh), nothing to keep in sync elsewhere.
+ARG MAVEN_IMAGE=maven:3.9-eclipse-temurin-21@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320
+ARG JRE_IMAGE=eclipse-temurin:21-jre-alpine@sha256:51ab5e3302e7141ce665ca3ea85e8b5cd648eafbc3c0c90dd79d6537684e4555
 # LiveContext Community Edition - Multi-stage Docker Image
 # Build: docker compose -f docker/docker-compose-ce-monolith.yml up -d --build
 # Or standalone: docker build -t livecontext-ce -f backend/monolith-service/Dockerfile backend/
@@ -100,7 +103,9 @@ RUN addgroup -S livecontext && adduser -S livecontext -G livecontext
 
 WORKDIR /app
 
-RUN mkdir -p /app/data/keys /app/data/files /app/logs \
+# /app/data/bridge-secret: the per-install secret shared with the bridge container (LC-001). It is
+# a SEPARATE volume from /app/data/keys so the bridge never mounts the JWT keys or encryption.env.
+RUN mkdir -p /app/data/keys /app/data/files /app/data/bridge-secret /app/logs \
     && chown -R livecontext:livecontext /app
 
 COPY --from=build /app/monolith-service/target/app.jar /app/app.jar

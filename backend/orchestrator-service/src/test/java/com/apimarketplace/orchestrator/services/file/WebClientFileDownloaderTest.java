@@ -160,6 +160,19 @@ class WebClientFileDownloaderTest {
 
     // ==================== following ====================
 
+    @Test
+    @DisplayName("regression: a response with a 20 KB header (a CDN cookie) downloads; Netty's default refused anything over 8 KB")
+    void largeResponseHeaderDownloads() {
+        server.createContext("/big-cookie", exchange -> {
+            exchange.getResponseHeaders().add("Set-Cookie", "edge=" + "a".repeat(20 * 1024));
+            respond(exchange, 200, "file");
+        });
+
+        byte[] content = downloader.download(baseUrl() + "/big-cookie", GENEROUS);
+
+        assertThat(content).isEqualTo("file".getBytes(StandardCharsets.UTF_8));
+    }
+
     /**
      * Regression for the production failure of 2026-09-17: core:download_file answered
      * "Download failed with status 303 SEE_OTHER" on a Google Drive share link, because
@@ -540,5 +553,72 @@ class WebClientFileDownloaderTest {
                 .as("the presigned query must arrive byte-identical, or the provider signature breaks")
                 .isEqualTo(rawQuery);
         assertThat(receivedRawQuery.get()).doesNotContain("%252F");
+    }
+
+    // ==================== connect-time pinning (LC-073) ====================
+
+    /**
+     * DNS rebinding: the pre-flight check resolves the name and approves it, then the client
+     * resolves AGAIN and connects wherever that second answer points. Simulated here by a URL
+     * validator that approves everything (the "public" first answer) while the target is
+     * loopback. Pre-fix the download went through; the connect-time guard must refuse it.
+     */
+    @Test
+    @DisplayName("regression LC-073: the connected address is re-checked, whatever the pre-flight said")
+    void connectTimeGuardRefusesAnInternalPeerThePreflightApproved() {
+        WebClientFileDownloader pinned = new WebClientFileDownloader(
+                WebClient.builder(), ALLOW_ALL, com.apimarketplace.common.web.UrlSafetyValidator::isUnsafeAddress);
+
+        assertThatThrownBy(() -> pinned.download(baseUrl() + "/target", GENEROUS))
+                .isInstanceOf(FileDownloadException.class);
+        assertThatThrownBy(() -> pinned.download(
+                "http://localhost:" + server.getAddress().getPort() + "/target", GENEROUS))
+                .isInstanceOf(FileDownloadException.class);
+        assertThat(targetHits).as("an internal peer must never receive the request").hasValue(0);
+    }
+
+    @Test
+    @DisplayName("the pinning resolver refuses a name that resolves to ANY internal address")
+    void pinningResolverRefusesARebindingAnswer() throws Exception {
+        assertThatThrownBy(() -> com.apimarketplace.common.web.SafeAddressResolverGroup.vet(
+                "rebind.example.com",
+                com.apimarketplace.common.web.UrlSafetyValidator::isUnsafeAddress,
+                host -> new java.net.InetAddress[] {
+                    java.net.InetAddress.getByName("93.184.216.34"),
+                    java.net.InetAddress.getByName("10.0.0.7")}))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(WebClientFileDownloader.INTERNAL_TARGET_MESSAGE);
+    }
+
+    @Test
+    @DisplayName("the channel hook refuses an internal peer and ignores an unresolved one")
+    void channelHookJudgesThePeer() {
+        assertThatThrownBy(() -> WebClientFileDownloader.assertRemoteAddressSafe(
+                new InetSocketAddress("169.254.169.254", 80),
+                com.apimarketplace.common.web.UrlSafetyValidator::isUnsafeAddress))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatCode(() -> WebClientFileDownloader.assertRemoteAddressSafe(
+                InetSocketAddress.createUnresolved("example.com", 80),
+                com.apimarketplace.common.web.UrlSafetyValidator::isUnsafeAddress))
+                .doesNotThrowAnyException();
+    }
+
+    /**
+     * Regression (CE e2e): the downloader set its SSRF-pinned connector on the INJECTED builder,
+     * which is a shared singleton. Every client built from that builder afterwards refused private
+     * addresses, so in the CE monolith OAuth Connect failed with "Credential template not found"
+     * (its in-process catalog call to localhost was refused as internal).
+     */
+    @Test
+    @DisplayName("regression: the pinned connector does not leak into the shared injected builder")
+    void pinnedConnectorDoesNotLeakIntoTheSharedBuilder() {
+        WebClient.Builder shared = WebClient.builder();
+        new WebClientFileDownloader(shared);
+
+        shared.build().get().uri(baseUrl() + "/target").retrieve().toBodilessEntity().block(GENEROUS);
+
+        assertThat(targetHits)
+                .as("another client built from the same builder must still reach an internal address")
+                .hasValue(1);
     }
 }

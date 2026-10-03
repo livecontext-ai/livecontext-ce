@@ -104,7 +104,7 @@ class ApiKeyResolutionCountsNoLoginTest {
         // Idle for hours, so the old "has enough time passed" rule would fire.
         owner.setLastLoginAt(LocalDateTime.now().minusHours(6));
 
-        lenient().when(encryptionService.hmacHash(anyString())).thenReturn(HMAC_HASH);
+        lenient().when(encryptionService.hmacHashCandidates(anyString())).thenReturn(java.util.List.of(HMAC_HASH));
         lenient().when(userRepository.findByProviderId(PROVIDER_ID)).thenReturn(Optional.of(owner));
         lenient().when(userRepository.findById(USER_ID)).thenReturn(Optional.of(owner));
         lenient().when(subscriptionRepository.findActiveByUserId(USER_ID))
@@ -118,7 +118,7 @@ class ApiKeyResolutionCountsNoLoginTest {
     @Test
     @DisplayName("a legacy single key on auth.users resolves without publishing a login")
     void legacyKeyCountsNoLogin() {
-        when(userRepository.findByApiKeyHash(HMAC_HASH)).thenReturn(Optional.of(owner));
+        when(userRepository.findByApiKeyHashIn(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of(owner));
 
         assertThat(apiKeyService.resolveByPlaintextKey(PLAINTEXT_KEY)).isNotNull();
 
@@ -128,11 +128,11 @@ class ApiKeyResolutionCountsNoLoginTest {
     @Test
     @DisplayName("a named key in auth.api_keys resolves without publishing a login")
     void namedKeyCountsNoLogin() {
-        when(userRepository.findByApiKeyHash(HMAC_HASH)).thenReturn(Optional.empty());
+        when(userRepository.findByApiKeyHashIn(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of());
         ApiKey key = new ApiKey();
         key.setId(UUID.fromString("11111111-2222-3333-4444-555555555555"));
         key.setUserId(USER_ID);
-        when(apiKeyRepository.findByKeyHashAndRevokedAtIsNull(HMAC_HASH)).thenReturn(Optional.of(key));
+        when(apiKeyRepository.findByKeyHashInAndRevokedAtIsNull(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of(key));
 
         assertThat(apiKeyService.resolveByPlaintextKey(PLAINTEXT_KEY)).isNotNull();
 
@@ -142,7 +142,7 @@ class ApiKeyResolutionCountsNoLoginTest {
     @Test
     @DisplayName("repeated calls by the same automation still publish nothing")
     void repeatedCallsStayQuiet() {
-        when(userRepository.findByApiKeyHash(HMAC_HASH)).thenReturn(Optional.of(owner));
+        when(userRepository.findByApiKeyHashIn(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of(owner));
 
         for (int i = 0; i < 5; i++) {
             apiKeyService.resolveByPlaintextKey(PLAINTEXT_KEY);

@@ -1356,8 +1356,10 @@ class SubAgentExecutionHandlerTest {
             when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class)))
                 .thenReturn(loopResult);
 
+            // The sub-agent path saves through the overload that also carries the org id and the
+            // LC-004 sensitivity metadata (11 arguments).
             when(conversationServiceClient.saveToolResult(
-                any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any()))
+                any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any(), any(), any(), any()))
                 .thenReturn("result-id");
 
             ToolCall toolCall = createToolCall(Map.of(
@@ -1372,7 +1374,7 @@ class SubAgentExecutionHandlerTest {
             verify(conversationServiceClient).saveToolResult(
                 eq("parent-conv-123"), eq(TENANT_ID),
                 startsWith("agent_execute:"), any(),
-                eq(true), anyLong(), eq(longContent), isNull());
+                eq(true), anyLong(), eq(longContent), isNull(), isNull(), any(), isNull());
         }
     }
 
@@ -1955,7 +1957,7 @@ class SubAgentExecutionHandlerTest {
                 Map.of("promptTokens", 100, "completionTokens", 50), null, 5000L,
                 "claude-code", "claude-sonnet-4-6", List.of(), "COMPLETED",
                 Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null);
-            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class))).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
@@ -1966,8 +1968,118 @@ class SubAgentExecutionHandlerTest {
             assertThat(result.content()).contains("Bridge response");
 
             // Bridge client was called, NOT agentLoopService
-            verify(bridgeClientMock).execute(any(AgentExecutionRequestDto.class));
+            verify(bridgeClientMock).execute(any(AgentExecutionRequestDto.class), any());
             verify(agentLoopService, never()).execute(any(AgentLoopContext.class), any(StreamingCallback.class));
+        }
+
+        @Test
+        @DisplayName("regression LC-056: a child with a zero balance is refused before the bridge, which reads 0 as \"no budget\"")
+        void zeroBalanceChildIsRefusedBeforeTheBridge() {
+            AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
+            when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
+            lenient().when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
+            lenient().when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(mock(ConversationRedisStreamingCallback.ConversationCallback.class));
+            when(creditConsumptionClient.fetchLlmSpendableBalance(eq(TENANT_ID), eq("claude-code"), eq("claude-sonnet-4-6")))
+                .thenReturn(BigDecimal.ZERO);
+
+            ToolResult result = handler.execute(createToolCall(Map.of(
+                "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something")), TENANT_ID, defaultCredentials());
+
+            verify(bridgeClientMock, never()).execute(any(AgentExecutionRequestDto.class), any());
+            assertThat(String.valueOf(result.content()) + " " + result.error()).contains("BUDGET_EXHAUSTED");
+        }
+
+        @Test
+        @DisplayName("regression LC-056: a child whose agent budget is already spent is refused before the bridge")
+        void spentAgentBudgetChildIsRefusedBeforeTheBridge() {
+            AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
+            when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
+            lenient().when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
+            lenient().when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(mock(ConversationRedisStreamingCallback.ConversationCallback.class));
+            // 30 spent + 20 reserved by in-flight siblings = the whole 50.
+            when(budgetResolver.resolveAndPersist(any(AgentEntity.class), any(Instant.class)))
+                .thenReturn(new BudgetState(new BigDecimal("50"), new BigDecimal("30"), new BigDecimal("20"), false));
+
+            ToolResult result = handler.execute(createToolCall(Map.of(
+                "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something")), TENANT_ID, defaultCredentials());
+
+            verify(bridgeClientMock, never()).execute(any(AgentExecutionRequestDto.class), any());
+            assertThat(String.valueOf(result.content()) + " " + result.error()).contains("BUDGET_EXHAUSTED");
+        }
+
+        @Test
+        @DisplayName("regression: a child whose agent budget is 0 (no budget) is dispatched, never refused as spent")
+        void zeroAgentBudgetChildRuns() {
+            AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
+            when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
+            lenient().when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
+            lenient().when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(mock(ConversationRedisStreamingCallback.ConversationCallback.class));
+            when(budgetResolver.resolveAndPersist(any(AgentEntity.class), any(Instant.class)))
+                .thenReturn(new BudgetState(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false));
+            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class), any())).thenReturn(new AgentExecutionResponseDto(
+                true, "ok", "ok", List.of(), 1, Map.of(), null, 5L, "claude-code", "claude-sonnet-4-6", List.of(),
+                "COMPLETED", Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
+
+            handler.execute(createToolCall(Map.of(
+                "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something")), TENANT_ID, defaultCredentials());
+
+            verify(bridgeClientMock).execute(any(AgentExecutionRequestDto.class), any());
+        }
+
+        @Test
+        @DisplayName("regression: a LINKED child refused for budget is not retried on the direct API (a false execution-link fallback)")
+        void refusedLinkedChildIsNotRetriedDirectly() {
+            AgentEntity entity = createBridgeAgent("anthropic", "claude-fable-5");
+            when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
+            lenient().when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
+            lenient().when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(mock(ConversationRedisStreamingCallback.ConversationCallback.class));
+            ExecutionLinkRouter router = mock(ExecutionLinkRouter.class);
+            when(router.runnableRoute(eq("anthropic"), eq("claude-fable-5"), any()))
+                .thenReturn(new ModelExecutionLinkService.ExecutionRoute("claude-code", "claude-fable-5"));
+            ReflectionTestUtils.setField(handler, "executionLinkRouter", router);
+            when(creditConsumptionClient.fetchLlmSpendableBalance(eq(TENANT_ID), eq("anthropic"), eq("claude-fable-5")))
+                .thenReturn(BigDecimal.ZERO);
+
+            ToolResult result = handler.execute(createToolCall(Map.of(
+                "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something")), TENANT_ID, defaultCredentials());
+
+            verify(bridgeClientMock, never()).execute(any(AgentExecutionRequestDto.class), any());
+            verify(agentLoopService, never()).execute(any(), any(StreamingCallback.class));
+            assertThat(String.valueOf(result.content()) + " " + result.error()).contains("BUDGET_EXHAUSTED");
+        }
+
+        @Test
+        @DisplayName("the balance a linked bridge child carries is read on the model it is BILLED as, not the CLI it runs on")
+        void childBalanceIsReadOnTheBilledModel() {
+            // Stored on anthropic, sent to claude-code by an execution link: the run is charged as
+            // anthropic/claude-fable-5, so that is the spendable balance that bounds it.
+            AgentEntity entity = createBridgeAgent("anthropic", "claude-fable-5");
+            when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
+            lenient().when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
+            lenient().when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(mock(ConversationRedisStreamingCallback.ConversationCallback.class));
+            ExecutionLinkRouter router = mock(ExecutionLinkRouter.class);
+            when(router.runnableRoute(eq("anthropic"), eq("claude-fable-5"), any()))
+                .thenReturn(new ModelExecutionLinkService.ExecutionRoute("claude-code", "claude-fable-5"));
+            ReflectionTestUtils.setField(handler, "executionLinkRouter", router);
+            when(creditConsumptionClient.fetchLlmSpendableBalance(eq(TENANT_ID), eq("anthropic"), eq("claude-fable-5")))
+                .thenReturn(new BigDecimal("42"));
+            lenient().when(creditConsumptionClient.fetchLlmSpendableBalance(eq(TENANT_ID), eq("claude-code"), any()))
+                .thenReturn(new BigDecimal("7"));
+            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class), any())).thenReturn(new AgentExecutionResponseDto(
+                true, "ok", "ok", List.of(), 1, Map.of(), null, 5L, "claude-code", "claude-sonnet-4-6", List.of(),
+                "COMPLETED", Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
+
+            handler.execute(createToolCall(Map.of(
+                "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something")), TENANT_ID, defaultCredentials());
+
+            ArgumentCaptor<AgentExecutionRequestDto> sent = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
+            verify(bridgeClientMock).execute(sent.capture(), any());
+            assertThat(sent.getValue().tenantBalance()).isEqualTo(42.0);
         }
 
         @Test
@@ -1976,7 +2088,7 @@ class SubAgentExecutionHandlerTest {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
             stubConversationPlumbing();
-            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class)))
+            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class), any()))
                 .thenReturn(okBridgeResponse("claude-code", "claude-sonnet-4-6"));
 
             ToolCall toolCall = createToolCall(Map.of(
@@ -2027,7 +2139,7 @@ class SubAgentExecutionHandlerTest {
             ToolResult result = handler.execute(toolCall, TENANT_ID, defaultCredentials());
 
             assertThat(result.success()).isFalse();
-            verify(bridgeClientMock, never()).execute(any(AgentExecutionRequestDto.class));
+            verify(bridgeClientMock, never()).execute(any(AgentExecutionRequestDto.class), any());
         }
 
         @Test
@@ -2047,7 +2159,7 @@ class SubAgentExecutionHandlerTest {
                 mock(com.apimarketplace.agent.bridge.BridgeAccessGuard.class);
             handler.setBridgeAccessGuard(guard);
             ArgumentCaptor<AgentExecutionRequestDto> sent = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            when(bridgeClientMock.execute(sent.capture())).thenReturn(okBridgeResponse("claude-code", "claude-fable-5"));
+            when(bridgeClientMock.execute(sent.capture(), any())).thenReturn(okBridgeResponse("claude-code", "claude-fable-5"));
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "scan the agenda"));
@@ -2075,14 +2187,14 @@ class SubAgentExecutionHandlerTest {
                 true, "ok", "ok", List.of(), 1, Map.of(), null, 10L,
                 "claude-code", "claude-sonnet-4-6", List.of(), "COMPLETED",
                 Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null);
-            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class))).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
             handler.execute(toolCall, TENANT_ID, defaultCredentials());
 
             ArgumentCaptor<AgentExecutionRequestDto> captor = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            verify(bridgeClientMock).execute(captor.capture());
+            verify(bridgeClientMock).execute(captor.capture(), any());
             // The bridge ignores the explicit toolMaps and rebuilds its MCP tool set from
             // enabledModules; a null here (the original async-bug shape) would advertise every
             // core schema. mode=none ⇒ internal modules kept, catalog dropped.
@@ -2107,14 +2219,14 @@ class SubAgentExecutionHandlerTest {
                 Map.of(), null, 2000L, "codex", "codex-mini-latest",
                 List.of(), "COMPLETED", Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClientMock.execute(any())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(any(), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
             ToolResult result = handler.execute(toolCall, TENANT_ID, defaultCredentials());
 
             assertThat(result.success()).isTrue();
-            verify(bridgeClientMock).execute(any(AgentExecutionRequestDto.class));
+            verify(bridgeClientMock).execute(any(AgentExecutionRequestDto.class), any());
             verify(agentLoopService, never()).execute(any(), any(StreamingCallback.class));
         }
 
@@ -2133,14 +2245,14 @@ class SubAgentExecutionHandlerTest {
                 Map.of(), null, 3000L, "gemini-cli", "gemini-2.5-pro",
                 List.of(), "COMPLETED", Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClientMock.execute(any())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(any(), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
             ToolResult result = handler.execute(toolCall, TENANT_ID, defaultCredentials());
 
             assertThat(result.success()).isTrue();
-            verify(bridgeClientMock).execute(any());
+            verify(bridgeClientMock).execute(any(), any());
         }
 
         @Test
@@ -2158,14 +2270,14 @@ class SubAgentExecutionHandlerTest {
                 Map.of(), null, 1500L, "mistral-vibe", "mistral-large",
                 List.of(), "COMPLETED", Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClientMock.execute(any())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(any(), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
             ToolResult result = handler.execute(toolCall, TENANT_ID, defaultCredentials());
 
             assertThat(result.success()).isTrue();
-            verify(bridgeClientMock).execute(any());
+            verify(bridgeClientMock).execute(any(), any());
         }
 
         @Test
@@ -2191,7 +2303,7 @@ class SubAgentExecutionHandlerTest {
 
             // AgentLoopService was called, NOT bridge
             verify(agentLoopService).execute(any(AgentLoopContext.class), any(StreamingCallback.class));
-            verify(bridgeClientMock, never()).execute(any());
+            verify(bridgeClientMock, never()).execute(any(), any());
         }
 
         @Test
@@ -2205,7 +2317,7 @@ class SubAgentExecutionHandlerTest {
                 .thenReturn(mockCallback);
 
             // Bridge returns null (connection failure, timeout, etc.)
-            when(bridgeClientMock.execute(any())).thenReturn(null);
+            when(bridgeClientMock.execute(any(), any())).thenReturn(null);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
@@ -2231,14 +2343,14 @@ class SubAgentExecutionHandlerTest {
                 "CLI agent crashed", 1000L, "claude-code", "claude-sonnet-4-6",
                 List.of(), "ERROR", Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClientMock.execute(any())).thenReturn(errorResponse);
+            when(bridgeClientMock.execute(any(), any())).thenReturn(errorResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
             ToolResult result = handler.execute(toolCall, TENANT_ID, defaultCredentials());
 
             assertThat(result.content()).contains("FAILED");
-            verify(bridgeClientMock).execute(any());
+            verify(bridgeClientMock).execute(any(), any());
         }
 
         @Test
@@ -2256,7 +2368,7 @@ class SubAgentExecutionHandlerTest {
                 "claude-code", "claude-sonnet-4-6", List.of(), "COMPLETED",
                 Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null);
             ArgumentCaptor<AgentExecutionRequestDto> dtoCaptor = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            when(bridgeClientMock.execute(dtoCaptor.capture())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(dtoCaptor.capture(), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
@@ -2288,7 +2400,7 @@ class SubAgentExecutionHandlerTest {
                 true, "Done", "Done", List.of(), 3, Map.of(), null, 5000L,
                 "claude-code", "claude-sonnet-4-6", List.of(), "COMPLETED",
                 Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null);
-            when(bridgeClientMock.execute(any())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(any(), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
@@ -2313,7 +2425,7 @@ class SubAgentExecutionHandlerTest {
                 null, 2000L, "claude-code", "claude-sonnet-4-6",
                 List.of(), "COMPLETED", Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClientMock.execute(any())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(any(), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
@@ -2341,7 +2453,7 @@ class SubAgentExecutionHandlerTest {
                 null, 2000L, "claude-code", "claude-sonnet-4-6",
                 List.of(), "COMPLETED", Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClientMock.execute(any())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(any(), any())).thenReturn(bridgeResponse);
 
             // Parent credentials with __agentId__
             Map<String, Object> creds = defaultCredentials();
@@ -2358,7 +2470,7 @@ class SubAgentExecutionHandlerTest {
             // Budget reservation was still taken via bridge path
             verify(budgetReservationService).tryReserveChain(anyList(), any(BigDecimal.class));
             // Bridge was used, not agentLoopService
-            verify(bridgeClientMock).execute(any());
+            verify(bridgeClientMock).execute(any(), any());
             verify(agentLoopService, never()).execute(any(), any(StreamingCallback.class));
             // Observability recorded with chain
             verify(observabilityService).recordFromRequest(any());
@@ -2381,10 +2493,10 @@ class SubAgentExecutionHandlerTest {
                 null, 2000L, "claude-code", "claude-sonnet-4-6",
                 List.of(), "COMPLETED", Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), null);
-            when(bridgeClientMock.execute(any())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(any(), any())).thenReturn(bridgeResponse);
 
             // Allow saving full content tool result
-            when(conversationServiceClient.saveToolResult(any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any()))
+            when(conversationServiceClient.saveToolResult(any(), any(), any(), any(), anyBoolean(), anyLong(), any(), any(), any(), any(), any()))
                 .thenReturn("tr-123");
 
             ToolCall toolCall = createToolCall(Map.of(
@@ -2419,7 +2531,7 @@ class SubAgentExecutionHandlerTest {
                 "claude-code", "claude-sonnet-4-6", List.of(), "COMPLETED",
                 Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null);
             ArgumentCaptor<AgentExecutionRequestDto> dtoCaptor = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            when(bridgeClientMock.execute(dtoCaptor.capture())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(dtoCaptor.capture(), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
@@ -2447,7 +2559,7 @@ class SubAgentExecutionHandlerTest {
                 "claude-code", "claude-sonnet-4-6", List.of(), "COMPLETED",
                 Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null);
             ArgumentCaptor<AgentExecutionRequestDto> dtoCaptor = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            when(bridgeClientMock.execute(dtoCaptor.capture())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(dtoCaptor.capture(), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
@@ -2475,7 +2587,7 @@ class SubAgentExecutionHandlerTest {
                 null, 3000L, "claude-code", "claude-sonnet-4-6",
                 List.of(), "BUDGET_EXHAUSTED", Map.of(), List.of(), List.of(), List.of(),
                 List.of(), List.of(), "agent");
-            when(bridgeClientMock.execute(any())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(any(), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
@@ -2510,7 +2622,7 @@ class SubAgentExecutionHandlerTest {
                 List.of(), "COMPLETED", Map.of(), List.of(),
                 List.of(1500L, 1500L), List.of("tool_use", "end_turn"),
                 List.of(), List.of(), null);
-            when(bridgeClientMock.execute(any())).thenReturn(bridgeResponse);
+            when(bridgeClientMock.execute(any(), any())).thenReturn(bridgeResponse);
 
             ToolCall toolCall = createToolCall(Map.of(
                 "action", "execute", "agent_id", AGENT_ID.toString(), "prompt", "Do something"));
@@ -2792,7 +2904,7 @@ class SubAgentExecutionHandlerTest {
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
-            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class))).thenReturn(
+            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class), any())).thenReturn(
                 new AgentExecutionResponseDto(true, "ok", "ok", List.of(), 1, Map.of(), null, 10L,
                     "claude-code", "claude-opus-4-8", List.of(), "COMPLETED",
                     Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
@@ -2803,7 +2915,7 @@ class SubAgentExecutionHandlerTest {
 
             ArgumentCaptor<AgentExecutionRequestDto> dispatched =
                 ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            verify(bridgeClientMock).execute(dispatched.capture());
+            verify(bridgeClientMock).execute(dispatched.capture(), any());
             verify(agentLoopService, never()).execute(any(AgentLoopContext.class), any(StreamingCallback.class));
             assertThat(dispatched.getValue().provider()).isEqualTo("claude-code");
             assertThat(dispatched.getValue().model()).isEqualTo("claude-opus-4-8");
@@ -2857,7 +2969,7 @@ class SubAgentExecutionHandlerTest {
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
-            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class))).thenReturn(
+            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class), any())).thenReturn(
                 new AgentExecutionResponseDto(true, "ok", "ok", List.of(), 1, Map.of(), null, 10L,
                     "claude-code", "claude-sonnet-4-6", List.of(), "COMPLETED",
                     Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
@@ -2868,7 +2980,7 @@ class SubAgentExecutionHandlerTest {
 
             ArgumentCaptor<AgentExecutionRequestDto> dispatched =
                 ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            verify(bridgeClientMock).execute(dispatched.capture());
+            verify(bridgeClientMock).execute(dispatched.capture(), any());
             // A sub-agent chosen on a CLI provider is a real agent with a real toolset,
             // unlike the single-shot classify and guardrail judges, so nothing is removed.
             // And with no fallback to run, the bridge keeps announcing its own failures.
@@ -2889,7 +3001,7 @@ class SubAgentExecutionHandlerTest {
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
             ArgumentCaptor<AgentExecutionRequestDto> dispatched = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            when(bridgeClientMock.execute(dispatched.capture())).thenReturn(
+            when(bridgeClientMock.execute(dispatched.capture(), any())).thenReturn(
                 new AgentExecutionResponseDto(false, null, null, List.of(), 0, Map.of(), "spawn codex ENOENT", 10L,
                     "claude-code", "claude-opus-4-8", List.of(), "ERROR",
                     Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
@@ -2924,7 +3036,7 @@ class SubAgentExecutionHandlerTest {
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
             ArgumentCaptor<AgentExecutionRequestDto> bridgeRequest = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            when(bridgeClientMock.execute(bridgeRequest.capture())).thenReturn(
+            when(bridgeClientMock.execute(bridgeRequest.capture(), any())).thenReturn(
                 new AgentExecutionResponseDto(false, null, null, List.of(), 0, Map.of(), "CLI crashed", 10L,
                     "claude-code", "claude-opus-4-8", List.of(), "ERROR",
                     Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
@@ -2981,7 +3093,7 @@ class SubAgentExecutionHandlerTest {
             when(catalog.resolveEffortWithDefault(any(), org.mockito.ArgumentMatchers.eq("openai"),
                 org.mockito.ArgumentMatchers.eq("gpt-4"))).thenReturn("medium");
             // The bridge fails BEFORE producing anything visible: no content, no tool results.
-            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class))).thenReturn(
+            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class), any())).thenReturn(
                 new AgentExecutionResponseDto(false, null, null, List.of(), 0, Map.of(), "CLI crashed", 10L,
                     "claude-code", "claude-opus-4-8", List.of(), "ERROR",
                     Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
@@ -3033,7 +3145,7 @@ class SubAgentExecutionHandlerTest {
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
             // The bridge fails BEFORE producing anything visible: no content, no tool results.
-            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class))).thenReturn(
+            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class), any())).thenReturn(
                 new AgentExecutionResponseDto(false, null, null, List.of(), 0, Map.of(), "CLI crashed", 10L,
                     "claude-code", "claude-opus-4-8", List.of(), "ERROR",
                     Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
@@ -3047,7 +3159,7 @@ class SubAgentExecutionHandlerTest {
 
             // Exactly one bridge attempt and one fallback attempt - never a second bridge try,
             // never a second fallback try (no loop).
-            verify(bridgeClientMock, org.mockito.Mockito.times(1)).execute(any(AgentExecutionRequestDto.class));
+            verify(bridgeClientMock, org.mockito.Mockito.times(1)).execute(any(AgentExecutionRequestDto.class), any());
             ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
             verify(agentLoopService, org.mockito.Mockito.times(1)).execute(ctx.capture(), any(StreamingCallback.class));
             // The fallback ran on the BILLED pair, never on claude-code, even on a double failure.
@@ -3070,7 +3182,7 @@ class SubAgentExecutionHandlerTest {
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
             // The CLI streamed a partial answer before crashing - it already reached the user.
-            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class))).thenReturn(
+            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class), any())).thenReturn(
                 new AgentExecutionResponseDto(false, "Partial answer", "Partial answer", List.of(), 0, Map.of(),
                     "CLI crashed mid-stream", 10L, "claude-code", "claude-opus-4-8", List.of(), "ERROR",
                     Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
@@ -3099,7 +3211,7 @@ class SubAgentExecutionHandlerTest {
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
-            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class))).thenReturn(
+            when(bridgeClientMock.execute(any(AgentExecutionRequestDto.class), any())).thenReturn(
                 new AgentExecutionResponseDto(false, null, null, List.of(), 0, Map.of(), "CLI crashed", 10L,
                     "claude-code", "claude-opus-4-8", List.of(), "ERROR",
                     Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));

@@ -14,7 +14,10 @@
  * not exist"), so a bare number or a common word elsewhere in a message
  * ("max_tokens: 550", "tool does not exist") does not change the explanation.
  */
+import { isRestrictedDataRefusal } from '@/lib/api/error-utils';
+
 export type AgentErrorKind =
+  | 'restrictedData'
   | 'interrupted'
   | 'providerBilling'
   | 'rateLimit'
@@ -52,6 +55,9 @@ const RULES: ReadonlyArray<[AgentErrorKind, RegExp]> = [
 ];
 
 export function classifyAgentError(message?: string | null, code?: string | null): AgentErrorKind {
+  // Gmail / Drive data refused for this provider (CASA LC-004): our own policy, whatever the
+  // code, and the only fix is another provider. Exact token, case-sensitive (isRestrictedDataRefusal).
+  if (isRestrictedDataRefusal(message)) return 'restrictedData';
   if (code === 'INTERRUPTED') return 'interrupted';
   const text = (message ?? '').toLowerCase();
   // A failed SEND never reached a model: the failure is ours or the connection's, never the

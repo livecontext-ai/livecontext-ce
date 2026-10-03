@@ -1468,7 +1468,8 @@ public final class WorkflowPlanParser {
                     return new Note(id, type, safeString(data.get("label")), text,
                         safeString(data.get("color")), safeString(data.get("borderColor")),
                         safeString(data.get("textColor")), width, height,
-                        position != null ? new HashMap<>(position) : Map.of());
+                        position != null ? new HashMap<>(position) : Map.of(),
+                        safeString(data.get("attachedTo")));
                 } catch (Exception e) {
                     logger.error("Error creating Note from data {}: {}", data, e.getMessage());
                     return null;

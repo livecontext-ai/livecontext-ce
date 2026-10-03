@@ -15,7 +15,7 @@
 import React, { createContext, useContext, useReducer, useRef, useCallback, useMemo, useEffect, useState, ReactNode } from 'react';
 import { unifiedApiService } from '@/lib/api';
 import { conversationApi } from '@/lib/api/conversationApi';
-import { is402Error, is413StorageError, isPlanLimitError, isAuthError } from '@/lib/api/error-utils';
+import { is402Error, is413StorageError, isPlanLimitError, isAuthError, isRestrictedDataRefusal, RESTRICTED_DATA_PROVIDER_CODE } from '@/lib/api/error-utils';
 import { isInactiveAccountError } from '@/lib/api/api-client';
 
 /** Stream error code the backend uses when it replays an already-failed turn to a new subscriber. */
@@ -359,7 +359,10 @@ export interface PendingServiceApproval {
  * which is why the card fetches it by `id`.
  */
 export interface ToolAuthorizationSubject {
-  /** 'workflow' (pin/unpin) or 'agent' (a cron being armed). */
+  /**
+   * 'workflow' (pin/unpin/execute), 'agent' (a cron being armed, or a sub-agent launched),
+   * 'application', 'run_node', 'node', 'api_tool' or 'mail'.
+   */
   kind?: string;
   /** Workflow id, or agent id on an update. What the card resolves a name from. */
   id?: string;
@@ -371,6 +374,20 @@ export interface ToolAuthorizationSubject {
   cron?: string;
   /** IANA zone the cron fires in ('UTC' when the call omitted it, mirroring the backend). */
   timezone?: string;
+  /** workflow:restart_from_node - the node that re-runs with everything after it. */
+  node?: string;
+  /** workflow:restart_from_node - the run being replayed. */
+  run_id?: string;
+  /** workflow:run_node - the node type run on its own. */
+  type?: string;
+  /** mailbox:send - the recipient. */
+  to?: string;
+  /** mailbox:send - copy recipients, as the call wrote them. */
+  cc?: string;
+  /** mailbox:send - blind-copy recipients, as the call wrote them. */
+  bcc?: string;
+  /** mailbox:send - the email's subject line. */
+  subject?: string;
 }
 
 // Tool-authorization request info (when the agent calls a sensitive action gated by
@@ -1775,6 +1792,11 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
             showMissingApiKeyModal(isOwnKeyRejection(errorMsg) ? 'own-key' : 'platform');
             error.retryable = false;
           } else {
+            // Gmail / Google Drive data refused for this provider (CASA LC-004): retrying the same
+            // model can never succeed; the modal explains the fix (switch provider) as its own kind.
+            if (isRestrictedDataRefusal(errorMsg)) {
+              error.retryable = false;
+            }
             // Any other agent/relay/provider failure: the error modal is the only surface
             // (the chat renders no error banner), so hand it the verbatim failure text and
             // code; it explains the kind of failure and keeps the raw text as detail.
@@ -1978,6 +2000,16 @@ export function StreamingProvider({ children }: { children: ReactNode }) {
       if (handleCeRelayError(error)) {
         const errorConvId = conversationId || tempId;
         dispatch({ type: 'ERROR', conversationId: errorConvId, error: { message: error?.message || 'Cloud relay error', retryable: false } });
+        return null;
+      }
+
+      if (isRestrictedDataRefusal(error)) {
+        // 403 {code: RESTRICTED_DATA_PROVIDER_NOT_ALLOWED}: keep the token in the message so the
+        // error modal classifies it as its own kind and shows the translated explanation.
+        const errorConvId = conversationId || tempId;
+        const refusalMsg = isRestrictedDataRefusal(error?.message) ? error.message : RESTRICTED_DATA_PROVIDER_CODE;
+        dispatch({ type: 'ERROR', conversationId: errorConvId, error: { message: refusalMsg, retryable: false } });
+        showAgentErrorModal({ message: refusalMsg, code: SEND_FAILED_CODE });
         return null;
       }
 

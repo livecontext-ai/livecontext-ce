@@ -390,12 +390,24 @@ class RemoteToolExecutionAuthorizationTest {
     @Test
     @DisplayName("A gated call with nothing to name carries no subject at all")
     void rulesWithoutASubjectCarryNone() {
+        // execute on the LOADED workflow: no id in the call, so nothing the card could name.
         ToolResult result = service.checkToolAuthorization(
-                new ToolCall("call-17", "workflow", Map.of("action", "execute", "id", "w-1"), null),
+                new ToolCall("call-17", "workflow", Map.of("action", "execute"), null),
                 chatCredentials(), System.currentTimeMillis());
 
         assertThat(result).isNotNull();
         assertThat(result.metadata()).doesNotContainKey("subject");
+    }
+
+    @Test
+    @DisplayName("workflow:execute names the workflow it runs, so the card is no longer a bare 'Run this action?'")
+    void workflowExecuteCarriesItsWorkflow() {
+        ToolResult result = service.checkToolAuthorization(
+                new ToolCall("call-17b", "workflow", Map.of("action", "execute", "id", "w-1"), null),
+                chatCredentials(), System.currentTimeMillis());
+
+        assertThat(result).isNotNull();
+        assertThat(result.metadata()).containsEntry("subject", Map.of("kind", "workflow", "id", "w-1"));
     }
 
     @Test

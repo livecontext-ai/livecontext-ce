@@ -125,6 +125,48 @@ describe('CloudAccountPage (CE) - paid-plan cloud link', () => {
     expect(window.location.search).toBe('');
   });
 
+  it('opens on the Bundles tab when the address says ?tab=bundles', async () => {
+    h.searchParams = new URLSearchParams('tab=bundles');
+    h.getStatus.mockResolvedValue({ linked: false });
+
+    renderPage();
+
+    expect(await screen.findByTestId('bundles')).toBeInTheDocument();
+  });
+
+  it('falls back to the connection tab on a tab it does not have', async () => {
+    h.searchParams = new URLSearchParams('tab=nope');
+    h.getStatus.mockResolvedValue({ linked: false });
+
+    renderPage();
+
+    await screen.findByRole('button', { name: 'Connect to Cloud' });
+    expect(screen.queryByTestId('bundles')).toBeNull();
+  });
+
+  it('picking the Bundles tab writes it to the address as a step Back can undo', async () => {
+    h.getStatus.mockResolvedValue({ linked: false });
+    const pushState = vi.spyOn(window.history, 'pushState');
+
+    const view = renderPage();
+    await screen.findByRole('button', { name: 'Connect to Cloud' });
+    fireEvent.click(document.querySelector('[data-tab-id="bundles"]')!);
+
+    expect(await screen.findByTestId('bundles')).toBeInTheDocument();
+    expect(pushState).toHaveBeenCalledWith(null, '', '/en/app/settings/cloud-account?tab=bundles');
+    pushState.mockRestore();
+
+    // What Next does next: useSearchParams catches up with the address. This stand-in is
+    // static, so without it the write would stay "pending" into the following tests.
+    h.searchParams = new URLSearchParams('tab=bundles');
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={messages as Record<string, unknown>}>
+        <CloudAccountPage />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByTestId('bundles')).toBeInTheDocument();
+  });
+
   it('shows no expired message without the parameter', async () => {
     h.getStatus.mockResolvedValue({ linked: false });
 

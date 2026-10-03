@@ -5,9 +5,12 @@
  * `repo`, advertised alongside the platform tools and EXECUTED here, on the bridge host
  * where the checkout lives.
  *
- * Activation: only when AGENT_REPO_PATH points at an existing directory (set by
- * the lc-bridge systemd unit in prod). Unset/absent → not advertised and every
- * call returns a clean "not available" message (CE/dev no-op) - same gate as repo.
+ * Activation: TWO conditions, both required (LC-022). (1) AGENT_SHELL_ENABLED=true on the
+ * bridge host - an explicit opt-in of its own, so configuring a checkout for the audited
+ * `repo` tool no longer hands out a raw host shell as a side effect; (2) AGENT_REPO_PATH
+ * points at an existing directory (the shell runs inside it). The bridge forces both to ""
+ * for restricted runs. Otherwise not advertised and every call returns a clean
+ * "not available" message (CE/dev no-op).
  *
  * Safety (the bridge host is admin-only; defense-in-depth, NOT a sandbox):
  *   - the working directory is contained INSIDE the checkout ('..'/absolute escapes rejected);
@@ -33,7 +36,8 @@ const MAX_OUTPUT_BYTES = 64 * 1024;   // 64 KB window per stream (stdout/stderr 
 // to the per-session MCP config the CLI reads (claude-adapter mcp.json, codex-adapter
 // config.toml, whose directory the child is told about via CODEX_HOME), and on Linux a child
 // can read /proc/<ppid>/environ. Closing those needs a different mechanism than an env scrub.
-const SECRET_ENV_RE = /(SECRET|PASSWORD|PASSWD|TOKEN|_KEY$|_KEY_|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL|REDIS_URL|DATABASE_URL|_DSN$|CONNECTION_STRING|_NONCE$)/i;
+// Shared with the CLI child env builder (bridge/lib/childEnv.mjs), so both scrub the same set.
+import { SECRET_ENV_RE, isSecretEnvEntry } from './bridge/lib/childEnv.mjs';
 
 export const SHELL_TOOL_DEF = {
   name: 'shell',
@@ -58,16 +62,19 @@ export const SHELL_TOOL_DEF = {
 function textResult(text) { return { content: [{ type: 'text', text: String(text) }] }; }
 function errorResult(text) { return { content: [{ type: 'text', text: String(text) }], isError: true }; }
 
-/** The tool is advertised/usable only when the checkout exists on this host. */
+/**
+ * The tool is advertised/usable only when the operator opted in (AGENT_SHELL_ENABLED=true)
+ * AND the checkout exists on this host.
+ */
 export function isShellEnabled() {
-  return isRepoEnabled();
+  return String(process.env.AGENT_SHELL_ENABLED || '').trim().toLowerCase() === 'true' && isRepoEnabled();
 }
 
 /** Build a child env with secret-shaped vars removed (defense-in-depth, not a sandbox). */
 export function scrubbedEnv(source = process.env) {
   const out = {};
   for (const [k, v] of Object.entries(source)) {
-    if (SECRET_ENV_RE.test(k)) continue;
+    if (isSecretEnvEntry(k, v)) continue;
     out[k] = v;
   }
   return out;
@@ -89,7 +96,7 @@ function capStream(s) {
  */
 export async function handleShellTool(params = {}) {
   if (!isShellEnabled()) {
-    return errorResult('Shell access is not available in this environment (no checkout configured).');
+    return errorResult('Shell access is not available in this environment (shell not enabled on this host or no checkout configured).');
   }
   const command = params && typeof params.command === 'string' ? params.command.trim() : '';
   if (!command) return errorResult("shell requires a non-empty 'command'.");

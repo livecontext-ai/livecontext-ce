@@ -90,14 +90,14 @@ class ConversationAgentServiceBridgeHeartbeatWiringTest {
     @DisplayName("bridge chat run: heartbeat registered BEFORE the blocking bridge call, released after")
     void bridgeChatIsHeartbeatProtectedForTheWholeDispatch() {
         stubContext("claude-code", "claude-opus-4-6");
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class)))
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any()))
             .thenReturn(successResponse("hello"));
 
         service.executeStreaming(chatRequest(), streamOutput, "conv-1");
 
         InOrder order = inOrder(heartbeat, bridgeClient);
         order.verify(heartbeat).register("stream-hb-1");
-        order.verify(bridgeClient).executeViaBridge(any(AgentExecutionRequestDto.class));
+        order.verify(bridgeClient).executeViaBridge(any(AgentExecutionRequestDto.class), any());
         order.verify(heartbeat).unregister("stream-hb-1");
     }
 
@@ -105,7 +105,7 @@ class ConversationAgentServiceBridgeHeartbeatWiringTest {
     @DisplayName("the heartbeat is released even when the bridge call throws (no leaked shield)")
     void heartbeatReleasedWhenBridgeThrows() {
         stubContext("claude-code", "claude-opus-4-6");
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class)))
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any()))
             .thenThrow(new RuntimeException("bridge unreachable"));
 
         service.executeStreaming(chatRequest(), streamOutput, "conv-1");

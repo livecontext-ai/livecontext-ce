@@ -375,6 +375,12 @@ public class RunCloneService {
             copy.setCreatedAt(source.getCreatedAt());
             copy.setAccessedAt(Instant.now());
             copy.setExpiresAt(source.getExpiresAt());
+            // The class and its retention deadline travel with the content (LC-011 / LC-066): a
+            // copy of Gmail / Drive data stays RESTRICTED and expires when its source does.
+            // Dropped, the copy would be an ordinary row kept forever and handed to models
+            // outside the allow-list.
+            copy.setDataSensitivity(source.getDataSensitivity());
+            copy.setRetentionExpiresAt(source.getRetentionExpiresAt());
             copy.setStatus(StorageStatus.ACTIVE);
             copy.setRunId(newRunId);
             copy.setStepKey(source.getStepKey());

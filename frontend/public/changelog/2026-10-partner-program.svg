@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 260" width="720" height="260" role="img">
+  <style>
+    /* --page/--line/--ink/--muted ARE the app theme tokens (globals.css), as in every changelog
+       artwork: bg-secondary/border-color/text-primary/text-secondary. The golds are the partner
+       badge's own (PartnerBadgeIcon): a deep gold in light mode, deep enough for 3:1 on white,
+       and the bright #f2b640 in dark mode. */
+    :root {
+      --page: #f5f6f8;
+      --card: #ffffff;
+      --line: #d5dbe4;
+      --ink: #111827;
+      --muted: #4b5563;
+      --gold: #bf8410;
+      --gold-ink: #9a6a06;
+      --gold-ring: rgba(191, 132, 16, 0.45);
+      --check: #ffffff;
+      --avatar: #fdf3dc;
+    }
+    /* An img cannot see the app's .dark class, only the OS PREFERENCE, so the artwork paints its
+       own background and stays a self-contained card (see the earlier entries for the measured
+       reason: a light card in a dark dialog reads as foreign, invisible ink reads as nothing). */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page: #1f1e1b;
+        --card: #2a2825;
+        --line: #5e5a54;
+        --ink: #edecea;
+        --muted: #a39f97;
+        --gold: #f2b640;
+        --gold-ink: #f2b640;
+        --gold-ring: rgba(242, 182, 64, 0.5);
+        --check: #3a2600;
+        --avatar: #3a3122;
+      }
+    }
+    /* The one piece of product UI any changelog artwork draws, on purpose: the badge IS the news,
+       and the profile is where clients meet it. It is drawn as the real one, the way the /partners
+       page zooms on it: the same seal and check paths as PartnerBadgeIcon, the tier chip in the
+       tier metals of lib/partners/tiers.ts, and the page's fictional example partner (Northwind),
+       never a real account. Everything else stays an icon and a caption, like the other entries.
+
+       Type is sized for the SMALLEST box this gets: the panel shows it 464 CSS px wide on desktop
+       and about 310 on a phone (0.64x and 0.43x). The captions keep the 32/24 px of the other
+       entries; the profile's name and chip are part of the picture, not text to read. */
+    text {
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      text-anchor: middle;
+    }
+    .t-title { font-size: 32px; font-weight: 600; fill: var(--ink); }
+    .t-gold  { font-size: 32px; font-weight: 700; fill: var(--gold-ink); }
+    .t-sub   { font-size: 24px; fill: var(--muted); }
+    .t-name  { font-size: 26px; font-weight: 700; fill: var(--ink); text-anchor: start; }
+    .t-chip  { font-size: 18px; font-weight: 700; fill: #1f2340; }
+    .t-rate  { font-size: 24px; font-weight: 700; fill: var(--ink); }
+  </style>
+
+  <defs>
+    <linearGradient id="metal-gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbe3a4"/>
+      <stop offset="0.5" stop-color="#f2b640"/>
+      <stop offset="1" stop-color="#c98a12"/>
+    </linearGradient>
+    <linearGradient id="metal-silver" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eef1f5"/>
+      <stop offset="0.55" stop-color="#c3cad4"/>
+      <stop offset="1" stop-color="#9aa4b1"/>
+    </linearGradient>
+    <linearGradient id="metal-platinum" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbfcfe"/>
+      <stop offset="0.4" stop-color="#d9def0"/>
+      <stop offset="0.75" stop-color="#a9b4d6"/>
+      <stop offset="1" stop-color="#8b93c2"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="720" height="260" fill="var(--page)"/>
+
+  <!-- ── Left: the partner's marketplace profile, the gold badge next to the name ── -->
+  <rect x="28" y="30" width="304" height="104" rx="22" fill="var(--card)" stroke="var(--gold-ring)" stroke-width="2"/>
+
+  <circle cx="84" cy="82" r="34" fill="url(#metal-gold)"/>
+  <circle cx="84" cy="82" r="29" fill="var(--avatar)"/>
+  <text x="84" y="93" font-size="30" font-weight="700" fill="var(--gold-ink)">N</text>
+
+  <text class="t-name" x="134" y="76" textLength="128" lengthAdjust="spacingAndGlyphs">Northwind</text>
+  <g transform="translate(268,54) scale(1.25)">
+    <path fill="var(--gold)" d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"/>
+    <path d="m9 12 2 2 4-4" fill="none" stroke="var(--check)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <rect x="134" y="90" width="124" height="28" rx="14" fill="url(#metal-platinum)" stroke="rgba(139, 147, 194, 0.6)" stroke-width="1.5"/>
+  <text class="t-chip" x="196" y="110">Platinum</text>
+
+  <text class="t-title" x="180" y="172">Gold partner badge</text>
+  <text class="t-sub" x="180" y="208">on your marketplace profile</text>
+
+  <!-- ── Divider ─────────────────────────────────────────────────────────────── -->
+  <line x1="360" y1="52" x2="360" y2="208" stroke="var(--line)" stroke-width="2"/>
+
+  <!-- ── Right: the three tiers, one metal bar each, rising with the rate ───────── -->
+  <rect x="438" y="104" width="56" height="30" rx="8" fill="url(#metal-silver)"/>
+  <rect x="512" y="82" width="56" height="52" rx="8" fill="url(#metal-gold)"/>
+  <rect x="586" y="58" width="56" height="76" rx="8" fill="url(#metal-platinum)"/>
+  <path d="M426 136 H654" stroke="var(--line)" stroke-width="3" stroke-linecap="round"/>
+
+  <text class="t-rate" x="466" y="96">30%</text>
+  <text class="t-rate" x="540" y="74">40%</text>
+  <text class="t-rate" x="614" y="50">50%</text>
+
+  <text class="t-gold" x="540" y="172">Up to 50%</text>
+  <text class="t-sub" x="540" y="208">for 12 months per client</text>
+</svg>

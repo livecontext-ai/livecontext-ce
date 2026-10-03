@@ -50,9 +50,9 @@ export async function generateMetadata({
     // state opts a profile in. UNLISTED (the default, and what every
     // pre-existing account was migrated to) keeps a working, linkable page that
     // search engines are told to skip. `follow` stays on regardless, so the
-    // listings linked from the page still pass link equity.
-    robots:
-      IS_CE || !profile.searchIndexable ? { index: false, follow: true } : undefined,
+    // listings linked from the page still pass link equity. Only when it applies: an explicit
+    // robots of undefined wiped the root layout's directives on indexable profiles.
+    ...(IS_CE || !profile.searchIndexable ? { robots: { index: false, follow: true } } : {}),
   };
 }
 

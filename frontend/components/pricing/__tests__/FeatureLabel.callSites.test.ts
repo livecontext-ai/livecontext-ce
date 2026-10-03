@@ -26,9 +26,9 @@ const ROOT = path.resolve(__dirname, '..', '..', '..');
  */
 const CALL_SITES: ReadonlyArray<{ file: string; needs: RegExp; why: string }> = [
   {
-    file: 'app/[locale]/_landing/PricingSection.tsx',
+    file: 'components/pricing/PlanCardFrame.tsx',
     needs: /className="flex flex-1 min-w-0"/,
-    why: 'the landing plan cards wrap it in a span that must fill the bullet row',
+    why: 'the landing and partner-offer plan cards (one shared frame) wrap it in a span that must fill the bullet row',
   },
   {
     file: 'components/pricing/PlanSelector.tsx',

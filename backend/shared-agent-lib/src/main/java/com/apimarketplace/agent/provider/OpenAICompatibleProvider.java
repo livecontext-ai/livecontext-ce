@@ -105,6 +105,10 @@ public class OpenAICompatibleProvider extends AbstractLLMProvider {
             body.put("tool_choice", "auto");
         }
 
+        // LC-004: vendor-documented no-retention flag, only where the vendor documents one
+        // (openrouter today); every other OpenAI-shaped vendor gets no extra field.
+        ProviderRequestPrivacyFlags.apply(providerName, apiUrl, body);
+
         return body;
     }
 

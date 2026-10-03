@@ -208,4 +208,63 @@ class AgentTaskServiceAssignValidationTest {
                     .hasMessageContaining("depth limit reached");
         }
     }
+
+    @Nested
+    @DisplayName("LC-066: the classification a task is stored with")
+    class Lc066TaskSensitivity {
+
+        private String savedSensitivity(CreateTaskRequest req,
+                                        com.apimarketplace.common.classification.DataSensitivity sensitivity) {
+            service.assignTask(TENANT, null, "user-1", req, false, sensitivity);
+            ArgumentCaptor<AgentTaskEntity> captor = ArgumentCaptor.forClass(AgentTaskEntity.class);
+            verify(taskRepository).save(captor.capture());
+            return captor.getValue().getDataSensitivity();
+        }
+
+        @Test
+        @DisplayName("LC-066: a task written from a restricted execution is stored RESTRICTED")
+        void lc066RestrictedWriterStoresRestrictedTask() {
+            assertThat(savedSensitivity(backlog("Title", "mail text", "normal", null, null),
+                    com.apimarketplace.common.classification.DataSensitivity.RESTRICTED)).isEqualTo("RESTRICTED");
+        }
+
+        @Test
+        @DisplayName("LC-066: a task written from an ordinary execution stays NORMAL (no over-tagging)")
+        void lc066NormalWriterStoresNormalTask() {
+            assertThat(savedSensitivity(backlog("Title", "do it", "normal", null, null),
+                    com.apimarketplace.common.classification.DataSensitivity.NORMAL)).isEqualTo("NORMAL");
+        }
+
+        @Test
+        @DisplayName("LC-066: a subtask of a RESTRICTED task is RESTRICTED even when written from an ordinary execution")
+        void lc066SubtaskOfRestrictedTaskIsRestricted() {
+            AgentTaskEntity parent = new AgentTaskEntity();
+            parent.setId(UUID.randomUUID());
+            parent.setTenantId(TENANT);
+            parent.setDepth(0);
+            parent.setDataSensitivity("RESTRICTED");
+            when(taskRepository.findByIdAndTenantId(parent.getId(), TENANT)).thenReturn(Optional.of(parent));
+            CreateTaskRequest req = new CreateTaskRequest(
+                    null, null, "Subtask", "do it", "normal", null, null, parent.getId(), null);
+
+            assertThat(savedSensitivity(req, com.apimarketplace.common.classification.DataSensitivity.NORMAL))
+                    .isEqualTo("RESTRICTED");
+        }
+
+        @Test
+        @DisplayName("LC-066: markTaskRestricted ratchets a task in scope and leaves an out-of-scope id alone")
+        void lc066MarkTaskRestrictedIsScoped() {
+            AgentTaskEntity mine = new AgentTaskEntity();
+            mine.setId(UUID.randomUUID());
+            when(taskRepository.findByIdAndTenantId(mine.getId(), TENANT)).thenReturn(Optional.of(mine));
+            UUID foreign = UUID.randomUUID();
+            when(taskRepository.findByIdAndTenantId(foreign, TENANT)).thenReturn(Optional.empty());
+
+            service.markTaskRestricted(mine.getId(), TENANT);
+            service.markTaskRestricted(foreign, TENANT);
+
+            verify(taskRepository).markRestricted(mine.getId());
+            verify(taskRepository, org.mockito.Mockito.never()).markRestricted(foreign);
+        }
+    }
 }

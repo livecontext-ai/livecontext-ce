@@ -7,6 +7,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpEntity;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
 
@@ -84,13 +85,13 @@ class AuthPricingSyncClientTest {
 
         client.sync("openai", "gpt-5", new BigDecimal("1.25"), new BigDecimal("10.00"), null);
 
-        ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<HttpEntity> body = ArgumentCaptor.forClass(HttpEntity.class);
         verify(restTemplate).postForEntity(eq(SYNC_PATH), body.capture(), eq(Map.class));
 
-        assertThat(body.getValue()).containsEntry("provider",   "openai");
-        assertThat(body.getValue()).containsEntry("model",      "gpt-5");
-        assertThat(body.getValue()).containsEntry("inputRate",  new BigDecimal("1.25"));
-        assertThat(body.getValue()).containsEntry("outputRate", new BigDecimal("10.00"));
+        assertThat(sentBody(body.getValue())).containsEntry("provider",   "openai");
+        assertThat(sentBody(body.getValue())).containsEntry("model",      "gpt-5");
+        assertThat(sentBody(body.getValue())).containsEntry("inputRate",  new BigDecimal("1.25"));
+        assertThat(sentBody(body.getValue())).containsEntry("outputRate", new BigDecimal("10.00"));
     }
 
     @Test
@@ -102,11 +103,11 @@ class AuthPricingSyncClientTest {
 
         client.sync("anthropic", "claude-opus-4-6", new BigDecimal("5.00"), null, null);
 
-        ArgumentCaptor<Map<String, Object>> body = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<HttpEntity> body = ArgumentCaptor.forClass(HttpEntity.class);
         verify(restTemplate).postForEntity(any(String.class), body.capture(), eq(Map.class));
 
-        assertThat(body.getValue()).containsEntry("inputRate",  new BigDecimal("5.00"));
-        assertThat(body.getValue()).containsEntry("outputRate", BigDecimal.ZERO);
+        assertThat(sentBody(body.getValue())).containsEntry("inputRate",  new BigDecimal("5.00"));
+        assertThat(sentBody(body.getValue())).containsEntry("outputRate", BigDecimal.ZERO);
     }
 
     @Test
@@ -141,7 +142,7 @@ class AuthPricingSyncClientTest {
     @DisplayName("providerKind is included in request body when supplied, omitted when null/blank")
     @SuppressWarnings({"unchecked", "rawtypes"})
     void providerKindInBody() {
-        org.mockito.ArgumentCaptor<java.util.Map> captor = org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+        org.mockito.ArgumentCaptor<HttpEntity> captor = org.mockito.ArgumentCaptor.forClass(HttpEntity.class);
 
         client.sync("claude-code", "claude-opus-4-10",
                 new BigDecimal("5.00"), new BigDecimal("25.00"), "bridge");
@@ -151,7 +152,7 @@ class AuthPricingSyncClientTest {
         verify(restTemplate, org.mockito.Mockito.times(2))
                 .postForEntity(any(String.class), captor.capture(), eq(Map.class));
 
-        java.util.List<java.util.Map> sent = captor.getAllValues();
+        java.util.List<Map<String, Object>> sent = captor.getAllValues().stream().map(AuthPricingSyncClientTest::sentBody).toList();
         org.assertj.core.api.Assertions.assertThat((java.util.Map<String, Object>) sent.get(0))
                 .containsEntry("providerKind", "bridge");
         org.assertj.core.api.Assertions.assertThat((java.util.Map<String, Object>) sent.get(1))
@@ -219,14 +220,14 @@ class AuthPricingSyncClientTest {
     void cacheRatesForwardedRaw() {
         when(restTemplate.postForEntity(any(String.class), any(), eq(Map.class)))
                 .thenReturn(ResponseEntity.ok(Map.of()));
-        ArgumentCaptor<Map> captor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
 
         client.sync("anthropic", "claude-fable-5-1",
                 new BigDecimal("10.00"), new BigDecimal("50.00"), "byok",
                 new BigDecimal("0.25"), new BigDecimal("12.50"));
 
         verify(restTemplate).postForEntity(eq(SYNC_PATH), captor.capture(), eq(Map.class));
-        Map<String, Object> body = (Map<String, Object>) captor.getValue();
+        Map<String, Object> body = sentBody(captor.getValue());
         assertThat(body).containsEntry("cacheReadRate", new BigDecimal("0.25"));
         assertThat(body).containsEntry("cacheWriteRate", new BigDecimal("12.50"));
     }
@@ -237,7 +238,7 @@ class AuthPricingSyncClientTest {
     void unknownCacheRatesAreOmitted() {
         when(restTemplate.postForEntity(any(String.class), any(), eq(Map.class)))
                 .thenReturn(ResponseEntity.ok(Map.of()));
-        ArgumentCaptor<Map> captor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
 
         client.sync("anthropic", "a", new BigDecimal("10"), new BigDecimal("50"), null, null, null);
         client.sync("anthropic", "b", new BigDecimal("10"), new BigDecimal("50"), null,
@@ -247,7 +248,7 @@ class AuthPricingSyncClientTest {
 
         verify(restTemplate, org.mockito.Mockito.times(3))
                 .postForEntity(any(String.class), captor.capture(), eq(Map.class));
-        for (Map body : captor.getAllValues()) {
+        for (Map body : captor.getAllValues().stream().map(AuthPricingSyncClientTest::sentBody).toList()) {
             assertThat((Map<String, Object>) body).doesNotContainKey("cacheReadRate");
             assertThat((Map<String, Object>) body).doesNotContainKey("cacheWriteRate");
         }
@@ -259,13 +260,56 @@ class AuthPricingSyncClientTest {
     void legacyOverloadStillWorks() {
         when(restTemplate.postForEntity(any(String.class), any(), eq(Map.class)))
                 .thenReturn(ResponseEntity.ok(Map.of()));
-        ArgumentCaptor<Map> captor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<HttpEntity> captor = ArgumentCaptor.forClass(HttpEntity.class);
 
         client.sync("openai", "gpt-5.4", new BigDecimal("2.50"), new BigDecimal("15.00"), "byok");
 
         verify(restTemplate).postForEntity(eq(SYNC_PATH), captor.capture(), eq(Map.class));
-        Map<String, Object> body = (Map<String, Object>) captor.getValue();
+        Map<String, Object> body = sentBody(captor.getValue());
         assertThat(body).containsEntry("inputRate", new BigDecimal("2.50"));
         assertThat(body).doesNotContainKey("cacheReadRate");
+    }
+    /** The body the client sent: the sync now posts an HttpEntity (signed headers + body). */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> sentBody(HttpEntity<?> entity) {
+        return (Map<String, Object>) entity.getBody();
+    }
+
+    @Test
+    @DisplayName("CASA: the sync is signed (v1 and v2) with the shared secret, so auth-service can HMAC-gate /api/internal/auth/")
+    void syncIsSignedWithTheGatewaySecret() {
+        String secret = "pricing-sync-test-secret-0123456789";
+        AuthPricingSyncClient signed = new AuthPricingSyncClient(restTemplate, AUTH_URL, secret);
+        when(restTemplate.postForEntity(eq(SYNC_PATH), any(), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of()));
+
+        signed.sync("openai", "gpt-5", new BigDecimal("1.25"), new BigDecimal("10.00"), null);
+
+        ArgumentCaptor<HttpEntity> sent = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).postForEntity(eq(SYNC_PATH), sent.capture(), eq(Map.class));
+        org.springframework.http.HttpHeaders headers = sent.getValue().getHeaders();
+        String timestamp = headers.getFirst("X-Gateway-Timestamp");
+        assertThat(headers.getFirst("X-Provider-ID")).isEqualTo(AuthPricingSyncClient.INTERNAL_PROVIDER_ID);
+        assertThat(new com.apimarketplace.common.web.GatewaySignatureVerifier(secret)
+                .isValid(headers.getFirst("X-Gateway-Secret"), AuthPricingSyncClient.INTERNAL_PROVIDER_ID,
+                        timestamp, null, null)).isTrue();
+        assertThat(com.apimarketplace.common.web.GatewaySignatureV2.verify(secret, "POST",
+                "/api/internal/auth/model-pricing/sync", null, headers::get,
+                headers.getFirst(com.apimarketplace.common.web.GatewaySignatureV2.HEADER),
+                60_000, System.currentTimeMillis())).isTrue();
+        assertThat(sentBody(sent.getValue())).containsEntry("provider", "openai");
+    }
+
+    @Test
+    @DisplayName("without a secret the sync is sent unsigned (dev and CE, where nothing verifies it)")
+    void noSecretSendsUnsigned() {
+        when(restTemplate.postForEntity(eq(SYNC_PATH), any(), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of()));
+
+        client.sync("openai", "gpt-5", new BigDecimal("1.25"), new BigDecimal("10.00"), null);
+
+        ArgumentCaptor<HttpEntity> sent = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).postForEntity(eq(SYNC_PATH), sent.capture(), eq(Map.class));
+        assertThat(sent.getValue().getHeaders().getFirst("X-Gateway-Secret")).isNull();
     }
 }

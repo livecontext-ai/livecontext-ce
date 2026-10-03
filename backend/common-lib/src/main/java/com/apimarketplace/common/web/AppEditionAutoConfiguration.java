@@ -14,6 +14,10 @@ import org.springframework.core.env.Environment;
  * <p>No {@code @AutoConfigureBefore}/{@code @AutoConfigureAfter} is needed
  * today; add ordering hints if a future consumer auto-config injects
  * {@link AppEditionProvider} during its own bean creation.
+ *
+ * <p>It also hands the resolved edition to {@link UrlSafetyValidator}, a static utility with no
+ * application context, so the private-egress default follows the edition: a self-hosted install
+ * may reach its own LAN from the connector nodes and custom APIs, a cloud install may not.
  */
 @AutoConfiguration
 public class AppEditionAutoConfiguration {
@@ -21,6 +25,8 @@ public class AppEditionAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public AppEditionProvider appEditionProvider(Environment env) {
-        return new AppEditionProvider(env);
+        AppEditionProvider provider = new AppEditionProvider(env);
+        UrlSafetyValidator.configureEditionDefaults(provider.isSelfHosted());
+        return provider;
     }
 }

@@ -1,11 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Sparkles } from 'lucide-react';
+import { ArrowRight, Sparkles } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { PARTNER_GOLD_BG, PARTNER_GOLD_CTA } from '@/components/partner/partnerTheme';
 import { useChangelog } from '@/hooks/useChangelog';
+import { cn } from '@/lib/utils';
 import { APP_SUGGESTIONS_FLAG, WELCOME_GIFT_FLAG } from '@/lib/onboarding/welcomeGiftHandoff';
 import ChangelogMediaView from './ChangelogMediaView';
 import { track } from '@/lib/analytics/analytics';
@@ -79,7 +81,7 @@ export default function ChangelogModal() {
     track('changelog_shown', { entry_key: entry.key, has_media: !!entry.media });
   }, [visible, entry]);
 
-  const handleClose = useCallback((action: 'dismiss' | 'learn_more' = 'dismiss') => {
+  const handleClose = useCallback((action: 'dismiss' | 'learn_more' | 'cta' = 'dismiss') => {
     if (entry) {
       track('changelog_closed', { entry_key: entry.key, has_media: !!entry.media, action });
     }
@@ -92,6 +94,9 @@ export default function ChangelogModal() {
 
   if (!open || !entry || !isAvailable) return null;
 
+  // The entry names its own copy block: each edition announces different news.
+  const copy = entry.copy;
+
   return (
     <Dialog open={open} onOpenChange={(next) => !next && handleClose()}>
       <DialogContent className="max-w-lg gap-0 overflow-hidden border-theme bg-theme-primary p-0">
@@ -102,7 +107,7 @@ export default function ChangelogModal() {
             </div>
             <div className="min-w-0">
               <DialogTitle className="text-lg font-semibold leading-6 text-theme-primary">
-                {t('latest.title')}
+                {t(`${copy}.title`)}
               </DialogTitle>
               <p className="mt-1 text-sm leading-5 text-theme-secondary">{t('whatsNew')}</p>
             </div>
@@ -119,17 +124,19 @@ export default function ChangelogModal() {
           Escape and the corner close button still work, so the panel never traps anyone,
           but a reader who never sees the footer does not know the archive exists.
           `min-h-0` is what lets a grid row shrink below its content so `overflow-y-auto` has
-          something to do. Measured: at a 640px-tall viewport the German, French and Portuguese
-          entries overflow the cap by 17px.
+          something to do. A long entry (a paragraph and a bulleted list) overflows on a short
+          window, which is also why the call to action lives in the footer and not after the text.
         */}
         <div className="min-h-0 overflow-y-auto space-y-4 p-6">
-          {entry.media && <ChangelogMediaView media={entry.media} alt={t('latest.mediaAlt')} />}
-          <DialogDescription className="text-sm leading-6 text-theme-secondary">
-            {t('latest.body')}
+          {entry.media && <ChangelogMediaView media={entry.media} alt={t(`${copy}.mediaAlt`)} />}
+          {/* pre-line: a long entry is written as paragraphs and a bulleted list, with line
+              breaks in the message itself. */}
+          <DialogDescription className="whitespace-pre-line text-sm leading-6 text-theme-secondary">
+            {t(`${copy}.body`)}
           </DialogDescription>
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-t border-theme p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-theme p-4">
           {entry.learnMoreUrl ? (
             <a
               href={entry.learnMoreUrl}
@@ -145,9 +152,33 @@ export default function ChangelogModal() {
           ) : (
             <span />
           )}
-          <Button onClick={() => handleClose('dismiss')} data-testid="changelog-dismiss">
-            {t('dismiss')}
-          </Button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {/* With a call to action, that is the primary button and "Got it" steps back. */}
+            <Button
+              variant={entry.action ? 'outline' : 'default'}
+              onClick={() => handleClose('dismiss')}
+              data-testid="changelog-dismiss"
+            >
+              {t('dismiss')}
+            </Button>
+            {entry.action && (
+              <a
+                href={entry.action.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => handleClose('cta')}
+                className={cn(
+                  PARTNER_GOLD_CTA,
+                  'h-10 px-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f2b640] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
+                )}
+                style={PARTNER_GOLD_BG}
+                data-testid="changelog-action"
+              >
+                {t(`${copy}.action`)}
+                <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+              </a>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

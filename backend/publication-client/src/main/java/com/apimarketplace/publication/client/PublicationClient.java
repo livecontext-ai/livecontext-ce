@@ -898,6 +898,14 @@ public class PublicationClient {
             ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     url, HttpMethod.POST, entity, new ParameterizedTypeReference<>() {});
             return response.getBody();
+        } catch (HttpClientErrorException.UnprocessableEntity e) {
+            // 422 = structured refusal (a copied table above the per-table row limit, or a
+            // snapshot above the size limit). Typed, same contract as publishWorkflow, so the
+            // MCP publish tools report the table and the limit instead of an HTTP string.
+            PublicationValidationException typed =
+                    PublicationValidationException.fromResponseBody(e.getResponseBodyAsString(), e);
+            log.warn("Publish resource refused ({}): {}", typed.getErrorCode(), typed.getMessage());
+            throw typed;
         } catch (Exception e) {
             log.error("Failed to publish resource: {}", e.getMessage());
             throw new RuntimeException("Failed to publish resource: " + e.getMessage(), e);

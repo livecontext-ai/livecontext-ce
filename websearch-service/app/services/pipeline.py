@@ -10,6 +10,7 @@ from app.models.crawl import (
 )
 from app.services import crawl_client
 from app.services.crawl_filter import (
+    CRAWL_BLOCK_DNS,
     validate_crawl_content,
     domain_reputation,
 )
@@ -31,7 +32,14 @@ async def crawl_single_page(url: str, crawl_options: CrawlOptions) -> CrawlPageR
     blocked = result.metadata.get("blocked_reason")
     if blocked:
         logger.warning("Page blocked (early detection) for %s: %s", url, blocked)
-        domain_reputation.record_failure(url, blocked)
+        unresolved = blocked.startswith(CRAWL_BLOCK_DNS)
+        if not unresolved:
+            # A host that does not resolve says nothing about the site's
+            # defences (and may be a transient DNS failure): never let it
+            # auto-blacklist the domain.
+            domain_reputation.record_failure(url, blocked)
+        cause = ("The host name does not resolve (check the URL for a typo)."
+                 if unresolved else "This source is blocked or protected.")
         return CrawlPageResult(
             url=result.url,
             markdown="",
@@ -40,8 +48,7 @@ async def crawl_single_page(url: str, crawl_options: CrawlOptions) -> CrawlPageR
                 "failure_reason": blocked,
                 "title": result.metadata.get("title", ""),
                 "llm_hint": (
-                    f"Page unreachable: {blocked}. "
-                    "This source is blocked or protected. "
+                    f"Page unreachable: {blocked}. {cause} "
                     "Use other available sources or search for alternative URLs."
                 ),
             },

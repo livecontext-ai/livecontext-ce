@@ -141,6 +141,46 @@ class CredentialDataEncryptionSweepPostgresTest {
     }
 
     @Test
+    @DisplayName("LC-024: at write-version 2 a legacy v1 (CBC) secret is re-encrypted to the v2 GCM envelope; a second pass is a no-op")
+    void reencryptsLegacyV1ToV2() throws Exception {
+        long id = insert(objectMapper.writeValueAsString(
+                encryption.encryptSensitiveFields(Map.of("api_key", "sk-live", "client_id", "abc"))));
+        assertThat((String) stored(id).get("api_key")).startsWith("ENC:").doesNotStartWith("ENC:v2.");
+        CredentialEncryptionService v2 = new CredentialEncryptionService("test-password-123", "0123456789abcdef",
+                "", "", false, false, "2", "allow", "");
+        SensitiveJsonbBackfill v2Sweep = new SensitiveJsonbBackfill(jdbc, objectMapper, v2);
+
+        assertThat(v2Sweep.migrateAll(List.of(SCRATCH))).isEqualTo(1);
+        Map<String, Object> row = stored(id);
+        assertThat((String) row.get("api_key")).startsWith("ENC:v2.");
+        assertThat(row.get("client_id")).isEqualTo("abc");
+        assertThat(v2.decryptSensitiveFields(row).get("api_key")).isEqualTo("sk-live");
+        // the v1 instance (a replica still at write-version 1) reads the upgraded row too
+        assertThat(encryption.decryptSensitiveFields(row).get("api_key")).isEqualTo("sk-live");
+        String after = storedText(id);
+        assertThat(v2Sweep.migrateAll(List.of(SCRATCH))).isZero();
+        assertThat(storedText(id)).isEqualTo(after);
+    }
+
+    @Test
+    @DisplayName("LC-024: a field-restricted spec (webhook auth_config) re-encrypts ONLY its listed keys, never another secret-looking key")
+    void fieldRestrictedSpecTouchesOnlyListedKeys() throws Exception {
+        long id = insert(objectMapper.writeValueAsString(Map.of(
+                "basicPassword", encryption.encrypt("pw"), "apiKey", "left-alone", "authType", "basic")));
+        CredentialEncryptionService v2 = new CredentialEncryptionService("test-password-123", "0123456789abcdef",
+                "", "", false, false, "2", "allow", "");
+        TableSpec restricted = new TableSpec(SCRATCH.table(), SCRATCH.idColumn(), SCRATCH.jsonColumn(),
+                java.util.Set.of("basicPassword", "authHeaderValue", "jwtSecretKey"));
+
+        assertThat(new SensitiveJsonbBackfill(jdbc, objectMapper, v2).migrateAll(List.of(restricted))).isEqualTo(1);
+
+        Map<String, Object> row = stored(id);
+        assertThat((String) row.get("basicPassword")).startsWith("ENC:v2.");
+        assertThat(v2.decrypt((String) row.get("basicPassword"))).isEqualTo("pw");
+        assertThat(row.get("apiKey")).as("not in the owning service's decrypt list").isEqualTo("left-alone");
+    }
+
+    @Test
     @DisplayName("a row whose secrets are already encrypted is left byte-for-byte unchanged")
     void alreadyEncryptedRowUntouched() throws Exception {
         long id = insert(objectMapper.writeValueAsString(

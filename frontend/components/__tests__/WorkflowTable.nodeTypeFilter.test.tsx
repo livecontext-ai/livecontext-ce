@@ -184,4 +184,38 @@ describe('WorkflowTable - node-type filter wiring', () => {
     await waitFor(() => expect(screen.getByTestId('ntf-value')).toHaveTextContent('mcp:gmail'));
     expect(screen.getByTestId('ntf-pick')).toBeInTheDocument();
   });
+
+  // The view lives in the address, so a reload reopens the list as it was. The page index is
+  // zero-based in the request and one-based in the address.
+  it('restores the node-type filter, the sort and the page from the address, and stays on that page', async () => {
+    fakeFolderRouter.navigate('/en/app/list?types=mcp%3Agmail%2Ccore%3Aloop&sort=runCount&page=3', 'replace');
+
+    render(<WorkflowTable />);
+    await waitFor(() => expect(screen.getByText('Gmail digest')).toBeInTheDocument());
+
+    for (const [options] of mocks.getWorkflowsPage.mock.calls) {
+      expect(options).toMatchObject({ nodeTypes: ['mcp:gmail', 'core:loop'], sort: 'runCount', page: 2 });
+    }
+    expect(screen.getByTestId('pg-page')).toHaveTextContent('2');
+  });
+
+  it('records the picked tokens in the address and drops the page it was on', async () => {
+    fakeFolderRouter.navigate('/en/app/list?page=3', 'replace');
+
+    render(<WorkflowTable />);
+    await waitFor(() => expect(screen.getByText('Gmail digest')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('ntf-pick'));
+
+    await waitFor(() => expect(fakeFolderRouter.search()).toBe('types=mcp%3Agmail'));
+  });
+
+  it('reads a node-type the address spells with a stray percent sign, instead of crashing the page', async () => {
+    fakeFolderRouter.navigate('/en/app/list?types=100%25', 'replace');
+
+    render(<WorkflowTable />);
+    await waitFor(() => expect(screen.getByText('Gmail digest')).toBeInTheDocument());
+
+    expect(mocks.getWorkflowsPage.mock.calls[0][0]).toMatchObject({ nodeTypes: ['100%'] });
+  });
 });

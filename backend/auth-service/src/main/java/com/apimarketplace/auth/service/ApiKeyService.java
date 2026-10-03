@@ -43,6 +43,10 @@ public class ApiKeyService {
     /** Hard cap of active (non-revoked) named keys per user. */
     static final int MAX_ACTIVE_KEYS = 20;
     /** last_used_at is refreshed at most this often (best-effort observability). */
+    /** Default and maximum lifetime of a new named key (CASA LC-054). */
+    static final int DEFAULT_KEY_LIFETIME_DAYS = 365;
+    static final int MAX_KEY_LIFETIME_DAYS = 365;
+
     private static final Duration LAST_USED_REFRESH_INTERVAL = Duration.ofMinutes(15);
 
     private final UserRepository userRepository;
@@ -81,7 +85,8 @@ public class ApiKeyService {
         if (user.getApiKeyHint() != null) {
             response.setMaskedApiKey(user.getApiKeyHint());
             response.setCreatedAt(user.getApiKeyCreatedAt());
-            response.setActive(true);
+            response.setExpiresAt(user.getApiKeyExpiresAt());
+            response.setActive(!isExpired(user.getApiKeyExpiresAt(), LocalDateTime.now()));
         } else {
             response.setMaskedApiKey(null);
             response.setCreatedAt(null);
@@ -115,6 +120,8 @@ public class ApiKeyService {
         user.setApiKeyHash(hash);
         user.setApiKeyHint(hint);
         user.setApiKeyCreatedAt(LocalDateTime.now());
+        // CASA LC-054: the legacy key expires like a named key does (same default lifetime).
+        user.setApiKeyExpiresAt(user.getApiKeyCreatedAt().plusDays(DEFAULT_KEY_LIFETIME_DAYS));
         userRepository.save(user);
 
         // Bust the gateway's user-resolution cache so the OLD key stops authenticating
@@ -131,6 +138,7 @@ public class ApiKeyService {
         response.setApiKey(plaintextKey);
         response.setMaskedApiKey(hint);
         response.setCreatedAt(user.getApiKeyCreatedAt());
+        response.setExpiresAt(user.getApiKeyExpiresAt());
         response.setActive(true);
         return response;
     }
@@ -157,6 +165,18 @@ public class ApiKeyService {
      * @throws ApiKeyValidationException on invalid name, empty scope list, or key cap
      */
     public CreateApiKeyResponse createKey(Long userId, String name, List<String> scopes) {
+        return createKey(userId, name, scopes, null);
+    }
+
+    /**
+     * @param expiresInDays lifetime in days, 1 to {@value #MAX_KEY_LIFETIME_DAYS}; null = the
+     *                      default ({@value #DEFAULT_KEY_LIFETIME_DAYS}). A key never outlives it.
+     */
+    public CreateApiKeyResponse createKey(Long userId, String name, List<String> scopes, Integer expiresInDays) {
+        int lifetimeDays = expiresInDays != null ? expiresInDays : DEFAULT_KEY_LIFETIME_DAYS;
+        if (lifetimeDays < 1 || lifetimeDays > MAX_KEY_LIFETIME_DAYS) {
+            throw new ApiKeyValidationException("expiresInDays must be between 1 and " + MAX_KEY_LIFETIME_DAYS);
+        }
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
 
@@ -170,7 +190,7 @@ public class ApiKeyService {
 
         List<String> normalizedScopes = normalizeScopes(scopes);
 
-        if (apiKeyRepository.countByUserIdAndRevokedAtIsNull(userId) >= MAX_ACTIVE_KEYS) {
+        if (apiKeyRepository.countUsableByUserId(userId, LocalDateTime.now()) >= MAX_ACTIVE_KEYS) {
             throw new ApiKeyValidationException("Maximum of " + MAX_ACTIVE_KEYS + " active API keys reached");
         }
 
@@ -183,6 +203,7 @@ public class ApiKeyService {
 
         ApiKey key = new ApiKey(userId, trimmedName, hash, hint,
                 normalizedScopes != null ? String.join(",", normalizedScopes) : null);
+        key.setExpiresAt(key.getCreatedAt().plusDays(lifetimeDays));
         key = apiKeyRepository.save(key);
 
         // Same after-commit cache bust as regenerateKey: keeps the gateway's per-provider
@@ -262,9 +283,15 @@ public class ApiKeyService {
         response.setScopes(parseScopes(key.getScopes()));
         response.setCreatedAt(key.getCreatedAt());
         response.setLastUsedAt(key.getLastUsedAt());
+        response.setExpiresAt(key.getExpiresAt());
     }
 
     /** Comma-separated column value -> list; null/blank column = full access = null. */
+    /** True once {@code expiresAt} is set and not after {@code now}; null never expires. */
+    private static boolean isExpired(LocalDateTime expiresAt, LocalDateTime now) {
+        return expiresAt != null && !now.isBefore(expiresAt);
+    }
+
     private static List<String> parseScopes(String scopes) {
         if (scopes == null || scopes.isBlank()) {
             return null;
@@ -326,28 +353,49 @@ public class ApiKeyService {
             return null;
         }
 
-        String hash = encryptionService.hmacHash(plaintextKey);
+        // Every hash the key can be stored under: the current write form, the pre-v2
+        // password-keyed form, and the previous key generation. A key created before the HMAC
+        // moved to its own HKDF sub-key (credential.encryption.write-version=2) keeps resolving.
+        List<String> hashes = encryptionService.hmacHashCandidates(plaintextKey);
 
-        // 1. Legacy single key on auth.users: full access, scopes stay null.
-        Optional<User> userOpt = userRepository.findByApiKeyHash(hash);
+        if (hashes.isEmpty()) {
+            return null;
+        }
+        String currentHash = hashes.get(0);
+
+        // 1. Legacy single key on auth.users: full access, scopes stay null. One query over every
+        // hash form (a 64-hex HMAC collision between two users is not a practical concern).
+        Optional<User> userOpt = userRepository.findByApiKeyHashIn(hashes).stream().findFirst();
         if (userOpt.isPresent()) {
             User user = userOpt.get();
             if (!user.isEnabled()) {
                 log.debug("User {} is disabled, rejecting API key", user.getId());
                 return null;
             }
+            // CASA LC-054: an expired legacy key resolves like no key at all.
+            if (isExpired(user.getApiKeyExpiresAt(), LocalDateTime.now())) {
+                log.debug("Legacy API key of user {} expired at {}", user.getId(), user.getApiKeyExpiresAt());
+                return null;
+            }
+            rehashLegacyUserKeyBestEffort(user, currentHash);
             // Delegate to existing resolution logic (reuses org lookup, credit balance, etc.)
             return userResolutionService.resolveUser(user.getProviderId(), null);
         }
 
         // 2. Named multi keys (auth.api_keys, V398): non-revoked rows only.
-        Optional<ApiKey> keyOpt = apiKeyRepository.findByKeyHashAndRevokedAtIsNull(hash);
+        Optional<ApiKey> keyOpt = apiKeyRepository.findByKeyHashInAndRevokedAtIsNull(hashes).stream().findFirst();
         if (keyOpt.isEmpty()) {
             log.debug("No user found for API key hash");
             return null;
         }
 
         ApiKey key = keyOpt.get();
+        // CASA LC-054: an expired key resolves like a revoked one. Keys minted before V530 carry
+        // no expiry and keep working.
+        if (isExpired(key.getExpiresAt(), LocalDateTime.now())) {
+            log.debug("API key {} expired at {}", key.getId(), key.getExpiresAt());
+            return null;
+        }
         Optional<User> ownerOpt = userRepository.findById(key.getUserId());
         if (ownerOpt.isEmpty()) {
             log.debug("No owner found for API key {}", key.getId());
@@ -367,7 +415,37 @@ public class ApiKeyService {
         response.setApiKeyScopes(parseScopes(key.getScopes()));
 
         touchLastUsedAtBestEffort(key);
+        rehashNamedKeyBestEffort(key, currentHash);
         return response;
+    }
+
+    /**
+     * An API-key hash is one-way, so the sweeps cannot move it to the current HMAC key: this is
+     * done here, the first time the key is used after the move (CASA LC-070). Compare-and-set on
+     * the old hash, own transaction, failures swallowed: resolution must never fail because of it.
+     */
+    private void rehashLegacyUserKeyBestEffort(User user, String currentHash) {
+        String stored = user.getApiKeyHash();
+        if (stored == null || stored.equals(currentHash)) {
+            return;
+        }
+        try {
+            userRepository.rehashApiKey(user.getId(), stored, currentHash);
+        } catch (RuntimeException e) {
+            log.debug("API key re-hash skipped for user {}: {}", user.getId(), e.getMessage());
+        }
+    }
+
+    private void rehashNamedKeyBestEffort(ApiKey key, String currentHash) {
+        String stored = key.getKeyHash();
+        if (stored == null || stored.equals(currentHash)) {
+            return;
+        }
+        try {
+            apiKeyRepository.rehash(key.getId(), stored, currentHash);
+        } catch (RuntimeException e) {
+            log.debug("API key re-hash skipped for key {}: {}", key.getId(), e.getMessage());
+        }
     }
 
     /**

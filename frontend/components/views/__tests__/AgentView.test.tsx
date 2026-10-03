@@ -46,21 +46,24 @@ vi.mock('next/navigation', () => ({
  * API. A router replace of the bare pathname - which is what returning to the default tab
  * asks for - is dropped when the page was loaded at it, which is the "nothing happens" this
  * view's own comment describes.
+ *
+ * It is a PUSH: a tab is a step the user chose, so Back returns to the tab before it, the same
+ * as on every other tabbed page of the app.
  */
-const replace = vi.fn();
-const realReplaceState = window.history.replaceState;
+const push = vi.fn();
+const realPushState = window.history.pushState;
 
 import { AgentView } from '../AgentView';
 
 beforeEach(() => {
   searchParams = new URLSearchParams();
-  replace.mockClear();
+  push.mockClear();
   routerReplace.mockClear();
-  window.history.replaceState = ((_data: unknown, _unused: string, url?: string) =>
-    replace(url)) as unknown as typeof window.history.replaceState;
+  window.history.pushState = ((_data: unknown, _unused: string, url?: string) =>
+    push(url)) as unknown as typeof window.history.pushState;
 });
 afterEach(() => {
-  window.history.replaceState = realReplaceState;
+  window.history.pushState = realPushState;
   cleanup();
 });
 
@@ -159,32 +162,32 @@ describe('AgentView - tab clicks encode the choice in the URL', () => {
   it('encodes Skills as ?view=skills', () => {
     render(<AgentView />);
     fireEvent.click(screen.getByText('tabSkills'));
-    expect(replace).toHaveBeenCalledWith('/app/agent?view=skills');
+    expect(push).toHaveBeenCalledWith('/app/agent?view=skills');
   });
 
   it('encodes Fleet as ?view=fleet', () => {
     render(<AgentView />);
     fireEvent.click(screen.getByText('tabFleet'));
-    expect(replace).toHaveBeenCalledWith('/app/agent?view=fleet');
+    expect(push).toHaveBeenCalledWith('/app/agent?view=fleet');
   });
 
   it('encodes Metrics as ?view=metrics', () => {
     render(<AgentView />);
     fireEvent.click(screen.getByText('tabMetrics'));
-    expect(replace).toHaveBeenCalledWith('/app/agent?view=metrics');
+    expect(push).toHaveBeenCalledWith('/app/agent?view=metrics');
   });
 
   it('encodes Settings as ?view=settings', () => {
     render(<AgentView />);
     fireEvent.click(screen.getByText('tabSettings'));
-    expect(replace).toHaveBeenCalledWith('/app/agent?view=settings');
+    expect(push).toHaveBeenCalledWith('/app/agent?view=settings');
   });
 
   it('keeps the Agents tab on a clean URL (no ?view=)', () => {
     searchParams = new URLSearchParams('view=skills');
     render(<AgentView />);
     fireEvent.click(screen.getByText('tabAgents'));
-    expect(replace).toHaveBeenCalledWith('/app/agent');
+    expect(push).toHaveBeenCalledWith('/app/agent');
     // Not the router: from a page loaded on `?view=skills` that call is dropped and the tab
     // does nothing at all.
     expect(routerReplace).not.toHaveBeenCalled();

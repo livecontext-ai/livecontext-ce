@@ -94,7 +94,14 @@ public class ExecutionServiceInjector {
     @Autowired(required = false)
     private WorkflowEventPublisher eventPublisher;
 
+    /**
+     * Backs {@code ServiceRegistry.getRestTemplate()}, whose single consumer is
+     * {@code HttpRequestNode} - wired to the PINNED bean, never the shared unqualified
+     * {@code RestTemplate}, so {@code core:http_request} cannot be DNS-rebound (LC-002 / LC-006,
+     * CASA readiness round 3). See {@code RestTemplateConfig.httpRequestNodeRestTemplate}.
+     */
     @Autowired(required = false)
+    @Qualifier("httpRequestNodeRestTemplate")
     private RestTemplate restTemplate;
 
     @Autowired(required = false)
@@ -138,6 +145,9 @@ public class ExecutionServiceInjector {
 
     @Autowired(required = false)
     private CreditBudgetService creditBudgetService;
+
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
 
     @Autowired(required = false)
     private WorkflowRepository workflowRepository;
@@ -268,6 +278,7 @@ public class ExecutionServiceInjector {
             .codeExecutor(codeExecutor)
             .credentialClient(credentialClient)
             .creditBudgetService(creditBudgetService)
+            .stepPayloadService(stepPayloadService)
             .workflowRepository(workflowRepository)
             .workflowExecutionService(workflowExecutionService)
             .workflowExecutionServiceV2(workflowExecutionServiceV2)

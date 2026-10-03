@@ -211,6 +211,7 @@ public class DataSourceToolsProvider implements ToolsProvider {
                 Persistent database table storage. For create: pass data=[{colName: value, ...}] - keys become column names (use descriptive names from user context, NEVER 'Colonne 1' or 'col1'). Or columns=[{name, type}] for empty schema.
                 Call table(action='help') for column types, WHERE syntax, and examples.
                 Marketplace: publish requires title + interface_id (landing page). unpublish marks the listing inactive - acquirers keep their copies.
+                A listing ships the table's rows, at most 5000 (Gmail / Drive-derived rows are left out): a larger table is refused until you trim it with delete_rows.
                 """)
             .category(ToolCategory.DATASOURCE)
             .parameters(params)

@@ -14,6 +14,7 @@ import { resolve, join } from 'path';
 import { homedir } from 'os';
 import { applyResultMapping } from '../lib/stopReasonMapper.js';
 import { recordCallUsage, handleCodexStyleItemEvent, incrementTurn, dispatchToolCall, dispatchToolResult, buildStdinPayload, synthIdFor } from '../lib/adapterHelpers.mjs';
+import { buildBaseChildEnv } from '../lib/childEnv.mjs';
 import { codexReasoningArgs } from '../lib/reasoningEffort.mjs';
 
 // ─── Configuration ────────────────────────────────────────────────────────
@@ -357,7 +358,8 @@ ${envEntries}
    * Copies auth credentials from the real CODEX_HOME so login is preserved.
    */
   buildChildEnv(tmpDir) {
-    const env = { ...process.env };
+    // Platform secrets are stripped centrally - see lib/childEnv.mjs (LC-053).
+    const env = buildBaseChildEnv();
     if (tmpDir) {
       // Copy auth files from real CODEX_HOME to temp dir
       const realHome = env.CODEX_HOME || join(homedir(), '.codex');

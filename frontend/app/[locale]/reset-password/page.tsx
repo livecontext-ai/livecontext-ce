@@ -27,9 +27,8 @@ import { ArrowRight, CheckCircle2 } from 'lucide-react';
 import { AuthLayout } from '@/components/auth/AuthLayout';
 import { embeddedResetPassword } from '@/lib/providers/embedded-auth-provider';
 import { IS_CLOUD } from '@/lib/edition';
-
-/** Mirrors the backend rule in PasswordAuthService: at least 8 characters. */
-const MIN_PASSWORD_LENGTH = 8;
+// Mirrors the backend rule in PasswordAuthService (one shared frontend copy).
+import { MIN_PASSWORD_LENGTH } from '@/lib/auth/changePasswordOutcome';
 
 export default function ResetPasswordPage() {
   const t = useTranslations('auth.resetPassword');

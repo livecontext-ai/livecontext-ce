@@ -64,7 +64,13 @@ export interface UseRowOperationsReturn {
   setNewRowPriority: React.Dispatch<React.SetStateAction<number>>;
 
   // Actions
-  handleSaveEdit: (rowId: number, columnId: string, value: string, arrayIndex?: number | null) => Promise<void>;
+  /**
+   * Resolves `false` when the edit was refused or failed (a toast says why) or is a read-only
+   * position that is never written; `true` otherwise, i.e. nothing refused it and the row on
+   * screen now carries the value. `true` is NOT a proof of a server write: a table with no
+   * backing source, and the priority of a workflow-run row, only ever change on screen.
+   */
+  handleSaveEdit: (rowId: number, columnId: string, value: string, arrayIndex?: number | null) => Promise<boolean>;
   addNewRow: () => Promise<void>;
   deleteSelectedRows: (selectedRows: Set<string>, getRowUniqueKey: (row: DataSourceItemRow) => string) => Promise<void>;
   /** Copies the selected rows; resolves with how many copies were actually written. */
@@ -155,7 +161,7 @@ export function useRowOperations({
     columnId: string,
     value: string,
     arrayIndex?: number | null
-  ) => {
+  ): Promise<boolean> => {
     try {
       // Clean up columnId
       columnId = columnId.trim().replace(/,$/, '').replace(/^,/, '').replace(/\/$/, '');
@@ -170,7 +176,7 @@ export function useRowOperations({
       } else if ((columnId === 'index' || columnId === 'array_index') && jsonPath) {
         // The array index the nested view injects is a position, not stored data - read-only.
         // Outside nested navigation a column of that name is the table's own and saves normally.
-        return;
+        return false;
       } else if (jsonPath) {
         // Nested/array mode
         const currentArrayIndex = arrayIndex ?? rows.find(r => r.id === rowId)?.data?.array_index;
@@ -213,7 +219,7 @@ export function useRowOperations({
         );
 
         if (!response.ok) {
-          const errorMessage = await parseErrorResponse(response, 'Failed to save changes');
+          const errorMessage = await parseErrorResponse(response, t('saveErrorMessage'));
           throw new Error(errorMessage);
         }
       }
@@ -261,16 +267,18 @@ export function useRowOperations({
           };
         }
       }));
+      return true;
     } catch (err) {
       console.error('Error saving edit:', err);
-      const errorMessage = err instanceof Error ? err.message : 'Failed to save changes';
+      const errorMessage = err instanceof Error ? err.message : t('saveErrorMessage');
       addToast({
         type: 'error',
-        title: 'Error Saving',
+        title: t('saveErrorTitle'),
         message: errorMessage,
       });
+      return false;
     }
-  }, [dataSourceId, jsonPath, workflowContext, rows, setRows, addToast, rowLevelFields]);
+  }, [dataSourceId, jsonPath, workflowContext, rows, setRows, addToast, rowLevelFields, t]);
 
   // Save edit for workflow context (storage update)
   // Uses row._outputStorageId directly to avoid unnecessary API calls
@@ -279,13 +287,21 @@ export function useRowOperations({
 
     // Find the row being edited to get its _outputStorageId
     const targetRow = rows.find(r => r.id === rowId);
-    if (!targetRow?._outputStorageId) throw new Error('No output storage ID for this row');
+    // What these throw is shown to the user as the body of the save-error toast, so it is the
+    // translated message; the diagnostic detail goes to the console.
+    if (!targetRow?._outputStorageId) {
+      console.error('Workflow edit: no output storage id for row', rowId);
+      throw new Error(t('saveErrorMessage'));
+    }
 
     // Fetch current storage data
     const storageResponse = await authenticatedFetch(
       `${ORCHESTRATOR_URL}/storage/${targetRow._outputStorageId}`
     );
-    if (!storageResponse.ok) throw new Error('Failed to fetch storage data');
+    if (!storageResponse.ok) {
+      console.error('Workflow edit: storage read failed', storageResponse.status);
+      throw new Error(t('saveErrorMessage'));
+    }
     const storageData = await storageResponse.json();
 
     const storageContent = storageData.data_mapped || storageData.data || {};
@@ -304,7 +320,8 @@ export function useRowOperations({
     }
 
     if (itemIndex < 0 || itemIndex >= dataArray.length) {
-      throw new Error(`Item index ${itemIndex} out of bounds (array length: ${dataArray.length})`);
+      console.error(`Workflow edit: item index ${itemIndex} out of bounds (array length: ${dataArray.length})`);
+      throw new Error(t('saveErrorMessage'));
     }
 
     const cleanCol = columnId.startsWith('data.') ? columnId.replace('data.', '') : columnId;
@@ -323,10 +340,10 @@ export function useRowOperations({
     );
 
     if (!updateResponse.ok) {
-      const errorMessage = await parseErrorResponse(updateResponse, 'Failed to save to storage');
+      const errorMessage = await parseErrorResponse(updateResponse, t('saveErrorMessage'));
       throw new Error(errorMessage);
     }
-  }, [workflowContext, rows]);
+  }, [workflowContext, rows, t]);
 
   /**
    * Add a new row
@@ -357,20 +374,20 @@ export function useRowOperations({
 
       addToast({
         type: 'success',
-        title: 'Row Added Successfully',
-        message: `New row has been added with priority ${newRowPriority}`,
+        title: t('rowAddedTitle'),
+        message: t('rowAddedMessage', { priority: newRowPriority }),
       });
     } catch (err) {
       console.error('Error adding row:', err);
       addToast({
         type: 'error',
-        title: 'Error Adding Row',
-        message: 'Failed to add row',
+        title: t('addRowErrorTitle'),
+        message: t('addRowErrorMessage'),
       });
     } finally {
       setIsAddingRow(false);
     }
-  }, [dataSourceId, newRowData, newRowPriority, pagination, fetchData, addToast]);
+  }, [dataSourceId, newRowData, newRowPriority, pagination, fetchData, addToast, t]);
 
   /**
    * Duplicate every selected row. Returns how many copies were actually written.
@@ -625,18 +642,18 @@ export function useRowOperations({
 
       addToast({
         type: 'success',
-        title: 'Rows Deleted Successfully',
-        message: `${selectedCount} row(s) have been deleted`,
+        title: t('rowsDeletedTitle'),
+        message: t('rowsDeletedMessage', { count: selectedCount }),
       });
     } catch (err) {
       console.error('Error deleting rows:', err);
       addToast({
         type: 'error',
-        title: 'Error Deleting Rows',
-        message: 'Failed to delete selected rows',
+        title: t('deleteRowsErrorTitle'),
+        message: t('deleteRowsErrorMessage'),
       });
     }
-  }, [dataSourceId, jsonPath, pagination, fetchData, setRows, addToast]);
+  }, [dataSourceId, jsonPath, pagination, fetchData, setRows, addToast, t]);
 
   const startAddingRowInline = useCallback(() => {
     setIsAddingRowInline(true);

@@ -30,14 +30,15 @@ public class CreditClientConfig {
             @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
         CreditConsumptionClient client = new CreditConsumptionClient(authServiceUrl, enabled, gatewaySecretKey);
         client.setDeadLetterHandler(
-                new HttpCreditDeadLetterHandler(new RestTemplate(), authServiceUrl));
+                new HttpCreditDeadLetterHandler(new RestTemplate(), authServiceUrl, gatewaySecretKey));
         return client;
     }
 
     @Bean
     public PricingSnapshotClient pricingSnapshotClient(
-            @Value("${services.auth-service.url:http://localhost:8083}") String authServiceUrl) {
-        PricingSnapshotClient client = new PricingSnapshotClient(authServiceUrl);
+            @Value("${services.auth-service.url:http://localhost:8083}") String authServiceUrl,
+            @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
+        PricingSnapshotClient client = new PricingSnapshotClient(authServiceUrl, gatewaySecretKey);
         // Eagerly load the snapshot at startup so the first budget check has real rates.
         try {
             client.refresh();

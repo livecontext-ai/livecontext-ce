@@ -143,11 +143,11 @@ describe('settings skeletons - the corner matches what is coming', () => {
   });
 
   it('draws the tab bar and its items at the rungs the REAL bar uses', () => {
-    // Same reasoning: the overview tab bar is hand-written markup, so both rungs
-    // come from that page rather than from `buttonVariants`.
-    const overview = join('app', '[locale]', 'app', 'settings', 'overview', 'page.tsx');
-    const barRadius = radiusInSource(overview, /p-1 sm:p-1\.5 bg-theme-tertiary (rounded-\w+)/);
-    const itemRadius = radiusInSource(overview, /flex h-9 items-center[^"]*?(rounded-\w+)/);
+    // Same reasoning: the settings tab bar is hand-written markup, so both rungs come
+    // from the shared bar the settings pages use rather than from `buttonVariants`.
+    const tabBar = join('components', 'settings', 'AdaptiveTabBar.tsx');
+    const barRadius = radiusInSource(tabBar, /p-1\.5 bg-theme-tertiary (rounded-\w+)/);
+    const itemRadius = radiusInSource(tabBar, /flex h-9 items-center[^']*?(rounded-\w+)/);
 
     const { container } = render(<TabsSkeleton tabCount={3} />);
     const bar = container.firstElementChild as HTMLElement;

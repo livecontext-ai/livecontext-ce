@@ -14,7 +14,8 @@ import java.util.UUID;
  * the owner's id; the row UUID leaks nothing. The URL is built against the public origin
  * ({@code app.base-url} = {@code APP_PUBLIC_URL}, e.g. {@code https://livecontext.ai}) and
  * targets the Next.js proxy path {@code /api/proxy/files/by-id/{id}/raw}, which forwards to the
- * org-scoped streaming endpoint in storage-service and promotes the caller's session token.
+ * org-scoped streaming endpoint in storage-service; the caller's session travels in the
+ * {@code Authorization} header of the app's authenticated fetch (never in the URL).
  *
  * <p>Lives in {@code common-storage-service} so every minting site - the agent {@code files}
  * tool, workflow runtime sidecars, the frontend - produces the identical canonical shape.

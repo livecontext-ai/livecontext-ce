@@ -5,6 +5,7 @@ import type { Edge, Node, XYPosition } from 'reactflow';
 import type { BuilderNodeData, PaletteDragItem, PaletteItem } from '../types';
 import { getPaletteItemDataFromId } from '../nodes/nodeClasses';
 import { nodeClipboard } from '../services/nodeClipboard';
+import { withAttachedNoteIds } from '../utils/noteAnchors';
 import { track } from '@/lib/analytics/analytics';
 import {
   cloneNodesForPaste,
@@ -102,6 +103,7 @@ export function useCanvasContextMenuActions({
       const { nodes: cloned, edges: clonedEdges, newIds } = cloneNodesForPaste(sourceNodes, sourceEdges, {
         seed: nextSeed(),
         position: opts.position,
+        existingNodeIds: new Set(nodesRef.current.map((n) => n.id)),
       });
       if (cloned.length === 0) return;
       setNodes((prev) => [...prev, ...cloned]);
@@ -126,7 +128,8 @@ export function useCanvasContextMenuActions({
   const deleteIds = React.useCallback(
     (ids: string[], method: 'node' | 'selection') => {
       if (ids.length === 0) return;
-      const idSet = new Set(ids);
+      // A node's notes go with it: they explain a node nobody can see any more.
+      const idSet = new Set(withAttachedNoteIds(nodesRef.current, ids));
       setNodes((prev) => prev.filter((node) => !idSet.has(node.id)));
       setEdges((prev) => removeEdgesTouchingNodes(prev, idSet));
       setSelectedNodeIds((prev) => prev.filter((id) => !idSet.has(id)));
@@ -156,8 +159,12 @@ export function useCanvasContextMenuActions({
       },
       addNoteNear: (nodeId) => {
         const node = nodesRef.current.find((candidate) => candidate.id === nodeId);
-        const item = getPaletteItemDataFromId('note');
-        if (!item) return;
+        const paletteItem = getPaletteItemDataFromId('note');
+        if (!paletteItem) return;
+        // A note added from a node's menu explains that node: it is attached to it.
+        const item = node
+          ? { ...paletteItem, initialData: { ...(paletteItem.initialData || {}), noteAttachedTo: node.id } }
+          : paletteItem;
         const position: XYPosition = node
           ? { x: node.position?.x ?? 0, y: (node.position?.y ?? 0) + (node.height ?? 80) + 40 }
           : { x: 0, y: 0 };

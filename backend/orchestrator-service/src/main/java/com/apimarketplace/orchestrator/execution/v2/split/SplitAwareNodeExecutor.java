@@ -35,7 +35,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 
@@ -128,10 +127,113 @@ public class SplitAwareNodeExecutor {
         this.snapshotService = snapshotService;
         this.stepDataRepository = stepDataRepository;
         this.stateSnapshotService = stateSnapshotService;
-        this.executorService = Executors.newFixedThreadPool(
-            Runtime.getRuntime().availableProcessors() * 2
-        );
+        this.executorService = newSplitFanOutPool();
     }
+
+    /**
+     * The pool every split fan-out runs on.
+     *
+     * <p>A dedicated {@link ForkJoinPool}, not {@link ForkJoinPool#commonPool()} and not a plain
+     * fixed pool, for two reasons that both matter:
+     *
+     * <ul>
+     *   <li><strong>Not the common pool.</strong> It is JVM-global and shared with every parallel
+     *       stream and every other subsystem in this process, so one tenant's oversized fan-out
+     *       starved work that has nothing to do with workflows, and its compensation threads grow
+     *       without any ceiling (LC-064).</li>
+     *   <li><strong>Still a ForkJoinPool.</strong> The per-item task can itself block on a nested
+     *       fan-out (a nested split, or a sub-workflow node whose child workflow splits), and
+     *       {@code CompletableFuture.get} inside a FJ worker registers as a
+     *       {@code ManagedBlocker}, so the pool spawns a compensation thread instead of
+     *       deadlocking. A plain fixed pool has no such mechanism: N nested tasks would occupy
+     *       every worker while waiting on tasks that can never be scheduled. That is why the
+     *       original code reached for the common pool, and the property has to be preserved,
+     *       not just the bound.</li>
+     * </ul>
+     *
+     * <p>{@code maximumPoolSize} is what makes it bounded: compensation threads stop at
+     * {@link #FAN_OUT_MAX_POOL_SIZE} and further blocking is refused, which surfaces as a failed
+     * split rather than as a JVM with thousands of threads.
+     */
+    private static ForkJoinPool newSplitFanOutPool() {
+        return newSplitFanOutPool(Math.max(2, Runtime.getRuntime().availableProcessors() * 2),
+            FAN_OUT_MAX_POOL_SIZE);
+    }
+
+    /** Same pool shape with explicit sizes; package-private so a test can use a tiny pool. */
+    static ForkJoinPool newSplitFanOutPool(int parallelism, int maxPoolSize) {
+        return new ForkJoinPool(
+            parallelism,
+            ForkJoinPool.defaultForkJoinWorkerThreadFactory,
+            null,
+            /* asyncMode */ true,
+            /* corePoolSize */ parallelism,
+            maxPoolSize,
+            /* minimumRunnable */ 1,
+            /* saturate */ null,
+            /* keepAliveTime */ 60, TimeUnit.SECONDS);
+    }
+
+    /**
+     * How many items of ONE split may be queued or running on the fan-out pool at once.
+     * Without a window a 10,000-item split put 10,000 tasks (each holding its per-item context)
+     * on the pool in one go; the submitting thread now waits for a slot instead (LC-064).
+     */
+    private int fanOutWindow = Math.max(4, Runtime.getRuntime().availableProcessors() * 4);
+
+    /** Test seam for the per-split in-flight window. */
+    void setFanOutWindow(int window) {
+        this.fanOutWindow = Math.max(1, window);
+    }
+
+    /**
+     * Submits one item of a fan-out (LC-064, audit round 2).
+     *
+     * <ul>
+     *   <li>Called from a worker of the fan-out pool itself, i.e. a NESTED split (the inner
+     *       fan-out of an outer split item, or a sub-workflow whose child splits): the item runs
+     *       INLINE on the calling worker. Submitting it and blocking on it is what made the pool
+     *       spawn compensation threads until the 256-thread ceiling rejected the split; running
+     *       inline needs no extra thread at all, whatever the outer and inner item counts.</li>
+     *   <li>Otherwise the item goes to the pool through the per-split window: the caller blocks
+     *       until one of at most {@code fanOutWindow} in-flight items of this split completes.</li>
+     * </ul>
+     */
+    <T> CompletableFuture<T> submitFanOutItem(java.util.function.Supplier<T> task,
+                                              java.util.concurrent.Semaphore window) {
+        if (isFanOutWorkerThread()) {
+            try {
+                return CompletableFuture.completedFuture(task.get());
+            } catch (Throwable t) {
+                return CompletableFuture.failedFuture(t);
+            }
+        }
+        window.acquireUninterruptibly();
+        try {
+            return CompletableFuture.supplyAsync(task, executorService)
+                .whenComplete((result, error) -> window.release());
+        } catch (RuntimeException rejected) {
+            window.release();
+            throw rejected;
+        }
+    }
+
+    /** A fresh window for one split's fan-out. */
+    java.util.concurrent.Semaphore newFanOutWindow() {
+        return new java.util.concurrent.Semaphore(fanOutWindow);
+    }
+
+    private boolean isFanOutWorkerThread() {
+        return Thread.currentThread() instanceof java.util.concurrent.ForkJoinWorkerThread worker
+            && worker.getPool() == executorService;
+    }
+
+    /**
+     * Ceiling on total threads (workers + compensation) the split fan-out pool may hold. High
+     * enough that deeply nested legitimate fan-outs still make progress, low enough that a
+     * runaway split cannot turn into unbounded thread creation.
+     */
+    private static final int FAN_OUT_MAX_POOL_SIZE = 256;
 
     /**
      * Constructor for testing.
@@ -866,6 +968,7 @@ public class SplitAwareNodeExecutor {
 
         // Execute for each routed item in parallel (execution only, no persistence)
         List<CompletableFuture<ItemExecutionResult>> futures = new ArrayList<>();
+        java.util.concurrent.Semaphore itemWindow = newFanOutWindow();
 
         for (int i = 0; i < itemCount; i++) {
             // Skip items that were not routed to this node
@@ -876,16 +979,17 @@ public class SplitAwareNodeExecutor {
 
             final int subItemIndex = i;
             final Object item = items.get(subItemIndex);
-            // Capture orgId before crossing into ForkJoinPool.commonPool - those
-            // threads don't carry the request ThreadLocal, so without
-            // runWithOrgScope the V261 NOT NULL constraint on storage.storage
-            // (and downstream workflow_step_data) fires when a SKIPPED_NODE
+            // Capture orgId before crossing into the fan-out pool - those threads don't carry
+            // the request ThreadLocal, so without runWithOrgScope the V261 NOT NULL constraint
+            // on storage.storage (and downstream workflow_step_data) fires when a SKIPPED_NODE
             // INSERT runs from the split worker.
             final String orgIdForWorker = context.organizationId();
 
-            // Use ForkJoinPool.commonPool() to avoid deadlock when nested parallel executions occur.
-            // The common pool uses work-stealing, so blocked threads can still execute tasks.
-            CompletableFuture<ItemExecutionResult> future = CompletableFuture.supplyAsync(() -> {
+            // The DEDICATED bounded fan-out pool, not ForkJoinPool.commonPool(). Still a
+            // ForkJoinPool, so a task that blocks on a nested fan-out still gets a compensation
+            // thread instead of deadlocking; bounded, so a runaway split cannot starve the
+            // JVM-global pool every other subsystem shares (LC-064). See newSplitFanOutPool().
+            CompletableFuture<ItemExecutionResult> future = submitFanOutItem(() -> {
                 ItemExecutionResult[] resultHolder = new ItemExecutionResult[1];
                 com.apimarketplace.common.web.TenantResolver.runWithOrgScope(orgIdForWorker, () -> {
                     // Per-item failed attempts collected by the policy runner - persisted on
@@ -940,7 +1044,7 @@ public class SplitAwareNodeExecutor {
                     }
                 });
                 return resultHolder[0];
-            }, ForkJoinPool.commonPool());
+            }, itemWindow);
 
             futures.add(future);
         }
@@ -2821,6 +2925,7 @@ public class SplitAwareNodeExecutor {
 
         // Execute the inner split once per parent item, each time creating a uniquely-keyed context
         List<CompletableFuture<NodeExecutionResult>> futures = new ArrayList<>();
+        java.util.concurrent.Semaphore parentWindow = newFanOutWindow();
 
         // Capture orgId for ForkJoinPool worker threads (V261 NOT NULL - see
         // also executeForAllItemsAndTraverse). Without re-binding the scope,
@@ -2831,7 +2936,7 @@ public class SplitAwareNodeExecutor {
             final int subItemIndex = i;
             final Object parentItem = parentItems.get(subItemIndex);
 
-            CompletableFuture<NodeExecutionResult> future = CompletableFuture.supplyAsync(() -> {
+            CompletableFuture<NodeExecutionResult> future = submitFanOutItem(() -> {
                 NodeExecutionResult[] resultHolder = new NodeExecutionResult[1];
                 com.apimarketplace.common.web.TenantResolver.runWithOrgScope(orgIdForWorker, () -> {
                     try {
@@ -2862,7 +2967,7 @@ public class SplitAwareNodeExecutor {
                     }
                 });
                 return resultHolder[0];
-            }, java.util.concurrent.ForkJoinPool.commonPool());
+            }, parentWindow);
 
             futures.add(future);
         }

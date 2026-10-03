@@ -4,6 +4,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import { getDisplayOptions } from '@/components/data-table/visualHelpers';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import { useTranslations } from 'next-intl';
 import type { VisualCellProps } from './types';
 
 function parseTags(value: any): string[] {
@@ -21,7 +22,8 @@ function parseTags(value: any): string[] {
  * Multi-select cell - same visual as SelectCell but with checkboxes for multiple picks.
  * Popover dropdown styled identically to Radix SelectContent.
  */
-export function MultiSelectCell({ value, rowKey, field, displayConfig, onSaveAndExit }: VisualCellProps) {
+export function MultiSelectCell({ value, rowKey, field, displayConfig, onSaveAndExit, readOnly }: VisualCellProps) {
+  const t = useTranslations('dataTable');
   const options = getDisplayOptions(displayConfig);
   const tags = parseTags(value);
   const palette = (displayConfig?.palette as Record<string, string>) || {};
@@ -70,7 +72,7 @@ export function MultiSelectCell({ value, rowKey, field, displayConfig, onSaveAnd
 
   // No options configured - show tags as static pills
   if (options.length === 0) {
-    if (tags.length === 0) return <span className="text-xs text-theme-secondary">No tags</span>;
+    if (tags.length === 0) return <span className="text-xs text-theme-secondary">{t('noTags')}</span>;
     return (
       <div className="flex flex-wrap items-center justify-center gap-1 text-xs">
         {tags.map(tag => (
@@ -93,11 +95,12 @@ export function MultiSelectCell({ value, rowKey, field, displayConfig, onSaveAnd
         <PopoverTrigger asChild>
           <button
             type="button"
-            className="flex min-h-7 w-full items-center justify-between rounded-lg bg-transparent px-2 py-1 text-xs shadow-none hover:bg-[var(--bg-secondary)] transition-colors"
+            disabled={readOnly}
+            className="flex min-h-7 w-full items-center justify-between rounded-lg bg-transparent px-2 py-1 text-xs shadow-none enabled:hover:bg-[var(--bg-secondary)] disabled:cursor-default! transition-colors"
           >
             <span className="flex flex-wrap items-center gap-1 min-w-0">
               {selected.size === 0 ? (
-                <span className="text-theme-secondary">Select...</span>
+                <span className="text-theme-secondary">{t('selectPlaceholder')}</span>
               ) : (
                 selectedOptions.map(opt => {
                   const optColor = opt.color || palette[opt.value];
@@ -113,7 +116,7 @@ export function MultiSelectCell({ value, rowKey, field, displayConfig, onSaveAnd
                 })
               )}
             </span>
-            <ChevronDown className="h-3.5 w-3.5 opacity-0 group-hover/cell:opacity-50 flex-shrink-0" />
+            {!readOnly && <ChevronDown className="h-3.5 w-3.5 opacity-0 group-hover/cell:opacity-50 flex-shrink-0" />}
           </button>
         </PopoverTrigger>
 

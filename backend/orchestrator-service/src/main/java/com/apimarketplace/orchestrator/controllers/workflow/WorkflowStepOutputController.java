@@ -38,19 +38,31 @@ public class WorkflowStepOutputController {
     private final DetailedStepDataService detailedStepDataService;
     private final com.apimarketplace.orchestrator.repository.WorkflowRunRepository runRepository;
 
+    /**
+     * Intra-organization read gate (LC-012, security audit 2026-08-13). Every handler in
+     * this controller returns the PERSISTED OUTPUT of a step, which for a Gmail workflow is
+     * the mailbox payload itself, drillable by JSON path. Workspace scope alone
+     * ({@code isRunInScope}) says the caller is in the right org, never that the owner still
+     * lets them see this workflow, so a deny-listed member kept reading the whole payload
+     * here while the run-summary surface refused them.
+     */
+    private final com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard;
+
     public WorkflowStepOutputController(
             WorkflowStepService workflowStepService,
             StorageNestedService storageNestedService,
             StorageSkeletonService storageSkeletonService,
             StepOutputService stepOutputService,
             DetailedStepDataService detailedStepDataService,
-            com.apimarketplace.orchestrator.repository.WorkflowRunRepository runRepository) {
+            com.apimarketplace.orchestrator.repository.WorkflowRunRepository runRepository,
+            com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard) {
         this.workflowStepService = workflowStepService;
         this.storageNestedService = storageNestedService;
         this.storageSkeletonService = storageSkeletonService;
         this.stepOutputService = stepOutputService;
         this.detailedStepDataService = detailedStepDataService;
         this.runRepository = runRepository;
+        this.orgAccessGuard = orgAccessGuard;
     }
 
     /**
@@ -318,7 +330,13 @@ public class WorkflowStepOutputController {
             @RequestParam(value = "path", defaultValue = "") String jsonPath) {
 
         try {
-            String tenantId = resolveTenantId(request, tenantIdParam);
+            // Same scope+role decision as the 10 sibling handlers (LC-012): a column
+            // definition is the SHAPE of the payload those handlers return, so it must not
+            // stay readable to a caller the deny-list refuses the payload to. This also
+            // aligns the handler with its siblings for org-mates, who already read the data
+            // itself through /output/items on the same run.
+            String tenantId = resolveTenantIdInRunScope(request, runId);
+            if (tenantId == null) return ResponseEntity.notFound().build();
 
             Optional<UUID> outputStorageIdOpt = workflowStepService.getOutputStorageId(stepId, runId, tenantId);
 
@@ -526,48 +544,50 @@ public class WorkflowStepOutputController {
     // ========================================================================
 
     /**
-     * Resolve tenantId from the gateway-injected X-User-ID header ONLY.
-     * Audit 2026-05-17 round-3 - the prior implementation fell back to a
-     * client-supplied {@code tenantId} query param when the header was
-     * missing, which let any caller impersonate any tenant by appending
-     * {@code ?tenantId=victim}. The query param is now ignored entirely;
-     * if {@code X-User-ID} is absent, scope resolution returns null and
-     * the caller fails closed (404 on the storage lookup).
-     * <p>
-     * The {@code tenantIdParam} arg is retained for binary back-compat
-     * with the existing method signature but is no longer consulted.
-     * <p>
-     * Audit 2026-05-17 round-4 - for owner-or-org scope expansion, the
-     * caller-provided runId is now resolved via the run's tenantId/orgId
-     * after a `WorkflowRunRepository.findByRunIdPublic` lookup; if the
-     * caller is in scope (owner OR org-mate), we substitute the run's
-     * tenantId so the legacy tenant-strict service path still works for
-     * org-mates. {@link #resolveTenantIdInRunScope} is the new entry point.
+     * Audit 2026-05-17 round-4 - owner-or-org scope resolution for runId-
+     * pathed step-output endpoints. Returns the run's tenantId when the
+     * caller is in scope (owner OR org-mate) AND the org read gate permits
+     * it. Returns null otherwise so the caller can fail closed with 404.
+     *
+     * <p>The client-supplied {@code tenantId} query param each handler still
+     * declares is NEVER consulted (audit 2026-05-17 round-3: it let any caller
+     * impersonate any tenant with {@code ?tenantId=victim}); the parameter is
+     * kept only so existing callers do not break on an unknown-parameter error.
      */
-    @SuppressWarnings("unused")
-    private String resolveTenantId(HttpServletRequest request, String tenantIdParam) {
-        String userIdHeader = request.getHeader("X-User-ID");
-        if (userIdHeader != null && !userIdHeader.isBlank()) {
-            return userIdHeader;
-        }
-        return null;
+    private String resolveTenantIdInRunScope(HttpServletRequest request, String runId) {
+        return resolveRunInReadScope(request, runId)
+                .map(com.apimarketplace.orchestrator.domain.WorkflowRunEntity::getTenantId)
+                .orElse(null);
     }
 
     /**
-     * Audit 2026-05-17 round-4 - owner-or-org scope resolution for runId-
-     * pathed step-output endpoints. Returns the run's tenantId when the
-     * caller is in scope (owner OR org-mate). Returns null when out of
-     * scope so the caller can fail closed with 404.
+     * The single scope+role decision every handler here goes through (LC-012, security
+     * audit 2026-08-13).
+     *
+     * <p>Two layers, both required:
+     * <ul>
+     *   <li>{@link WorkflowControllerHelper#isRunInScope} - is the caller in the workspace
+     *       that owns the run (and, for a share-token context, is the run the shared one);</li>
+     *   <li>{@link WorkflowControllerHelper#canReadRun} - does the owner still let this
+     *       member see the run's PARENT WORKFLOW. Denying a member the Gmail workflow has
+     *       to hide its step outputs, or the deny-list only hides the run summary while the
+     *       mailbox payload stays readable one path segment further down.</li>
+     * </ul>
+     *
+     * <p>The role travels on the gateway-injected {@code X-Organization-Role} header (the
+     * gateway strips any client-supplied copy, so it cannot be forged). Out of scope maps to
+     * an empty result, which every handler turns into a 404 - the same answer as a run that
+     * does not exist, so the gate never confirms the id.
      */
-    private String resolveTenantIdInRunScope(HttpServletRequest request, String runId) {
+    private Optional<com.apimarketplace.orchestrator.domain.WorkflowRunEntity> resolveRunInReadScope(
+            HttpServletRequest request, String runId) {
         String callerUserId = request.getHeader("X-User-ID");
-        if (callerUserId == null || callerUserId.isBlank()) return null;
+        if (callerUserId == null || callerUserId.isBlank()) return Optional.empty();
         String callerOrgId = request.getHeader("X-Organization-ID");
+        String orgRole = request.getHeader("X-Organization-Role");
         return runRepository.findByRunIdPublic(runId)
-                .filter(run -> com.apimarketplace.orchestrator.controllers.workflow.WorkflowControllerHelper
-                        .isRunInScope(run, callerUserId, callerOrgId))
-                .map(com.apimarketplace.orchestrator.domain.WorkflowRunEntity::getTenantId)
-                .orElse(null);
+                .filter(run -> WorkflowControllerHelper.isRunInScope(run, callerUserId, callerOrgId))
+                .filter(run -> WorkflowControllerHelper.canReadRun(run, callerUserId, orgRole, orgAccessGuard));
     }
 
     /**
@@ -579,12 +599,7 @@ public class WorkflowStepOutputController {
      * <p>Returns null when the caller is out of scope (404 fail-closed).
      */
     private String resolveOrgIdInRunScope(HttpServletRequest request, String runId) {
-        String callerUserId = request.getHeader("X-User-ID");
-        if (callerUserId == null || callerUserId.isBlank()) return null;
-        String callerOrgId = request.getHeader("X-Organization-ID");
-        return runRepository.findByRunIdPublic(runId)
-                .filter(run -> com.apimarketplace.orchestrator.controllers.workflow.WorkflowControllerHelper
-                        .isRunInScope(run, callerUserId, callerOrgId))
+        return resolveRunInReadScope(request, runId)
                 .map(com.apimarketplace.orchestrator.domain.WorkflowRunEntity::getOrganizationId)
                 .orElse(null);
     }

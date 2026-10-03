@@ -66,6 +66,23 @@ class CatalogBundlePayloadCategoriesTest {
     }
 
     @Test
+    @DisplayName("The free-tier ranking never ships: reordering it on the cloud must not change the bundle a CE install receives")
+    void freeTierRankingStaysOutOfTheBundle() {
+        ModelConfigOverrideEntity m = entity(10L, "openai", "gpt-5");
+
+        byte[] without = CatalogBundlePayload.canonicalBytes(
+                1L, 2, "cloud", TS, List.of(m), List.of(sidecar(10L, "chat", 1, true)));
+        byte[] with = CatalogBundlePayload.canonicalBytes(
+                1L, 2, "cloud", TS, List.of(m), List.of(
+                        sidecar(10L, "chat", 1, true),
+                        sidecar(10L, "free_tier", 3, true)));
+
+        assertThat(new String(with)).doesNotContain("free_tier");
+        // Byte-identical, so the signed content (and its version) does not move either.
+        assertThat(with).isEqualTo(without);
+    }
+
+    @Test
     @DisplayName("Orphaned sidecar rows (model_config_id with no matching model) are dropped")
     void orphansDropped() {
         ModelConfigOverrideEntity m = entity(10L, "openai", "gpt-5");

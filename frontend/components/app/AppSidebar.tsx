@@ -45,6 +45,7 @@ import { cloudLinkService, CLOUD_NO_SUBSCRIPTION } from '@/lib/api/cloud-link.se
 import { CLOUD_PRICING_URL } from '@/lib/edition/cloudWebUrl';
 import { NavIconButton } from '@/components/app/NavIconButton';
 import { SidebarNavigation } from '@/components/app/SidebarNavigation';
+import { writeLocaleCookie } from '@/lib/utils/locale';
 
 // Re-exported so the surfaces (and tests) that have always imported it from
 // here keep working now that it lives in its own module - SidebarNavigation
@@ -744,7 +745,7 @@ export const UserSection = memo(function UserSection({
   const selectedThemeOption = themeOptions.find((option) => option.value === themePreference) ?? themeOptions[0];
 
   const handleLanguageChange = (langCode: string) => {
-    document.cookie = `NEXT_LOCALE=${langCode}; path=/; max-age=31536000; SameSite=Lax`;
+    writeLocaleCookie(langCode);
     // Best-effort, never awaited: the switch must not wait on or fail because of it.
     reportExplicitLocaleChoice(langCode);
     router.push(pathname, { locale: langCode });

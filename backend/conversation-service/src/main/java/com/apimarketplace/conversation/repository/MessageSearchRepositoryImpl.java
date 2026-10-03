@@ -75,7 +75,9 @@ public class MessageSearchRepositoryImpl implements MessageSearchRepository {
                 .append("JOIN conversation.conversations c ON c.id = m.conversation_id ")
                 .append("CROSS JOIN q ")
                 .append("WHERE c.id IN (:conversationIds) ")
-                .append("  AND m.search_vector @@ q.query ");
+                .append("  AND m.search_vector @@ q.query ")
+                // LC-066: Gmail / Drive derived content is never surfaced by full-text search.
+                .append("  AND m.data_sensitivity <> 'RESTRICTED' ");
 
         if (!includeInactive) {
             sql.append("  AND c.active = TRUE ");

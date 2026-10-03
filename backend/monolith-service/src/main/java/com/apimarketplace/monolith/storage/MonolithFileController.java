@@ -6,6 +6,7 @@ import com.apimarketplace.common.storage.exception.QuotaExceededException;
 import com.apimarketplace.common.storage.service.StorageService;
 import com.apimarketplace.common.storage.url.PublicFileUrlBuilder;
 import com.apimarketplace.common.web.ContentDispositions;
+import com.apimarketplace.common.web.SafeFileServeHeaders;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.storage.domain.FileRef;
 import com.apimarketplace.storage.service.file.FileStorageService;
@@ -154,8 +155,10 @@ public class MonolithFileController {
             .map(ds -> {
                 String fileName = com.apimarketplace.storage.util.FileNameExtractor.fromStoragePath(key);
                 String mimeType = mimeTypeRegistry.resolve(fileName);
+                // Anonymous endpoint, extension-derived type: active types download, every
+                // response is nosniff + sandboxed (LC-016, CE twin of FileController).
                 String contentDisposition = ContentDispositions.of(
-                        "attachment".equalsIgnoreCase(disposition) ? "attachment" : "inline", fileName);
+                        SafeFileServeHeaders.dispositionType(mimeType, disposition), fileName);
                 // Same rule as the cloud mount of this endpoint: a client that
                 // walks away is not a fault, but an S3 read failure still must
                 // not be served as a truncated 200.
@@ -342,8 +345,9 @@ public class MonolithFileController {
         String fileName = entity.getFileName();
         String mimeType = entity.getMimeType() != null ? entity.getMimeType()
                 : (entity.getContentType() != null ? entity.getContentType() : "application/octet-stream");
+        // Uploader-declared type: active types download, nosniff + sandboxed (LC-020, CE twin).
         String contentDisposition = ContentDispositions.of(
-                "attachment".equalsIgnoreCase(disposition) ? "attachment" : "inline", fileName);
+                SafeFileServeHeaders.dispositionType(mimeType, disposition), fileName);
 
         byte[] data;
         if (entity.getS3Key() != null) {
@@ -355,7 +359,7 @@ public class MonolithFileController {
             return ResponseEntity.notFound().build();
         }
 
-        return ResponseEntity.ok()
+        return SafeFileServeHeaders.applyTo(ResponseEntity.ok(), mimeType)
                 .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
                 .header(HttpHeaders.CONTENT_TYPE, mimeType)
                 .header(HttpHeaders.CACHE_CONTROL, "private, max-age=300")
@@ -447,12 +451,10 @@ public class MonolithFileController {
         if (data == null) {
             return ResponseEntity.notFound().build();
         }
-        return ResponseEntity.ok()
+        return SafeFileServeHeaders.applyTo(ResponseEntity.ok(), entity.getMimeType())
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDispositions.of("inline", entity.getFileName()))
                 .header(HttpHeaders.CONTENT_TYPE, entity.getMimeType())
                 .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400")
-                .header("X-Content-Type-Options", "nosniff")
-                .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
                 .body(data);
     }
 

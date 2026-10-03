@@ -75,7 +75,6 @@ export function DataTableGrid({ controller, workflowContext, jsonPath, dataSourc
   const t = useTranslations('dataTable');
   const tRunSteps = useTranslations('workflow.runSteps');
   const locale = getClientLocale();
-  const progressSaveRef = React.useRef<{ cellKey: string; timestamp: number } | null>(null);
   const closeHoverTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const isHoveringPopoverRef = React.useRef(false);
   const [pinnedPopovers, setPinnedPopovers] = React.useState<PinnedPopoverData[]>([]);
@@ -249,6 +248,14 @@ export function DataTableGrid({ controller, workflowContext, jsonPath, dataSourc
     return `${clamped}px`;
   }, [rows, displayRows, workflowContext, viewConfig.idIsRowLevel]);
 
+  // A table that turns read-only drops every slider move still in flight. The cells forget theirs;
+  // the copies kept here have to go too, or they are drawn over the stored value the moment the
+  // table becomes editable again.
+  React.useEffect(() => {
+    if (!readOnly) return;
+    setProgressTempValues(prev => (prev.size === 0 ? prev : new Map()));
+  }, [readOnly, setProgressTempValues]);
+
   /**
    * Is this column the FIXED ID lane (pinned left, clamped to `idColumnWidth`)?
    *
@@ -293,18 +300,20 @@ export function DataTableGrid({ controller, workflowContext, jsonPath, dataSourc
       exitEditing();
     };
 
+    // The cell saves each move exactly once, so there is nothing to de-duplicate here. It goes to
+    // the save path directly, not through saveAndExit: a slider is never "the cell being edited",
+    // and a save fired as a cell unmounts must not close whatever cell IS being edited.
     const handleProgressSave = (newValue: number) => {
-      const now = Date.now();
-      if (progressSaveRef.current?.cellKey === cellKey && now - progressSaveRef.current.timestamp < 100) {
-        return;
-      }
-      progressSaveRef.current = { cellKey, timestamp: now };
-      saveAndExit(newValue);
+      const outcome = readOnly
+        ? undefined
+        : handleSaveEdit(row.id, col.field, serializeEditValue(newValue), row.data?.array_index);
+      // Always cleared: a temp value that outlives its save is drawn over the stored one.
       setProgressTempValues(prev => {
         const newMap = new Map(prev);
         newMap.delete(cellKey);
         return newMap;
       });
+      return outcome;
     };
 
     const result = renderVisualCellContent({

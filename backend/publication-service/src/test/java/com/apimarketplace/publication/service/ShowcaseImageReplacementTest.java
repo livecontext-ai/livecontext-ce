@@ -29,7 +29,7 @@ class ShowcaseImageReplacementTest {
     void setUp() {
         signer = new ShowcaseUrlSigner(SECRET);
         rewriter = new ShowcaseFileRefRewriter(signer, new PublicationFileUrlResolver(signer), new ObjectMapper(), new SimpleMeterRegistry(), 15);
-        reader = new ShowcaseSnapshotReader(rewriter);
+        reader = new ShowcaseSnapshotReader(rewriter, org.mockito.Mockito.mock(ShowcaseRestrictionGuard.class));
         pub = new WorkflowPublicationEntity();
         pub.setId(UUID.randomUUID());
         pub.setPublisherId("1");

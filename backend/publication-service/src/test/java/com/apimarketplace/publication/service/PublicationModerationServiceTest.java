@@ -33,6 +33,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -647,6 +648,38 @@ class PublicationModerationServiceTest {
 
         assertThat(currentSource).containsEntry("name", "Org table live").doesNotContainKey("error");
         verify(tableStrategy).buildSnapshot(resourceId, TENANT_ID, ORG_ID);
+    }
+
+    @Test
+    @DisplayName("regression (review mode): a table copy that fails reads as an empty live table, never a refusal")
+    void tableReviewStaysLenientWhenTheCopyFails() {
+        UUID publicationId = UUID.randomUUID();
+        com.apimarketplace.publication.service.resource.TableResourceStrategy realTableStrategy =
+                new com.apimarketplace.publication.service.resource.TableResourceStrategy(dataSourceClient,
+                        mock(com.apimarketplace.publication.service.resource.DataSourceFileCloneService.class),
+                        new com.fasterxml.jackson.databind.ObjectMapper());
+        when(dataSourceClient.findByIdAndTenantId(42L, TENANT_ID, ORG_ID))
+                .thenReturn(orgDataSource(42L, "Orders live"));
+        // A publish would refuse (strict copy throws); the review must read the lenient copy.
+        lenient().when(dataSourceClient.copyAllItems(42L, TENANT_ID, ORG_ID))
+                .thenThrow(new com.apimarketplace.datasource.client.TableCopyException(42L, "down", null));
+        when(dataSourceClient.getAllItems(42L, TENANT_ID, ORG_ID)).thenReturn(List.of());
+
+        PublicationModerationService svc = new PublicationModerationService(
+                publicationRepository, orchestratorClient, agentClient, interfaceClient,
+                dataSourceClient, workflowPublicationService, landingInterfaceSnapshotter,
+                List.of(realTableStrategy), creatorFollowNotifier);
+        WorkflowPublicationEntity pub = newOrgPub(publicationId, PublicationType.TABLE);
+        pub.setResourceId("42");
+        pub.setPlanSnapshot(Map.of("name", "Orders"));
+        when(publicationRepository.findById(publicationId)).thenReturn(Optional.of(pub));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> currentSource = (Map<String, Object>) svc.getComparisonData(publicationId).get("currentSource");
+
+        assertThat(currentSource).containsEntry("name", "Orders live").containsEntry("items", List.of())
+                .doesNotContainKey("error");
+        verify(dataSourceClient, never()).copyAllItems(any(), any(), any());
     }
 
     // ========================================================================

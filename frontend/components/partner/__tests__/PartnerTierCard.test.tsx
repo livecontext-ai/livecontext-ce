@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { cleanup, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NextIntlClientProvider } from 'next-intl';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import enMessages from '@/messages/en.json';
+
+// The link builder lists the partner's offers: none here.
+vi.mock('@/lib/api/services/partner-program-api.service', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  partnerProgramApi: { offers: async () => ({ offers: [] }), createOffer: vi.fn(), deactivateOffer: vi.fn() },
+}));
+
 import { PartnerDashboard } from '../PartnerDashboard';
 import type { PartnerAccount, PartnerStanding } from '@/lib/api/services/partner-program-api.service';
 
@@ -16,10 +24,13 @@ function account(standing: PartnerStanding | null): PartnerAccount {
 }
 
 function renderDashboard(standing: PartnerStanding | null, { effective = 40, settleDays = 60 as number | null } = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <NextIntlClientProvider locale="en" messages={enMessages}>
-      <PartnerDashboard partner={{ ...account(standing), commission_percent: effective }} active onCopy={() => {}} settleDays={settleDays} />
-    </NextIntlClientProvider>,
+    <QueryClientProvider client={client}>
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <PartnerDashboard partner={{ ...account(standing), commission_percent: effective }} active onCopy={() => {}} settleDays={settleDays} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
   );
 }
 

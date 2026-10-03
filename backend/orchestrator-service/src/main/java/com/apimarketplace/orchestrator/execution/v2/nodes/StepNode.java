@@ -338,9 +338,9 @@ public class StepNode extends BaseNode {
 
         // For CRUD steps, add dataSourceId and crud config
         if (stepConfig.isCrudStep()) {
-            logger.info("🔧 [CRUD DEBUG] StepNode.prepareInput - isCrudStep=true, stepId={}", nodeId);
-            logger.info("🔧 [CRUD DEBUG] StepNode - stepConfig.dataSourceId={}", stepConfig.dataSourceId());
-            logger.info("🔧 [CRUD DEBUG] StepNode - stepConfig.crud={}", stepConfig.crud());
+            logger.debug("🔧 [CRUD DEBUG] StepNode.prepareInput - isCrudStep=true, stepId={}", nodeId);
+            logger.debug("🔧 [CRUD DEBUG] StepNode - stepConfig.dataSourceId={}", stepConfig.dataSourceId());
+            logger.debug("🔧 [CRUD DEBUG] StepNode - stepConfig.crud={}", stepConfig.crud());
 
             if (stepConfig.dataSourceId() != null) {
                 rawInput.put("dataSourceId", stepConfig.dataSourceId());
@@ -349,7 +349,7 @@ public class StepNode extends BaseNode {
                 Map<String, Object> crudMap = buildCrudConfigMap(stepConfig.crud());
                 // A {{...}} limit / offset the parser set aside resolves with the rest of the map.
                 CrudDeferredScalars.putTemplates(crudMap, stepConfig.crud());
-                logger.info("🔧 [CRUD DEBUG] StepNode - crudMap (before template resolution): {}", ReportedParams.forReport(crudMap));
+                logger.debug("🔧 [CRUD DEBUG] StepNode - crudMap (before template resolution): {}", ReportedParams.forReport(crudMap));
                 rawInput.put("crud", crudMap);
             }
         }
@@ -357,14 +357,14 @@ public class StepNode extends BaseNode {
         // Through the gate, all three. A log line is a sink like the row: it is as readable
         // by whoever can reach the service and it outlives the run. These printed the same
         // map the column masks, so the mask was cosmetic on any node reached through here.
-        logger.info("🔧 [CRUD DEBUG] StepNode - rawParams (before template resolution): {}", ReportedParams.forReport(rawInput));
-        logger.info("🔧 [CRUD DEBUG] StepNode - context.triggerData: {}", ReportedParams.forReport(context.triggerData()));
+        logger.debug("🔧 [CRUD DEBUG] StepNode - rawParams (before template resolution): {}", ReportedParams.forReport(rawInput));
+        logger.debug("🔧 [CRUD DEBUG] StepNode - context.triggerData: {}", ReportedParams.forReport(context.triggerData()));
 
         // If template adapter is available, resolve templates
         if (templateAdapter != null && !rawInput.isEmpty()) {
             try {
                 Map<String, Object> resolved = templateAdapter.resolveTemplates(rawInput, context);
-                logger.info("🔧 [CRUD DEBUG] StepNode - resolved (after template resolution): {}", ReportedParams.forReport(resolved));
+                logger.debug("🔧 [CRUD DEBUG] StepNode - resolved (after template resolution): {}", ReportedParams.forReport(resolved));
 
                 // Check for unresolved templates
                 if (templateAdapter.hasUnresolvedTemplates(resolved, context)) {
@@ -401,7 +401,7 @@ public class StepNode extends BaseNode {
      */
     private Map<String, Object> buildCrudConfigMap(Step.CrudConfig crud) {
         Map<String, Object> crudMap = new HashMap<>();
-        logger.info("🔧 [CRUD DEBUG] buildCrudConfigMap - input crud: where={}, set={}, rows={}, columns={}, limit={}",
+        logger.debug("🔧 [CRUD DEBUG] buildCrudConfigMap - input crud: where={}, set={}, rows={}, columns={}, limit={}",
             crud.where(), crud.set(), crud.rows(), crud.columns(), crud.limit());
 
         if (crud.where() != null) {
@@ -409,13 +409,13 @@ public class StepNode extends BaseNode {
             whereMap.put("column", crud.where().column());
             whereMap.put("operator", crud.where().operator());
             whereMap.put("value", crud.where().value());
-            logger.info("🔧 [CRUD DEBUG] buildCrudConfigMap - WHERE: column={}, operator={}, value={}",
+            logger.debug("🔧 [CRUD DEBUG] buildCrudConfigMap - WHERE: column={}, operator={}, value={}",
                 crud.where().column(), crud.where().operator(), crud.where().value());
             crudMap.put("where", whereMap);
         }
 
         if (!crud.set().isEmpty()) {
-            logger.info("🔧 [CRUD DEBUG] buildCrudConfigMap - SET: {}", crud.set());
+            logger.debug("🔧 [CRUD DEBUG] buildCrudConfigMap - SET: {}", crud.set());
             crudMap.put("set", new HashMap<>(crud.set()));
         }
 
@@ -425,7 +425,7 @@ public class StepNode extends BaseNode {
                 Map<String, Object> rowMap = new HashMap<>();
                 rowMap.put("id", row.id());
                 rowMap.put("columns", new HashMap<>(row.columns()));
-                logger.info("🔧 [CRUD DEBUG] buildCrudConfigMap - ROW: id={}, columns={}", row.id(), row.columns());
+                logger.debug("🔧 [CRUD DEBUG] buildCrudConfigMap - ROW: id={}, columns={}", row.id(), row.columns());
                 rowsList.add(rowMap);
             }
             crudMap.put("rows", rowsList);

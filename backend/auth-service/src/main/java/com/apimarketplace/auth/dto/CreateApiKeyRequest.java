@@ -13,6 +13,8 @@ public class CreateApiKeyRequest {
 
     private String name;
     private List<String> scopes;
+    /** Lifetime in days, 1 to 365; null = the default (365). CASA LC-054. */
+    private Integer expiresInDays;
 
     public CreateApiKeyRequest() {}
 
@@ -21,4 +23,7 @@ public class CreateApiKeyRequest {
 
     public List<String> getScopes() { return scopes; }
     public void setScopes(List<String> scopes) { this.scopes = scopes; }
+
+    public Integer getExpiresInDays() { return expiresInDays; }
+    public void setExpiresInDays(Integer expiresInDays) { this.expiresInDays = expiresInDays; }
 }

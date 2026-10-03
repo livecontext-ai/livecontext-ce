@@ -151,6 +151,28 @@ public class StorageEntity implements OrgScopedEntity {
     @Column(name = "parent_folder_id")
     private UUID parentFolderId;
 
+    /**
+     * NORMAL, or RESTRICTED for data produced by a Google restricted-scope integration (see
+     * common-lib RestrictedDataPolicy). A RESTRICTED row always carries a
+     * {@link #retentionExpiresAt} and, once the purge is armed, is hard-deleted, object included,
+     * by storage-service's RestrictedStorageRetentionSweeper.
+     */
+    @Column(name = "data_sensitivity", nullable = false, length = 16)
+    private String dataSensitivity = "NORMAL";
+
+    /**
+     * Restricted-data retention deadline (CASA LC-011, V562), kept apart from {@link #expiresAt}
+     * on purpose: {@code expires_at} is the caller's TTL and earlier releases enforce it on their
+     * own (generic cleanup, reads), so a deadline written there could be acted on by a previous
+     * release during a rollout or a rollback even with the purge off. Nothing before V562 reads
+     * this column. Stamped on every RESTRICTED row whether or not the purge is armed, enforced
+     * (reads and the hard-delete sweep) only once it is armed. Nullable: rows inserted by a
+     * previous release carry none, and storage-service's RestrictedStorageBackfill fills it on
+     * RESTRICTED rows ({@code created_at + retention-days}).
+     */
+    @Column(name = "retention_expires_at")
+    private Instant retentionExpiresAt;
+
     // Constructeurs
     public StorageEntity() {}
     
@@ -285,6 +307,22 @@ public class StorageEntity implements OrgScopedEntity {
         this.accessedAt = accessedAt;
     }
     
+    public String getDataSensitivity() {
+        return dataSensitivity;
+    }
+
+    public void setDataSensitivity(String dataSensitivity) {
+        this.dataSensitivity = dataSensitivity == null ? "NORMAL" : dataSensitivity;
+    }
+
+    public Instant getRetentionExpiresAt() {
+        return retentionExpiresAt;
+    }
+
+    public void setRetentionExpiresAt(Instant retentionExpiresAt) {
+        this.retentionExpiresAt = retentionExpiresAt;
+    }
+
     public Instant getExpiresAt() {
         return expiresAt;
     }

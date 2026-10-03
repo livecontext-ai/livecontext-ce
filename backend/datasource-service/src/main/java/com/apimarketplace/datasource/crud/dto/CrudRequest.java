@@ -34,6 +34,20 @@ public abstract sealed class CrudRequest
     @JsonProperty("step_label")
     private String stepLabel; // For logging and tracking
 
+    /**
+     * LC-066/LC-011 re-audit item 2: true when the calling orchestrator node is executing inside
+     * a run/conversation already tagged restricted (Gmail/Drive-derived content) - orchestrator's
+     * {@code CrudToolExecutor} sets this from {@code StepPayloadService.isRunRestricted(runId)}.
+     * On a write (create-row/update-row) it is what gets persisted as {@code data_sensitivity};
+     * on a read (read-row) it is the "interim guard" - the read result is tagged RESTRICTED
+     * whenever the CALLING context is restricted, even for rows whose own stored tag is NORMAL
+     * (a restricted step can echo restricted values into a table without the row itself having
+     * been written by a restricted step). Defaults to {@code false} so a caller that has not been
+     * updated to send it degrades to the pre-fix behaviour, never to a startup/parse failure.
+     */
+    @JsonProperty("restricted")
+    private boolean restricted;
+
     public abstract CrudOperation getOperation();
 
     public Long getDataSourceId() {
@@ -50,5 +64,13 @@ public abstract sealed class CrudRequest
 
     public void setStepLabel(String stepLabel) {
         this.stepLabel = stepLabel;
+    }
+
+    public boolean isRestricted() {
+        return restricted;
+    }
+
+    public void setRestricted(boolean restricted) {
+        this.restricted = restricted;
     }
 }

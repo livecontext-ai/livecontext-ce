@@ -24,7 +24,7 @@ public class CreditClientConfig {
             @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
         CreditConsumptionClient client = new CreditConsumptionClient(authServiceUrl, enabled, gatewaySecretKey);
         client.setDeadLetterHandler(
-                new HttpCreditDeadLetterHandler(new RestTemplate(), authServiceUrl));
+                new HttpCreditDeadLetterHandler(new RestTemplate(), authServiceUrl, gatewaySecretKey));
         return client;
     }
 }

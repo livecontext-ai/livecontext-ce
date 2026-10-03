@@ -15,6 +15,7 @@ import { TriggerEmptyState } from './TriggerEmptyState';
 import { ShareLinkDialog } from '@/components/sharing/ShareLinkDialog';
 import { SharedLinksTabContent } from './SharedLinksTabContent';
 import { SubViewToggle, type SubView } from './SubViewToggle';
+import { urlEnum, useUrlState } from '@/hooks/useUrlState';
 import { useAcquiredAppWorkflowIds } from '@/hooks/useAcquiredAppWorkflowIds';
 
 interface FormTabContentProps {
@@ -26,7 +27,10 @@ export function FormTabContent({ isAuthenticated, addToast }: FormTabContentProp
   const t = useTranslations('triggerSettings');
 
   const { workflowIds: appWorkflowIds } = useAcquiredAppWorkflowIds();
-  const [subView, setSubView] = useState<SubView>('endpoints');
+  // In the address, so a reload stays on the shared links. The page's tab bar drops it.
+  const [subView, setSubView] = useUrlState<SubView>('view', 'endpoints', {
+    codec: urlEnum(['endpoints', 'shared-links']),
+  });
   const [endpoints, setEndpoints] = useState<StandaloneFormEndpoint[]>([]);
   const [config, setConfig] = useState<FormEndpointConfig | null>(null);
   const [loading, setLoading] = useState(true);

@@ -46,9 +46,6 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <!-- (optionnel) Laisser BOM Spring Boot gerer la version :
-            <version>42.7.7</version>
-            -->
         </dependency>
 
         <!-- Flyway : core + module Postgres, MeME version -->
@@ -204,7 +201,7 @@
         <dependency>
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
-            <version>1.17.2</version>
+            <version>1.23.2</version>
         </dependency>
         
         <!-- Apache Commons CSV for CSV parsing -->

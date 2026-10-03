@@ -71,6 +71,13 @@ public class InterfacePublishModule implements ToolModule {
         var notAllowed = InterfaceToolAccess.denyIfNotAllowed(
                 context, getStringParam(mergeParams(parameters), "interface_id"));
         if (notAllowed.isPresent()) return notAllowed;
+        // LC-066: a listing copies the page and the rows of the table it embeds into a
+        // marketplace snapshot no restricted tag follows, so a restricted execution cannot publish.
+        if ("publish".equals(action) && context != null && com.apimarketplace.common.classification.DataSensitivity
+                .fromCredentials(context.credentials()).isRestricted()) {
+            return Optional.of(ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                com.apimarketplace.common.classification.RestrictedDataPolicy.publishRefusalMessage("interface")));
+        }
 
         return Optional.of(switch (action) {
             case "publish" -> executePublish(parameters, tenantId, context);
@@ -162,6 +169,27 @@ public class InterfacePublishModule implements ToolModule {
                     : "Interface published. ")
                     + "Marketplace publication id: " + response.get("id"));
             return ToolExecutionResult.success(data);
+        } catch (com.apimarketplace.publication.client.PublicationValidationException e) {
+            log.info("Publish of interface {} refused ({}): {}", interfaceIdStr, e.getErrorCode(), e.getMessage());
+            if (e.isRetryable()) {
+                // Its table's rows could not be read just now: the same call can be retried.
+                return ToolExecutionResult.failure(ToolErrorCode.EXTERNAL_SERVICE_ERROR,
+                        "Publish failed: " + e.getMessage());
+            }
+            // 422 = the interface cannot ship as it is (its table has more rows than a publication
+            // carries, or the listing is over the size limit). The agent fixes the content, so it
+            // gets the parameter code, the reason and the fix in tool actions, with the REAL id of
+            // the table the interface reads.
+            String tableId = e.oversizedTableId();
+            String tableName = e.firstTableName();
+            String fix = tableId != null
+                    ? " Fix: delete rows with table(action='delete_rows', table_id=" + tableId
+                            + ", where={...}), then call publish again."
+                    : " Fix: delete rows from " + (tableName != null ? "table '" + tableName + "'" : "the interface's table")
+                            + " with table(action='delete_rows') (table(action='list') gives its table_id), or slim the"
+                            + " page with interface(action='update'), then call publish again.";
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                    "Publish refused: " + e.reasonForAgent() + fix);
         } catch (RuntimeException e) {
             String msg = extractPublicationErrorMessage(e);
             log.warn("Failed to publish interface {}: {}", interfaceIdStr, msg);

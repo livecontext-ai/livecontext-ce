@@ -62,6 +62,24 @@ import com.apimarketplace.agent.tools.ToolErrorCode;
 public class WorkflowCrudModule implements ToolModule {
 
     private final WorkflowManagementService workflowService;
+
+    /** LC-004: answers whether a run holds restricted (Gmail / Drive) data. Optional. */
+    private com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setStepPayloadService(com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService) {
+        this.stepPayloadService = stepPayloadService;
+    }
+
+    /** Metadata carrying the restricted tag when the run holds restricted data, else empty. */
+    java.util.Map<String, Object> runSensitivityMetadata(String runId) {
+        java.util.Map<String, Object> metadata = new java.util.HashMap<>();
+        if (stepPayloadService != null && stepPayloadService.isRunRestricted(runId)) {
+            metadata.put(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY,
+                com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+        }
+        return metadata;
+    }
     private final WorkflowRunRepository workflowRunRepository;
     private final AgentWorkflowFireService agentWorkflowFireService;
     private final WorkflowPlanVersionService planVersionService;
@@ -122,6 +140,13 @@ public class WorkflowCrudModule implements ToolModule {
                 context != null ? context.orgId() : null,
                 context != null ? context.orgRole() : null, "workflow", action);
         if (roleDenied.isPresent()) return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, roleDenied.get()));
+        // LC-066: a listing copies the plan, its interfaces and the rows of its tables into a
+        // marketplace snapshot no restricted tag follows, so a restricted execution cannot publish.
+        if ("publish".equals(action) && context != null && com.apimarketplace.common.classification.DataSensitivity
+                .fromCredentials(context.credentials()).isRestricted()) {
+            return Optional.of(ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                com.apimarketplace.common.classification.RestrictedDataPolicy.publishRefusalMessage("workflow")));
+        }
 
         return Optional.of(switch (action) {
             case "get" -> executeGet(parameters, tenantId, context);
@@ -382,6 +407,11 @@ public class WorkflowCrudModule implements ToolModule {
             // the publication). The agent fixes the PLAN, so it gets the parameter code
             // and the service's own sentence, not a platform-failure code.
             log.info("Publish of workflow {} refused ({}): {}", workflowIdStr, e.getErrorCode(), e.getMessage());
+            if (e.isRetryable()) {
+                // A table's rows could not be read just now: nothing to fix, the same call can be retried.
+                return ToolExecutionResult.failure(ToolErrorCode.EXTERNAL_SERVICE_ERROR,
+                        "Publish failed: " + e.getMessage());
+            }
             return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
                     buildPublishRefusalMessage(e));
         } catch (RuntimeException e) {
@@ -424,6 +454,17 @@ public class WorkflowCrudModule implements ToolModule {
               .append(" integration instead (find one with catalog(action='search')), rewiring with")
               .append(" connect_after. Or publish with visibility='PRIVATE', which keeps the")
               .append(" application in your own account where the custom API resolves.");
+        } else if ("PUBLICATION_SNAPSHOT_TOO_LARGE".equals(e.getErrorCode())) {
+            // Restart from the reason (the service's sentence without the share-modal fix), then
+            // the fix in this tool's actions, aimed at the real table id when one is named.
+            String tableId = e.oversizedTableId();
+            sb.setLength(0);
+            sb.append("Publish refused: ").append(e.reasonForAgent()).append(" Fix: ");
+            sb.append(tableId != null
+                    ? "delete rows with table(action='delete_rows', table_id=" + tableId + ", where={...})"
+                    : "delete rows from the heaviest table with table(action='delete_rows')");
+            sb.append(", or remove the node that uses it with workflow(action='remove', node='<label>'),")
+              .append(" then publish again.");
         }
         return sb.toString();
     }
@@ -1335,7 +1376,9 @@ public class WorkflowCrudModule implements ToolModule {
                     agentWorkflowFireService.buildNodeOutputReport(
                             run, runPlan.plan(), epochResolution.epoch(), nodeId, tenantId, itemIndex, iteration, spawn,
                             expandField, fieldOffset, fieldMaxBytes)));
-            return ToolExecutionResult.success(report);
+            // LC-004: node outputs of a run holding Gmail / Drive data are tagged, so the agent loop
+            // and the CLI bridge withhold them from providers outside the restricted-data allow-list.
+            return ToolExecutionResult.success(report, runSensitivityMetadata(runId));
         } catch (Exception e) {
             log.error("Failed to get node output for run {}, node {}: {}", runId, nodeId, e.getMessage(), e);
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to get node output: " + e.getMessage());

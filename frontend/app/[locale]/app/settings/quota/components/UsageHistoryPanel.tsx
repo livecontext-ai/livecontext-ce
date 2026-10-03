@@ -13,6 +13,37 @@ import { OwnKeyRowNote } from '../OwnKeyRowNote';
 import type { ModelNameIndex } from '@/lib/ai-providers/modelDisplayName';
 import { ProviderModelCell } from './modelLabels';
 
+/** Bounds on a full-screen page: a short window still pages, a very tall one stays one request. */
+export const MIN_FITTED_ROWS = 5;
+export const MAX_FITTED_ROWS = 100;
+const FIT_DEBOUNCE_MS = 150;
+
+/**
+ * How many rows the table container shows without scrolling, or `null` while it has no height
+ * yet. The row pitch is MEASURED on the rows on screen (data or filler) when there are two or
+ * more, so a browser zoom that rounds rows to fractional pixels is counted as drawn. Otherwise it
+ * is the `h-10` cell (2.5rem, from the root font size) plus the 1px border between rows. The last
+ * row has no border, hence the `+ 1`.
+ */
+export function rowsThatFit(container: HTMLElement): number | null {
+  const head = container.querySelector('thead');
+  const available = container.clientHeight - (head ? head.getBoundingClientRect().height : 0);
+  if (available <= 0) return null;
+  const rows = container.querySelectorAll('tbody tr[data-testid]');
+  let pitch = 0;
+  if (rows.length >= 2) {
+    const first = rows[0].getBoundingClientRect().top;
+    const last = rows[rows.length - 1].getBoundingClientRect().top;
+    pitch = (last - first) / (rows.length - 1);
+  }
+  if (!(pitch > 0)) {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    pitch = 2.5 * rem + 1;
+  }
+  const count = Math.floor((available + 1) / pitch);
+  return Math.min(MAX_FITTED_ROWS, Math.max(MIN_FITTED_ROWS, count));
+}
+
 /**
  * The Usage History section: title, the caller's toolbar (filter), the table and the caller's
  * footer (error, pager), with a full-screen mode. Shared by the cloud and the CE page, which used
@@ -27,6 +58,11 @@ import { ProviderModelCell } from './modelLabels';
  * <p><b>Full screen is the app's Dialog</b>, stretched to the viewport: it brings the focus trap,
  * the Escape layering with the filter's own list, the scroll lock and the inert page behind,
  * none of which a hand-rolled fixed box gets right.
+ *
+ * <p><b>In full screen a page fills the screen.</b> A page of the inline size left most of a large
+ * screen empty under fifteen rows, so the panel measures how many rows the table shows without
+ * scrolling and hands that count to the caller through `onFittedRowsChange`, which requests pages
+ * of that size (and gets `null` back when full screen closes, meaning the inline size again).
  */
 export function UsageHistoryPanel({
   history,
@@ -37,6 +73,7 @@ export function UsageHistoryPanel({
   modelNames,
   toolbar,
   footer,
+  onFittedRowsChange,
 }: {
   history: CreditHistoryPage | null;
   busy?: boolean;
@@ -47,11 +84,20 @@ export function UsageHistoryPanel({
   modelNames: ModelNameIndex | null;
   toolbar?: React.ReactNode;
   footer?: React.ReactNode;
+  /** Full screen only: the rows that fit the table's height, or `null` once it closes. */
+  onFittedRowsChange?: (rows: number | null) => void;
 }) {
   const t = useTranslations('quota');
   const [fullscreen, setFullscreen] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const leftFullscreen = useRef(false);
+  // A state, not a ref: the dialog's content mounts through a portal one render after
+  // `fullscreen` flips, so a ref read in the effect below would still be null.
+  const [tableEl, setTableEl] = useState<HTMLDivElement | null>(null);
+  const onFittedRowsChangeRef = useRef(onFittedRowsChange);
+  useEffect(() => {
+    onFittedRowsChangeRef.current = onFittedRowsChange;
+  }, [onFittedRowsChange]);
 
   // Leaving full screen remounts the inline panel, so the element that had focus is gone: hand
   // it to the toggle that opened the overlay instead of dropping the keyboard user at the top.
@@ -59,6 +105,34 @@ export function UsageHistoryPanel({
     if (fullscreen || !leftFullscreen.current) return;
     leftFullscreen.current = false;
     toggleRef.current?.focus();
+  }, [fullscreen]);
+
+  // Full screen: measure the rows the table can show, again whenever the window is resized
+  // (debounced, so dragging a window edge requests one page, not one per frame).
+  useEffect(() => {
+    if (!fullscreen || !tableEl) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const measure = () => {
+      const rows = rowsThatFit(tableEl);
+      if (rows !== null) onFittedRowsChangeRef.current?.(rows);
+    };
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = setTimeout(measure, FIT_DEBOUNCE_MS);
+    };
+    schedule();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+    observer?.observe(tableEl);
+    return () => {
+      clearTimeout(timer);
+      observer?.disconnect();
+    };
+  }, [fullscreen, tableEl]);
+
+  // Closing full screen (or unmounting while in it) gives the caller its inline size back.
+  useEffect(() => {
+    if (!fullscreen) return;
+    return () => onFittedRowsChangeRef.current?.(null);
   }, [fullscreen]);
 
   const closeFullscreen = () => {
@@ -127,6 +201,7 @@ export function UsageHistoryPanel({
 
   const table = (
       <div
+        ref={setTableEl}
         data-testid="usage-history-table"
         aria-busy={busy}
         className={`rounded-xl border border-slate-200 dark:border-slate-700/50 transition-opacity ${busy ? 'opacity-60' : ''} ${fullscreen ? 'flex-1 min-h-0 overflow-auto' : 'overflow-x-auto'}`}

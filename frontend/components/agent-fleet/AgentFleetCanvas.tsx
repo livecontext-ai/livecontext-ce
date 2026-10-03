@@ -57,6 +57,7 @@ import { useResourceDeleted, type ResourceDeletedDetail } from '@/lib/resources/
 import { AgentPickerPanel } from './AgentPickerPanel';
 import { CreateAgentModal } from '@/components/chat/CreateAgentModal';
 import { useTranslations } from 'next-intl';
+import { urlNullable, urlString, useUrlState } from '@/hooks/useUrlState';
 import { useAgentActivitySubscriber } from './hooks/useAgentActivityStream';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { ConnectionTypeSelector, type ConnectionType } from '@/app/workflows/builder/components/ConnectionTypeSelector';
@@ -360,7 +361,13 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
   const lastCanvasSigRef = useRef<string>('');
   const lastCanvasPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // On the full Fleet page the selected node lives in the address, so a reload reopens its
+  // inspector. An id that matches no node simply selects nothing (see `selectedNode`). The
+  // embedded canvases (agent panel, marketplace snapshot) keep it local.
+  const [selectedNodeId, setSelectedNodeId] = useUrlState<string | null>('node', null, {
+    codec: urlNullable(urlString),
+    enabled: !isSingleAgent,
+  });
   const [isInspectorMinimized, setIsInspectorMinimized] = useState(false);
 
   // Refresh state

@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.config;
 
 import com.apimarketplace.common.web.NoRedirectSimpleClientHttpRequestFactory;
+import com.apimarketplace.orchestrator.services.http.PinnedRestTemplateFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -158,5 +159,23 @@ public class RestTemplateConfig {
         RestTemplate restTemplate = new RestTemplate();
         restTemplate.setRequestFactory(factory);
         return restTemplate;
+    }
+
+    /**
+     * Dedicated RestTemplate for {@code core:http_request}'s DEFAULT (no per-node timeout
+     * configured) call, pinned to the vetted address (LC-002 / LC-006, CASA readiness round 3 -
+     * DNS rebinding). See {@link PinnedRestTemplateFactory} for why this is a SEPARATE bean from
+     * the shared, unqualified {@code restTemplate()} above: that one also carries internal
+     * service-to-service calls to private cluster addresses, which this pin would refuse.
+     *
+     * <p>{@code ServiceRegistry.getRestTemplate()} has exactly one consumer, {@code
+     * HttpRequestNode}, so wiring THIS bean into {@code ExecutionServiceInjector}'s {@code
+     * restTemplate} field (instead of the plain {@link #restTemplate()} bean) is a safe,
+     * single-consumer swap - not a change to what every other by-type {@code RestTemplate}
+     * injection in this service resolves to.
+     */
+    @Bean(name = "httpRequestNodeRestTemplate")
+    public RestTemplate httpRequestNodeRestTemplate() {
+        return PinnedRestTemplateFactory.build(connectTimeout, readTimeout);
     }
 }

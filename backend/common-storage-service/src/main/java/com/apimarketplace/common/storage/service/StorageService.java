@@ -1,5 +1,7 @@
 package com.apimarketplace.common.storage.service;
 
+import com.apimarketplace.common.classification.DataSensitivity;
+import com.apimarketplace.common.classification.RestrictedDataPolicy;
 import com.apimarketplace.common.storage.GenerationProvenanceFields;
 import com.apimarketplace.common.storage.domain.QuotaStatus;
 import com.apimarketplace.common.storage.domain.StorageEntity;
@@ -68,6 +70,29 @@ public class StorageService implements StorageOperations {
     private final ObjectMapper objectMapper;
     private final StorageBreakdownService breakdownService;
 
+    /**
+     * Retention window of a RESTRICTED payload (Google restricted-scope data), in days. Field
+     * injection on purpose: the constructor is called directly by many tests, and the default
+     * must hold there too.
+     */
+    @org.springframework.beans.factory.annotation.Value(
+        "${data-classification.restricted.retention-days:" + RestrictedDataPolicy.DEFAULT_RETENTION_DAYS + "}")
+    private int restrictedRetentionDays = RestrictedDataPolicy.DEFAULT_RETENTION_DAYS;
+
+    /**
+     * Whether the restricted-data purge is ARMED (LC-011). It never decides whether a restricted
+     * row gets a retention deadline: every RESTRICTED row is stamped with one
+     * ({@code retention_expires_at}), armed or not, so arming the purge later reaches what was
+     * written while it was off. It decides whether that deadline is ENFORCED: armed, reads refuse
+     * the row once it has passed and storage-service's sweep hard-deletes it; disarmed, nothing
+     * reads the deadline. The caller's own {@code expires_at} is a separate TTL, handled as it
+     * always was: armed, the restricted sweep owns it (hard delete); disarmed, the generic
+     * cleanup does (soft delete). Off in the self-hosted edition and, for now, in production
+     * ({@code global.casaRollout.restrictedDataSweepEnabled}).
+     */
+    @org.springframework.beans.factory.annotation.Value("${data-classification.restricted.sweep.enabled:true}")
+    private boolean restrictedPurgeArmed = true;
+
     public StorageService(StorageRepository storageRepository,
                          QuotaOperations quotaService,
                          MappingOperations mappingService,
@@ -111,6 +136,24 @@ public class StorageService implements StorageOperations {
     public UUID saveJsonWithContext(String tenantId, Object data, String contentType, Instant expiresAt,
                                     UUID toolId, String runId, String stepKey, Integer itemIndex, int epoch,
                                     int spawn, String workflowId, String sourceType) {
+        return saveJsonWithContext(tenantId, data, contentType, expiresAt, toolId, runId, stepKey,
+            itemIndex, epoch, spawn, workflowId, sourceType, DataSensitivity.NORMAL);
+    }
+
+    /**
+     * Same as the context overload, with a sensitivity tag. A RESTRICTED payload (Google
+     * restricted-scope data, see {@code RestrictedDataPolicy}) is ALWAYS written with a retention
+     * deadline, now + {@code restrictedRetentionDays}, in {@code retention_expires_at}, whether or
+     * not the purge is armed. So no code path can store restricted data "forever" by passing a
+     * null expiry, which is what every caller passed before this overload existed (LC-011). The
+     * caller's {@code expiresAt} is stored untouched, exactly as for a NORMAL row.
+     */
+    @Override
+    public UUID saveJsonWithContext(String tenantId, Object data, String contentType, Instant expiresAt,
+                                    UUID toolId, String runId, String stepKey, Integer itemIndex, int epoch,
+                                    int spawn, String workflowId, String sourceType,
+                                    DataSensitivity sensitivity) {
+        boolean restricted = sensitivity != null && sensitivity.isRestricted();
         logger.debug("Sauvegarde JSON pour tenant: {}, contentType: {}, toolId: {}, runId: {}, stepKey: {}, spawn: {}",
             tenantId, contentType, toolId, runId, stepKey, spawn);
 
@@ -153,12 +196,21 @@ public class StorageService implements StorageOperations {
             storage.setSourceType(sourceType);
         }
 
+        if (restricted) {
+            storage.setDataSensitivity(DataSensitivity.RESTRICTED.name());
+            storage.setRetentionExpiresAt(restrictedRetentionDeadline());
+        }
+
         // Generate structure skeleton for intelligent lazy loading
         generateAndSetSkeleton(storage, data);
 
         applyMappingIfNeeded(storage, toolId, contentType);
 
         StorageEntity saved = storageRepository.save(storage);
+        if (restricted && runId != null) {
+            // LC-066: the run's durable "restricted since", set by its first restricted row.
+            storageRepository.recordRestrictedSince(runId, saved.getCreatedAt() != null ? saved.getCreatedAt() : Instant.now());
+        }
         String breakdownCategory = categoryOf(saved);
         trackUsageBestEffort(tenantId, breakdownCategory, sizeBytes, organizationId, saved.getId());
 
@@ -565,6 +617,22 @@ public class StorageService implements StorageOperations {
     }
 
     /**
+     * CASA LC-037 (gap 2): true when {@code childRunId} was genuinely invoked as a
+     * {@code core:sub_workflow} child by SOME run of {@code parentWorkflowId} - see
+     * {@link StorageRepository#existsSubWorkflowInvocation} for the exact evidence used
+     * (the sub_workflow node's own persisted step output). Blank ids short-circuit to
+     * {@code false} rather than reaching the query.
+     */
+    @Transactional(readOnly = true)
+    public boolean existsSubWorkflowInvocation(String parentWorkflowId, String childRunId) {
+        if (parentWorkflowId == null || parentWorkflowId.isBlank()
+                || childRunId == null || childRunId.isBlank()) {
+            return false;
+        }
+        return storageRepository.existsSubWorkflowInvocation(parentWorkflowId, childRunId);
+    }
+
+    /**
      * Anonymous avatar fast-path. Avatars (agent avatars shown on marketplace cards,
      * shared applications and embeds) are the ONE file class served without auth, so
      * this lookup is deliberately narrow: only rows uploaded through the generic
@@ -956,11 +1024,167 @@ public class StorageService implements StorageOperations {
         }
     }
 
+    /**
+     * Tag already-written rows as RESTRICTED and bound their lifetime. Used for rows written
+     * before their provenance was known: files a restricted catalog step produced (adopted into
+     * the run after the call returns) and agent observability overflow text. The retention
+     * deadline ({@code retention_expires_at}, now + the window) is stamped whether or not the
+     * purge is armed; a caller's {@code expiresAt}, when given, bounds the row's own TTL. Both only
+     * ever move EARLIER, never later.
+     *
+     * <p>A row that was ALREADY RESTRICTED with no deadline (written before V562, or by a pod of a
+     * previous release) gets {@code created_at + window}, capped at now + window: the same deadline
+     * storage-service's retention catch-up ({@code RestrictedStorageBackfill}) gives it, so the
+     * result does not depend on which of the two reaches the row first. Without it, a caller
+     * running before the catch-up (agent-service's observability backfill, both 5 minutes after
+     * boot) stamped now + window and delayed the purge of an old row by up to the whole window.
+     * A row this call newly tags keeps now + window, as the catch-up's tagging rules do.
+     *
+     * @return rows tagged
+     */
+    @Override
+    @Transactional
+    public int markRestricted(String tenantId, Collection<UUID> ids, Instant expiresAt) {
+        if (tenantId == null || ids == null || ids.isEmpty()) {
+            return 0;
+        }
+        Instant freshDeadline = restrictedRetentionDeadline();
+        stampCatchUpRetentionDeadlines(tenantId, ids, freshDeadline);
+        int tagged = storageRepository.markRestricted(tenantId, ids);
+        storageRepository.boundRetentionExpiry(tenantId, ids, freshDeadline);
+        if (expiresAt != null) {
+            storageRepository.boundExpiry(tenantId, ids, expiresAt);
+        }
+        if (tagged > 0) {
+            // LC-066: the runs of the rows just tagged now hold restricted data (set once per run).
+            for (Object[] row : storageRepository.findFirstCreatedAtByRun(tenantId, ids)) {
+                if (row[0] instanceof String runId) {
+                    storageRepository.recordRestrictedSince(runId, row[1] instanceof Instant at ? at : Instant.now());
+                }
+            }
+        }
+        return tagged;
+    }
+
+    /** True when any storage row of this run is tagged RESTRICTED (partial index, V535). */
+    @Transactional(readOnly = true)
+    public boolean runHoldsRestrictedData(String runId) {
+        return runId != null && storageRepository.existsByRunIdAndDataSensitivity(runId, DataSensitivity.RESTRICTED.name());
+    }
+
+    /**
+     * LC-066: true when this run has a durable "restricted since" (V564), which outlives the
+     * restricted-data purge. A run whose restricted rows were all purged still held restricted
+     * data: a copy taken of it earlier may hold some, and its later payloads stay tainted.
+     */
+    @Transactional(readOnly = true)
+    public boolean runHasRecordedRestriction(String runId) {
+        return runId != null && toInstant(storageRepository.findRecordedRestrictedSince(runId)) != null;
+    }
+
+    /**
+     * True when a RESTRICTED storage row of this run belongs to one of {@code epochs} (partial
+     * index, V536). LC-066: the showcase of one chosen epoch.
+     */
+    @Transactional(readOnly = true)
+    public boolean runEpochsHoldRestrictedData(String runId, Collection<Integer> epochs) {
+        return runId != null && epochs != null && !epochs.isEmpty()
+                && storageRepository.existsByRunIdAndDataSensitivityAndEpochIn(
+                        runId, DataSensitivity.RESTRICTED.name(), epochs);
+    }
+
+    /**
+     * When this run first held RESTRICTED data, or empty when that is unknown. LC-066: a showcase
+     * captured before that moment holds none of it. The earlier of the run's durable "restricted
+     * since" (V564, kept after the purge) and its oldest RESTRICTED row still present (partial
+     * index, V536): the restricted-data purge deletes the oldest rows first, so the rows alone
+     * would move the answer LATER and clear a copy that holds restricted data. With neither (no
+     * restricted row and nothing recorded) the moment is unknown and the answer is empty.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Instant> firstRestrictedDataAt(String runId) {
+        if (runId == null) {
+            return Optional.empty();
+        }
+        Instant recorded = toInstant(storageRepository.findRecordedRestrictedSince(runId));
+        Instant oldestRow = storageRepository.findFirstRestrictedCreatedAt(runId);
+        if (recorded == null || oldestRow == null) {
+            return Optional.ofNullable(recorded != null ? recorded : oldestRow);
+        }
+        return Optional.of(oldestRow.isBefore(recorded) ? oldestRow : recorded);
+    }
+
+    /** A native timestamp column as an Instant, whatever type the JDBC driver hands back. */
+    static Instant toInstant(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Instant instant) {
+            return instant;
+        }
+        if (value instanceof java.time.OffsetDateTime odt) {
+            return odt.toInstant();
+        }
+        if (value instanceof java.time.ZonedDateTime zdt) {
+            return zdt.toInstant();
+        }
+        if (value instanceof java.util.Date date) {
+            return date.toInstant();
+        }
+        throw new IllegalStateException("Unexpected timestamp type: " + value.getClass().getName());
+    }
+
+    /**
+     * The retention deadline a RESTRICTED row gets: now + the window. Stamped whether or not the
+     * purge is armed: it lives in its own column, which nothing reads while the purge is disarmed
+     * and no earlier release reads at all (see {@link #restrictedPurgeArmed}).
+     */
+    private Instant restrictedRetentionDeadline() {
+        return Instant.now().plus(restrictedRetentionWindow());
+    }
+
+    private java.time.Duration restrictedRetentionWindow() {
+        return java.time.Duration.ofDays(Math.max(1, restrictedRetentionDays));
+    }
+
+    /**
+     * Gives the already-RESTRICTED rows among {@code ids} that carry no retention deadline
+     * {@code created_at + window}, never later than {@code freshDeadline} (see
+     * {@link #markRestricted}). One update per distinct deadline.
+     */
+    private void stampCatchUpRetentionDeadlines(String tenantId, Collection<UUID> ids, Instant freshDeadline) {
+        List<Object[]> rows = storageRepository.findRestrictedWithoutRetentionDeadline(tenantId, ids);
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        java.time.Duration window = restrictedRetentionWindow();
+        java.util.Map<Instant, List<UUID>> byDeadline = new java.util.LinkedHashMap<>();
+        for (Object[] row : rows) {
+            Instant createdAt = (Instant) row[1];
+            Instant deadline = createdAt == null ? freshDeadline : createdAt.plus(window);
+            if (deadline.isAfter(freshDeadline)) {
+                deadline = freshDeadline;
+            }
+            byDeadline.computeIfAbsent(deadline, k -> new ArrayList<>()).add((UUID) row[0]);
+        }
+        byDeadline.forEach((deadline, rowIds) -> storageRepository.boundRetentionExpiry(tenantId, rowIds, deadline));
+    }
+
+    /** Test seam and configuration hook for the restricted retention window. */
+    void setRestrictedRetentionDays(int days) {
+        this.restrictedRetentionDays = days;
+    }
+
     @Override
     public int cleanupExpired() {
         logger.info("Nettoyage des storages expires");
 
-        List<StorageEntity> expired = storageRepository.findExpiredStorages(Instant.now());
+        // RESTRICTED rows belong to storage-service's hard-delete sweep when it runs; when it is
+        // off, this cleanup keeps covering them. Both read expires_at, the caller's TTL, only: the
+        // retention deadline (retention_expires_at) is never acted on here (LC-011).
+        List<StorageEntity> expired = restrictedPurgeArmed
+            ? storageRepository.findExpiredStorages(Instant.now())
+            : storageRepository.findExpiredStoragesIncludingRestricted(Instant.now());
 
         for (StorageEntity storage : expired) {
             storageRepository.updateStatus(storage.getId(), StorageStatus.DELETED);
@@ -1174,6 +1398,15 @@ public class StorageService implements StorageOperations {
     private boolean isAccessible(StorageEntity entity) {
         if (entity.isExpired()) {
             logger.warn("Storage expire: {}", entity.getId());
+            return false;
+        }
+        // The restricted retention deadline is enforced only once the purge is armed: disarmed,
+        // nothing removes the row, and a deadline nothing enforces must not hide it (LC-011).
+        if (restrictedPurgeArmed
+                && DataSensitivity.RESTRICTED.name().equals(entity.getDataSensitivity())
+                && entity.getRetentionExpiresAt() != null
+                && Instant.now().isAfter(entity.getRetentionExpiresAt())) {
+            logger.warn("Storage past its restricted retention deadline: {}", entity.getId());
             return false;
         }
         return true;

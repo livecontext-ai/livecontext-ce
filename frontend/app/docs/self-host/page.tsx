@@ -22,7 +22,7 @@ export default function SelfHostPage() {
       <DocsProse>
         <h2>License</h2>
         <p>
-          CE is published under the LiveContext Sustainable Use License 1.0. You may
+          CE is published under the LiveContext Sustainable Use License 1.1. You may
           use, copy, modify, and redistribute it for free, including in production and for your
           organization&apos;s internal business. What the license forbids is offering it to third
           parties, hosted or embedded, to compete with LiveContext&apos;s paid versions. Read the{' '}

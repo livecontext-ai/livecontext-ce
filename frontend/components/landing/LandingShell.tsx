@@ -1,11 +1,14 @@
 import Link from 'next/link';
 import LogoAnimate from '@/components/LogoAnimate';
 import SignInButton from '@/app/[locale]/_landing/SignInButton';
+import LandingAccount from '@/components/landing/LandingAccount';
+import { SESSION_HINT_SCRIPT } from '@/components/landing/sessionHint';
 import LandingNavAnchor from '@/app/[locale]/_landing/LandingNavAnchor';
 import LandingLanguageSelect from '@/components/landing/LandingLanguageSelect';
 import LandingThemeProvider from '@/components/landing/LandingThemeProvider';
 import LandingThemeToggle from '@/components/landing/LandingThemeToggle';
 import { docsHref } from '@/lib/docs/docsHostRewrite';
+import { localizedPathHref } from '@/lib/seo/siteUrl';
 import { IS_CE } from '@/lib/edition/edition';
 import FooterIntegrations from '@/components/landing/FooterIntegrations';
 import { WELL_KNOWN_MODELS } from '@/lib/models/wellKnownModels';
@@ -192,11 +195,13 @@ export function GithubMark({ className }: { className?: string }) {
  */
 export interface ShellLabels {
   pricing: string; selfHosted: string; signIn: string; getStarted: string; docs: string;
+  /** The header's way back into the app, and its account avatar's name, for a signed-in reader. */
+  openApp: string; account: string;
   product: string; models: string; resources: string; compare: string; company: string; legal: string;
   /** Heading of the persona row. Not named `useCases`: a `useX` member trips the hooks lint. */
   personasHeading: string;
   marketplace: string;
-  /** Locale prefix for the persona links. Not copy: see the note above. */
+  /** Locale prefix for the persona links and the footer's partner link. Not copy: see the note above. */
   locale?: string;
   workflows: string; agents: string; interfaces: string; tables: string; integrations: string;
   videos: string; status: string; allIntegrations: string;
@@ -212,6 +217,7 @@ export interface ShellLabels {
 /** What the shell shows when nobody hands it anything: the copy it always had. */
 export const DEFAULT_SHELL_LABELS: ShellLabels = {
   pricing: 'Pricing', selfHosted: 'Self-hosted', signIn: 'Sign in', getStarted: 'Get started free', docs: 'Docs',
+  openApp: 'Open the app', account: 'Your account',
   product: 'Product', models: 'Models', resources: 'Resources', compare: 'Compare', company: 'Company', legal: 'Legal',
   personasHeading: 'Use cases', marketplace: 'Marketplace',
   // No locale: the pages that take the defaults are the ones outside the [locale] tree, whose
@@ -308,16 +314,19 @@ export function LandingHeader({ extra, siteBaseUrl, labels = DEFAULT_SHELL_LABEL
               the second form loses the cascade (Tailwind emits the arbitrary min-width rule
               BEFORE `md:hidden`, so the link stayed hidden at 860, 900 and 1024 - verified in
               the browser), while stacking the two conditions on the one `hidden` cannot. */}
-          <SignInButton variant="link" baseUrl={siteBaseUrl} className="hidden sm:inline-flex md:max-[859px]:hidden text-sm whitespace-nowrap cursor-pointer">
-            {labels.signIn}
-          </SignInButton>
-          <SignInButton
-            variant="primary"
+          {/* A visitor gets "Sign in" and "Get started"; a signed-in reader gets their account and
+              the way back into the app (resolved in the browser: these pages stay cacheable).
+              The script runs before that end is parsed: a browser holding a session never sees
+              the visitor end painted (see sessionHint). Off the main host (the docs subdomain) it
+              reads the app's signed-in cookie instead of a session. */}
+          <script dangerouslySetInnerHTML={{ __html: SESSION_HINT_SCRIPT }} />
+          <LandingAccount
             baseUrl={siteBaseUrl}
-            className="inline-flex items-center gap-1 h-9 px-3 lg:px-4 rounded-xl text-sm font-medium whitespace-nowrap transition-colors hover:bg-[var(--accent-hover)] active:scale-[0.98] cursor-pointer"
-          >
-            {labels.getStarted}
-          </SignInButton>
+            signIn={labels.signIn}
+            getStarted={labels.getStarted}
+            openApp={labels.openApp}
+            account={labels.account}
+          />
         </div>
       </div>
     </header>
@@ -535,7 +544,7 @@ export function LandingFooter({ siteBaseUrl, labels = DEFAULT_SHELL_LABELS }: { 
             <li><Link href={withBase(siteBaseUrl, '/contact')}>{labels.contact}</Link></li>
             {/* Cloud only: the partner program shares cloud billing, and /partners 404s in a
                 self-hosted build. */}
-            {!IS_CE && <li><Link href={withBase(siteBaseUrl, '/partners')}>{labels.partners}</Link></li>}
+            {!IS_CE && <li><Link href={withBase(siteBaseUrl, localizedPathHref('/partners', labels.locale ?? 'en'))}>{labels.partners}</Link></li>}
             {/* No postal address here: a raw street line among nav links read as
                 a stray entry. The registered office stays where it is legally
                 required, on the Legal Notice / Terms / Privacy pages. */}

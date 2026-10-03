@@ -258,3 +258,25 @@ describe('AgentTable - trigger badges come from the /agents/triggers batch (no p
     expect(mocks.getSchedule).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The list's view lives in the address, so a reload reopens it as it was. "Back to the first
+ * page when a filter changes" used to be a plain effect, which also ran on mount: a list
+ * reloaded on page 3 fetched page 3 and then page 1.
+ */
+describe('the view is restored from the address and stays there', () => {
+  it('requests the search, sort, visibility, page and page size the address carries', async () => {
+    fakeFolderRouter.navigate('/en/app/list?q=alp&sort=name&visibility=private&page=3&size=50', 'replace');
+    mocks.getAgentsPage.mockResolvedValue({ ...page([agent('a1', 'Alpha')]), totalCount: 500 });
+    mocks.getFleetTriggers.mockResolvedValue([]);
+
+    render(<AgentTable />);
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument());
+
+    expect(mocks.getAgentsPage.mock.calls.length).toBeGreaterThan(0);
+    for (const [options] of mocks.getAgentsPage.mock.calls) {
+      expect(options).toMatchObject({ page: 2, size: 50, q: 'alp', sort: 'name', visibility: 'private' });
+    }
+    expect(fakeFolderRouter.search()).toBe('q=alp&sort=name&visibility=private&page=3&size=50');
+  });
+});

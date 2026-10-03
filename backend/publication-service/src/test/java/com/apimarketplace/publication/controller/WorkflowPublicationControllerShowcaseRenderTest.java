@@ -266,6 +266,52 @@ class WorkflowPublicationControllerShowcaseRenderTest {
         verifyNoOrchestratorReadCalls();
     }
 
+    @Test
+    @DisplayName("LC-066: every public showcase read answers 404 SHOWCASE_WITHHELD for a withheld showcase, and reads nothing")
+    void withheldShowcaseIsNeverServed() {
+        WorkflowPublicationEntity pub = activePublic();
+        when(publicationService.getPublicationById(PUBLICATION_UUID)).thenReturn(Optional.of(pub));
+        when(showcaseSnapshotReader.withheldReason(pub)).thenReturn("RESTRICTED_DATA");
+        String id = PUBLICATION_UUID.toString();
+
+        List<ResponseEntity<?>> responses = List.of(
+                controller.renderPublicShowcase(id, SHOWCASE_INTERFACE_UUID.toString(), 0, 1, null),
+                controller.getPublicShowcaseRunState(id),
+                controller.getPublicShowcaseAggregatedSteps(id, null),
+                controller.getPublicShowcaseEpochState(id, 0),
+                controller.getPublicShowcaseEpochSignals(id, 0),
+                controller.getPublicShowcaseStepFiles(id));
+
+        for (ResponseEntity<?> response : responses) {
+            assertThat(response.getStatusCode().value()).isEqualTo(404);
+            assertThat(response.getBody()).isEqualTo(Map.of(
+                    "error", WorkflowPublicationController.SHOWCASE_WITHHELD, "reason", "RESTRICTED_DATA"));
+        }
+        verify(showcaseSnapshotReader, never()).readRunState(any());
+        verify(showcaseSnapshotReader, never()).readStepFiles(any());
+        verify(showcaseSnapshotReader, never()).readInterfaceRender(any(), anyString(), anyInt(), anyInt(), any());
+        verifyNoOrchestratorReadCalls();
+    }
+
+    @Test
+    @DisplayName("LC-066: the detail response names why the showcase is withheld, and is null when it is shown")
+    @SuppressWarnings("unchecked")
+    void detailResponseCarriesTheWithheldReason() {
+        WorkflowPublicationEntity withheld = activePublic();
+        when(publicationService.getPublicationById(PUBLICATION_UUID)).thenReturn(Optional.of(withheld));
+        when(showcaseSnapshotReader.withheldReason(withheld)).thenReturn("RESTRICTED_DATA");
+
+        Map<String, Object> body = (Map<String, Object>) controller
+                .getPublicationByIdPublic(PUBLICATION_UUID.toString(), null, null).getBody();
+
+        assertThat(body).containsEntry("showcaseWithheld", "RESTRICTED_DATA");
+
+        when(showcaseSnapshotReader.withheldReason(withheld)).thenReturn(null);
+        Map<String, Object> shown = (Map<String, Object>) controller
+                .getPublicationByIdPublic(PUBLICATION_UUID.toString(), null, null).getBody();
+        assertThat(shown).containsEntry("showcaseWithheld", null);
+    }
+
     /**
      * The orchestrator client must be a black hole on the read path -
      * Phase B.8 contract is "marketplace reads from JSONB only, ever."

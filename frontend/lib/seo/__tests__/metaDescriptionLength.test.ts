@@ -34,6 +34,15 @@ describe('meta description length', () => {
     expect(description.length).toBeLessThanOrEqual(MAX);
   });
 
+  it.each(Object.keys(locales) as (keyof typeof locales)[])('%s partner page descriptions fit, with the rate written in', (locale) => {
+    const meta = locales[locale].partnersLanding.metadata;
+    expect(meta.description.length).toBeLessThanOrEqual(MAX);
+    // The rate arrives as a bare number (formatPercent): the copy writes the sign, the way the
+    // language does, right after it ("50%", "50 %" with a non-breaking space).
+    expect(meta.descriptionRate).toMatch(/\{rate\} ?%/);
+    expect(meta.descriptionRate.replace('{rate}', '100').length).toBeLessThanOrEqual(MAX);
+  });
+
   it.each(Object.keys(locales) as (keyof typeof locales)[])('%s persona descriptions fit a search snippet', (locale) => {
     for (const [persona, copy] of Object.entries(locales[locale].PersonaLanding.personas)) {
       expect((copy as { metaDescription: string }).metaDescription.length, persona).toBeLessThanOrEqual(MAX);

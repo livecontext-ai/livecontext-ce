@@ -135,6 +135,21 @@ class DmControllerTest {
     }
 
     @Test
+    @DisplayName("LC-020: a DM attachment the sender declared text/html downloads instead of rendering, with nosniff + sandbox CSP")
+    void htmlAttachmentIsForcedToDownload() throws Exception {
+        when(dmService.getAttachment("7", "t1", "5f0e8c1a-1111-2222-3333-444455556666"))
+                .thenReturn(new com.apimarketplace.conversation.service.AttachmentService.AttachmentData(
+                        "<script>alert(1)</script>".getBytes(), "text/html", "x.html"));
+
+        dm.perform(get("/api/dm/threads/t1/attachments/5f0e8c1a-1111-2222-3333-444455556666")
+                        .header("X-User-ID", "7"))
+                .andExpect(status().isOk())
+                .andExpect(result -> assertThat(result.getResponse().getHeader("Content-Disposition")).startsWith("attachment;"))
+                .andExpect(result -> assertThat(result.getResponse().getHeader("X-Content-Type-Options")).isEqualTo("nosniff"))
+                .andExpect(result -> assertThat(result.getResponse().getHeader("Content-Security-Policy")).contains("sandbox"));
+    }
+
+    @Test
     @DisplayName("attachment download honours the service's 404 (unknown / unreferenced storageId)")
     void downloadAttachmentNotFound() throws Exception {
         when(dmService.getAttachment("7", "t1", "5f0e8c1a-1111-2222-3333-444455556666"))

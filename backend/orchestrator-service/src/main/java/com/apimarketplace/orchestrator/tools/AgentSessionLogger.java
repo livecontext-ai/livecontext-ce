@@ -156,13 +156,12 @@ public class AgentSessionLogger {
         ConversationLog convLog = new ConversationLog(conversationId, userMessage);
         conversationLogs.put(conversationId, convLog);
 
-        String truncatedMsg = userMessage.length() > 60
-            ? userMessage.substring(0, 57) + "..."
-            : userMessage;
+        // User content: size only unless payload logging is enabled for local debugging.
+        String truncatedMsg = com.apimarketplace.common.logging.PayloadLogSafety.describeText(userMessage, 60);
 
         log.info("{} ════════════════════════════════════════════════════════════════", LOG_PREFIX);
         log.info("{} [{}] Conversation started", LOG_PREFIX, shortId(conversationId));
-        log.info("{} [{}] User: \"{}\"", LOG_PREFIX, shortId(conversationId), truncatedMsg);
+        log.info("{} [{}] User: {}", LOG_PREFIX, shortId(conversationId), truncatedMsg);
         log.info("{} ════════════════════════════════════════════════════════════════", LOG_PREFIX);
     }
 
@@ -380,6 +379,11 @@ public class AgentSessionLogger {
 
     private String formatParamsForLog(String toolName, Map<String, Object> params) {
         if (params == null || params.isEmpty()) return "";
+        if (!com.apimarketplace.common.logging.PayloadLogSafety.isPayloadLoggingEnabled()) {
+            // Parameter VALUES are user content; the action name is platform vocabulary.
+            Object action = params.get("action");
+            return (action instanceof String a ? "action=" + a + " " : "") + com.apimarketplace.common.logging.PayloadLogSafety.describeKeys(params);
+        }
 
         // For workflow, show action prominently
         if ("workflow".equals(toolName)) {
@@ -433,6 +437,9 @@ public class AgentSessionLogger {
     private String formatResultForLog(Object result, String error, boolean success) {
         if (!success) {
             return "ERROR: " + truncate(error, 50);
+        }
+        if (!com.apimarketplace.common.logging.PayloadLogSafety.isPayloadLoggingEnabled()) {
+            return com.apimarketplace.common.logging.PayloadLogSafety.describeAny(result);
         }
         if (result instanceof Map) {
             Map<String, Object> map = (Map<String, Object>) result;

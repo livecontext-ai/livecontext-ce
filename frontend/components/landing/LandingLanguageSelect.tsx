@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Globe } from 'lucide-react';
 import { locales, type Locale } from '@/i18n/routing';
+import { writeLocaleCookie } from '@/lib/utils/locale';
+import { LOCALIZED_PUBLIC_PATHS } from '@/lib/seo/siteUrl';
 
 // Language picker for the public landing chrome (footer, next to the theme toggle).
 // It lives in the shared `LandingFooter`, which ALSO renders on the non-localized
@@ -24,11 +26,13 @@ function isLocale(value: string | undefined): value is Locale {
   return (locales as readonly string[]).includes(value ?? '');
 }
 
-export default function LandingLanguageSelect({ label = 'Language' }: {
+export default function LandingLanguageSelect({ label = 'Language', compact = false }: {
   /** The control's accessible name. `LandingFooter` always passes one (the intl-free pages
    *  pass the English default from DEFAULT_SHELL_LABELS), so this default is a safety net for
    *  a direct render rather than a path the site takes. */
   label?: string;
+  /** The topbar size (a partner offer page, beside the theme button), instead of the footer one. */
+  compact?: boolean;
 } = {}) {
   const pathname = usePathname();
   const router = useRouter();
@@ -40,6 +44,9 @@ export default function LandingLanguageSelect({ label = 'Language' }: {
   const isRootLanding = (pathname ?? '/') === '/';
   const pathWithoutLocale = pathLocale ? `/${segments.slice(2).join('/')}` : (pathname ?? '');
   const isPersonaLanding = pathWithoutLocale.startsWith('/for/');
+  // A page with one URL per language: the persona landings, and the public pages listed in
+  // LOCALIZED_PUBLIC_PATHS (/partners). Their bare URL is English.
+  const isLocalizedPage = isPersonaLanding || (LOCALIZED_PUBLIC_PATHS as readonly string[]).includes(pathWithoutLocale);
 
   // On the truly non-localized public pages (/about, /legal/*, …) there is no locale
   // segment and no localized sibling - fall back to the NEXT_LOCALE cookie for the
@@ -54,15 +61,15 @@ export default function LandingLanguageSelect({ label = 'Language' }: {
 
   // `/` is always the default locale (a cookie for another locale would have been
   // middleware-redirected to its prefix), so don't let the cookie override it there.
-  const current: Locale = pathLocale ?? (isRootLanding || isPersonaLanding ? 'en' : cookieLocale);
+  const current: Locale = pathLocale ?? (isRootLanding || isLocalizedPage ? 'en' : cookieLocale);
 
   const changeLanguage = (next: Locale) => {
     if (next === current) return;
     // Persist for the whole site (landing + app) - same cookie the app settings use.
-    document.cookie = `NEXT_LOCALE=${next}; path=/; max-age=31536000; SameSite=Lax`;
+    writeLocaleCookie(next);
     setCookieLocale(next);
-    if (isPersonaLanding) {
-      // A fresh document replaces persona metadata instead of retaining the
+    if (isLocalizedPage) {
+      // A fresh document replaces the page's metadata instead of retaining the
       // previous locale's canonical alongside Next.js streamed metadata.
       const prefix = next === 'en' ? '' : `/${next}`;
       window.location.assign(`${prefix}${pathWithoutLocale}${window.location.search}${window.location.hash}`);
@@ -73,24 +80,29 @@ export default function LandingLanguageSelect({ label = 'Language' }: {
       // Default-locale landing at `/` → its localized sibling (`/en` redirects back
       // to `/`, but next === current already short-circuits that case).
       router.push(`/${next}${window.location.search}${window.location.hash}`);
+    } else {
+      // No locale in the path: the page reads the NEXT_LOCALE cookie on the server (a partner
+      // offer) and re-renders in the new language; a page with a single English
+      // version (/about, /legal/*) re-renders as it was, the cookie still priming the rest.
+      router.refresh();
     }
-    // Truly non-localized public pages have a single (English) version: nothing to
-    // navigate to - the cookie still primes the localized pages and the app.
   };
 
   return (
     <span
-      className="inline-flex items-center gap-1.5 h-9 px-2.5 rounded-[10px] transition-all hover:brightness-110"
+      className={compact
+        ? 'inline-flex items-center gap-1.5 h-8 px-2 rounded-lg transition-all hover:-translate-y-px'
+        : 'inline-flex items-center gap-1.5 h-9 px-2.5 rounded-[10px] transition-all hover:brightness-110'}
       style={{
-        background: 'var(--bg-tertiary)',
+        background: compact ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
         color: 'var(--text-primary)',
         border: '1px solid var(--border-color)',
       }}
     >
-      <Globe className="w-4 h-4" aria-hidden="true" />
+      <Globe className={compact ? 'w-3.5 h-3.5' : 'w-4 h-4'} aria-hidden="true" />
       <select
         aria-label={label}
-        disabled={isPersonaLanding && !isHydrated}
+        disabled={isLocalizedPage && !isHydrated}
         value={current}
         onChange={(e) => changeLanguage(e.target.value as Locale)}
         className="bg-transparent text-xs outline-none cursor-pointer"

@@ -1,7 +1,7 @@
 {
   "partnerDashboard": {
     "title": "合作伙伴计划",
-    "subtitle": "从客户支付的每张发票中获得分成，并展示官方合作伙伴徽章。",
+    "subtitle": "向您服务的企业推荐 LiveContext，并在您的个人主页和模板上展示官方合作伙伴徽章。",
     "learnMore": "了解计划如何运作",
     "error": "无法加载您的合作伙伴计划，请稍后重试。",
     "selfHosted": {
@@ -32,12 +32,22 @@
     "pending": {
       "title": "已收到申请",
       "body": "我们正在审核 {company} 的申请。一旦有结果，您将收到邮件，此页面也会变为您的合作伙伴控制台。",
-      "submittedOn": "提交于 {date}"
+      "submittedOn": "提交于 {date}",
+      "steps": {
+        "sent": "申请已提交",
+        "review": "审核中",
+        "reply": "通过电子邮件答复"
+      }
     },
     "rejected": {
       "title": "您之前的申请未获通过",
       "note": "我们的说明：{note}",
-      "again": "您可以在下方重新申请。"
+      "again": "您可以随时重新申请：请告诉我们此后有哪些变化。"
+    },
+    "join": {
+      "title": "最高可获得客户每张已付款发票的 <rate>{percent}%</rate>",
+      "apply": "立即申请",
+      "reapply": "重新申请"
     },
     "errors": {
       "already_pending": "您已有一份申请正在审核中。",
@@ -52,13 +62,21 @@
       "not_partner": "只有合作伙伴和申请人需要接受条款。"
     },
     "toasts": {
-      "applied": "申请已发送",
-      "appliedBody": "我们会通过邮件回复您。",
       "copied": "已复制",
       "copyFailed": "无法复制"
     },
     "dashboard": {
       "inactive": "您的合作伙伴代码未激活，因此新注册不会归属于您。如有疑问请联系我们。",
+      "hero": {
+        "thisMonth": "本月收益",
+        "payable": "待支付：{amount}"
+      },
+      "earnings": {
+        "title": "最近 12 个月",
+        "total": "12 个月共 {amount}",
+        "chartLabel": "每月佣金，从 {from} 到 {to}",
+        "empty": "您的第一位付费客户出现后，曲线就会开始上升。"
+      },
       "linkTitle": "您的合作伙伴链接",
       "linkHint": "分享此链接。通过它创建的新账号可获得 {credits} 免费积分，并归属于您。",
       "copyLink": "复制链接",
@@ -70,6 +88,70 @@
       "badgeTitle": "官方合作伙伴",
       "badgeBody": "您的金色徽章会显示在您的名字旁边，包括个人主页和您发布的模板。",
       "badgeInactive": "合作伙伴代码重新激活后，徽章会再次显示。",
+      "conditions": {
+        "title": "您的条件"
+      },
+      "builder": {
+        "title": "为客户创建链接",
+        "intro": "推荐一个套餐：您的客户会收到一个专属页面，该套餐及其价格一目了然，并且已包含您的代码。",
+        "plan": "套餐",
+        "from": "每月 {price} 起",
+        "credits": "每月积分",
+        "creditsOption": "{credits} 积分",
+        "cycle": "计费方式",
+        "monthly": "按月",
+        "yearly": "按年",
+        "clientSees": "您的客户将看到",
+        "planLine": "{plan}，每月 {credits} 积分",
+        "price": "每月 {price}",
+        "priceYearly": "每月 {price}，按年计费",
+        "offer": "另外，使用您的代码 {code} 可获赠 {credits} 积分",
+        "forYou": "您的收益",
+        "commission": "这位客户每月为您带来约 {amount} 佣金",
+        "commissionYearly": "一张年度发票约 {amount} 佣金",
+        "commissionDetail": "每张已付款发票的 {percent}%，持续 {months} 个月",
+        "copy": "复制链接",
+        "labelField": "客户（可选）",
+        "labelPlaceholder": "例如：Acme",
+        "create": "创建链接",
+        "creating": "正在创建...",
+        "created": "链接已就绪：",
+        "offersTitle": "您的客户链接",
+        "offersEmpty": "还没有链接：请在上方创建一个。",
+        "unnamed": "未命名客户",
+        "offerLine": "{plan}，每月 {credits} 积分，{cycle, select, yearly {按年} other {按月}}",
+        "deactivate": "停用",
+        "errors": {
+          "not_partner": "只有合作伙伴可以创建链接。",
+          "code_inactive": "您的合作伙伴代码未激活：链接将无处可去。",
+          "too_many_offers": "您的有效链接过多：请先停用一些。",
+          "too_long": "客户名称过长。",
+          "generic": "无法创建链接，请重试。",
+          "invalid_apps": "所选应用中有一个已无法提供（已设为私有、已撤回或不属于您）。请检查列表后重试。",
+          "too_many_apps": "每个链接最多 10 个应用。",
+          "apps_unavailable": "暂时无法检查您的应用。请稍后重试。",
+          "apps_need_higher_plan": "所选应用中有一个使用了向量搜索，而此方案不包含该功能。请推荐更高的方案，或移除该应用。",
+          "apps_exceed_plan": "这些应用所需的界面或应用名额超出了此方案的上限。请推荐更高的方案，或减少应用数量。"
+        },
+        "offersLoading": "正在加载您的链接...",
+        "offersError": "无法加载您的链接。请刷新页面重试。",
+        "deactivateConfirm": "停用此链接？您的客户将无法再打开它。",
+        "deactivateYes": "确认停用",
+        "cancel": "取消",
+        "deactivateError": "无法停用该链接，请重试。",
+        "apps": {
+          "title": "包含的应用",
+          "hint": "客户付款后，这些应用会安装到其工作区。只能提供您的公开或不公开列出的应用。",
+          "count": "{count}/{max}",
+          "loading": "正在加载您的应用...",
+          "error": "无法加载您的应用。仍可创建不含应用的链接。",
+          "empty": "您尚未发布任何应用。从工作流发布一个应用即可在此提供。",
+          "private": "私有：设为不公开列出后即可提供",
+          "full": "每个链接最多 {max} 个应用。"
+        },
+        "appsLine": "{count, plural, other {付款后将 # 个应用安装到其工作区}}",
+        "appsCount": "{count, plural, other {# 个应用}}"
+      },
       "stats": {
         "signups": "注册数",
         "paying": "付费客户",
@@ -101,8 +183,13 @@
         },
         "founder": "创始合作伙伴",
         "rate": "每张已付账单 {percent}%",
+        "rateShort": "{percent}%",
         "progressLabel": "升级到 {tier} 的进度",
         "progress": "已达 {revenue}，达到 {threshold} 即升级为 {tier}",
+        "start": "从第一天起",
+        "from": "客户收入达到 {amount} 起",
+        "fromShort": "{amount} 起",
+        "here": "您在这里",
         "top": "您已处于最高等级。",
         "topFounder": "创始合作伙伴：在您参与本计划的整个期间享有 Platinum，依照合作伙伴计划条款（第 7.5 条）。",
         "hint": "账单满 {days} 天且未退款后才计入您的等级。您的业务量不会导致等级下降。",
@@ -119,10 +206,119 @@
       "accepted": "您已于 {date} 接受<link>合作伙伴计划条款</link>（版本 {version}）。"
     }
   },
+  "partnerOffer": {
+    "eyebrow": "合作伙伴优惠",
+    "officialPartner": "LiveContext 官方合作伙伴",
+    "title": "{partner} 为您推荐 <gold>{plan}</gold>",
+    "titleGeneric": "您的合作伙伴为您推荐 <gold>{plan}</gold>",
+    "lead": "为您选择的套餐：每月 {credits} 积分{cycle, select, yearly {，按年计费} other {}}。",
+    "gift": "另外，使用代码 {code} 可获赠 {credits} 积分",
+    "cycleLabel": "计费方式",
+    "creditsLabel": "每月积分",
+    "creditsOption": "{credits} 积分",
+    "reset": "恢复 {partner} 的推荐",
+    "resetGeneric": "恢复合作伙伴的推荐",
+    "badge": "{partner} 推荐",
+    "badgeGeneric": "您的合作伙伴推荐",
+    "starterCap": "Starter 最多每月 {credits} 积分",
+    "choose": "选择 {plan}",
+    "summaryTitle": "您的选择",
+    "summaryPlan": "{plan}，每月 {credits} 积分",
+    "pricePeriod": "/月{cycle, select, yearly {，按年计费} other {}}",
+    "continue": "选择 {plan} 并继续",
+    "opening": "正在打开支付页面...",
+    "checkoutError": "无法打开支付页面，请重试。",
+    "alreadySubscribed": "您已有订阅：请在价格页面中更改。",
+    "alreadySubscribedLink": "打开我的价格页面",
+    "allPlans": "查看所有套餐",
+    "unavailableTitle": "此优惠已失效",
+    "unavailableBody": "您的合作伙伴可能已更换此链接。我们的套餐只需一次点击即可查看。",
+    "unavailableCta": "查看套餐",
+    "accountError": "无法读取您的账户，因此暂时无法打开支付页面。",
+    "retry": "重试",
+    "metaTitle": "{partner} 为您推荐 {plan}",
+    "metaTitleGeneric": "您的合作伙伴为您推荐 {plan}",
+    "metaDescription": "为您挑选的 LiveContext 套餐，附价格及合作伙伴代码赠送的积分。",
+    "loadErrorTitle": "无法加载此优惠",
+    "loadErrorBody": "链接应该没有问题：我们的服务器未能及时响应。请稍后重试。",
+    "appsTitle": "{partner} 赠送给您的应用",
+    "appsTitleGeneric": "此优惠包含的应用",
+    "appsIncluded": "+ 包含 {count} 个应用",
+    "appsNeedPlan": "此优惠中的应用需要 {plan} 或更高的套餐。",
+    "planTooLow": "此优惠中的应用需要更高的套餐。请选择其他套餐以继续。",
+    "appsNotForSubscribers": "这些应用随通过此链接开通的首个订阅一起提供。您的账户已有订阅，因此不包含这些应用。",
+    "welcome": {
+      "title": "欢迎使用 {plan}",
+      "activating": "正在激活您的订阅...",
+      "activatingHint": "付款已完成，只需几秒钟。",
+      "planActive": "您的套餐已生效，积分已到账。",
+      "slowPayment": "您的付款仍在确认中。可以关闭此窗口：确认后，套餐会自动生效，应用会自动安装。",
+      "appsTitle": "{partner} 为您提供的应用",
+      "appsTitleGeneric": "合作伙伴为您提供的应用",
+      "appFallback": "应用",
+      "installing": "正在安装...",
+      "open": "打开",
+      "failed": "无法安装",
+      "arrivingLater": "应用仍在安装中：几分钟后可在“应用”中找到。",
+      "unreadable": "此窗口未能加载全部内容。您的购买不受影响：您的优惠所含的应用会在付款后于后台安装，准备就绪后即会出现在“应用”中。",
+      "partnerLine": "{partner} 是您的合作伙伴：有任何应用问题都可以咨询。",
+      "partnerLineGeneric": "您的合作伙伴会协助您使用应用。",
+      "write": "联系 {partner}",
+      "writeGeneric": "联系合作伙伴",
+      "writeError": "无法打开对话。请在“消息”中重试。",
+      "start": "开始使用"
+    }
+  },
+  "personalOfferPage": {
+    "metaTitle": "您的专属优惠",
+    "loading": "正在加载您的优惠...",
+    "eyebrow": "专属优惠",
+    "signInTitle": "您的专属优惠已就绪",
+    "signInLead": "登录后即可查看您的价格、赠送的积分和剩余时间。",
+    "signIn": "登录",
+    "signInError": "无法打开登录页面。请重试。",
+    "seePlans": "查看套餐",
+    "backToApp": "返回 LiveContext",
+    "retry": "重试",
+    "noOffer": "此账户目前没有专属优惠。",
+    "title": "首次订阅，额外赠送 <accent>{credits} 积分</accent>",
+    "titleNoBonus": "您的专属优惠",
+    "titleUpTo": "首次订阅最多赠送 <accent>{credits} 积分</accent>",
+    "tiersTitle": "所选积分越多，赠送越多",
+    "tierFrom": "每月 {credits} 积分起",
+    "tierBonus": "+{credits} 积分",
+    "lead": "首次付款确认后即发放赠送积分。套餐价格不变。",
+    "until": "优惠有效期至 {date}",
+    "summaryTitle": "您的选择",
+    "summaryPlan": "{plan}，每月 {credits} 积分",
+    "pricePeriod": "每月{cycle, select, yearly {，按年计费} other {}}",
+    "bonus": "+{credits} 赠送积分（价值 {value}）",
+    "continue": "选择 {plan} 并继续",
+    "opening": "正在打开付款页面...",
+    "afterPayment": "由 Stripe 安全支付。首次付款后发放赠送积分。",
+    "allPlans": "查看所有套餐",
+    "cycleLabel": "计费",
+    "creditsLabel": "每月积分",
+    "creditsOption": "{credits} 积分",
+    "cardBonus": "赠送 +{credits} 积分",
+    "cardNoBonus": "此积分包无赠送",
+    "starterCap": "Starter 最多每月 {credits} 积分",
+    "choose": "选择 {plan}",
+    "checkoutError": "无法打开付款页面。请重试。",
+    "countdown": {
+      "endsIn": "剩余时间",
+      "days": "天",
+      "hours": "小时",
+      "minutes": "分",
+      "seconds": "秒",
+      "ended": "此优惠已结束。"
+    }
+  },
   "partnersLanding": {
     "metadata": {
       "title": "面向代理机构和顾问的合作伙伴计划",
-      "description": "把您的客户带到 LiveContext，从他们支付的每张账单中获得持续分成，分成比例随合作伙伴等级提升。官方合作伙伴徽章，以及为客户托管 LiveContext 的权利。"
+      "description": "把您的客户带到 LiveContext，从他们支付的每张账单中获得持续分成，比例随等级提升。免费加入，附官方合作伙伴徽章。",
+      "descriptionRate": "从您的客户在 LiveContext 支付的每张账单中最多获得 {rate}% 分成。面向代理机构和顾问的免费合作伙伴计划，附官方合作伙伴徽章。"
     },
     "hero": {
       "eyebrow": "合作伙伴计划",
@@ -272,7 +468,14 @@
       "search": "搜索应用、工作流、智能体",
       "profile": "您的个人资料",
       "profileApps": "已发布 {count} 个应用",
-      "profileRating": "{rating}（{count} 条评价）"
+      "profileRating": "{rating}（{count} 条评价）",
+      "screen": {
+        "running": "运行中",
+        "processed": "本月发票",
+        "booked": "已记入 QuickBooks",
+        "statusBooked": "已记账",
+        "statusReview": "待审核"
+      }
     },
     "how": {
       "eyebrow": "运作方式",
@@ -305,7 +508,7 @@
       },
       "hosting": {
         "title": "为客户托管",
-        "body": "LiveContext 许可证允许您为每位客户安装和运行它，可部署在客户或您自己的服务器上，并为此收费。"
+        "body": "LiveContext 许可证允许您作为您为客户提供的服务的一部分，为每位客户安装和运行它，可部署在客户或您自己的服务器上，并为此收费。"
       },
       "apps": {
         "title": "交付应用，而不只是工作流",
@@ -360,7 +563,7 @@
       },
       "hosting": {
         "question": "我可以为客户安装 LiveContext 吗？",
-        "answer": "可以。LiveContext 许可证允许服务提供商为每位客户安装、托管和维护，每位客户一个部署。若要作为您自己的多客户平台运营，需要商业许可证：请联系我们。"
+        "answer": "可以。LiveContext 许可证允许服务提供商在为客户提供服务的过程中，为其客户安装、托管和维护，每个部署只服务一位客户。若要将 LiveContext 托管作为产品出售，或作为您自己的多客户平台运营，需要商业许可证：请联系我们。"
       },
       "credits": {
         "question": "我的客户能得到什么？",
@@ -596,9 +799,10 @@
         "notRedeemable": "该代码当前不可用。",
         "alreadyRedeemed": "你已经兑换过代码。",
         "exhausted": "该代码已达到兑换上限。",
-        "selfReferral": "你不能兑换自己的推荐码。",
+        "selfReferral": "你不能兑换自己的代码。",
         "alreadyPaid": "该代码仅适用于新订阅。",
         "alreadyAttributed": "您的账户已使用合作伙伴代码。",
+        "partnerAccount": "合作伙伴不能使用其他合作伙伴的代码。",
         "emailNotVerified": "请先验证您的邮箱再使用此代码。",
         "notNewAccount": "此代码仅适用于新账户。",
         "nothingToGrant": "您的账户已拥有此套餐或更高的套餐。",
@@ -705,6 +909,7 @@
     "acceptError": "无法接受邀请。链接可能已过期或已被使用。",
     "emailNotVerified": "请先验证您的邮箱地址，再接受或拒绝邀请。",
     "declineError": "无法拒绝邀请。它可能已过期或已被使用。",
+    "requiresLink": "此邀请是在您的账户创建之前发送的。请通过邀请邮件中的链接打开它，或请管理员重新邀请您。",
     "signInRequired": "请登录以查看您的待处理邀请。",
     "emptyState": "您没有待处理的邀请。",
     "invitedToJoin": "{inviter} 邀请了您",
@@ -745,7 +950,7 @@
     "lastName": "姓氏",
     "password": "密码",
     "confirmPassword": "确认密码",
-    "passwordTooShort": "密码至少需要 8 个字符",
+    "passwordTooShort": "密码至少需要 12 个字符",
     "passwordMismatch": "两次输入的密码不一致",
     "invalidTitle": "邀请不可用",
     "invalidBody": "此邀请链接无效、已过期或已被使用。",
@@ -939,9 +1144,20 @@
     "download": "Download",
     "noFile": "No file",
     "removeFile": "移除文件",
-    "file": "File",
+    "file": "文件",
     "noOptions": "无选项",
-    "selectPlaceholder": "Select...",
+    "selectPlaceholder": "请选择...",
+    "noTags": "无标签",
+    "saveErrorTitle": "保存出错",
+    "saveErrorMessage": "无法保存更改",
+    "rowAddedTitle": "已添加行",
+    "rowAddedMessage": "已添加新行，优先级为 {priority}",
+    "addRowErrorTitle": "添加行出错",
+    "addRowErrorMessage": "无法添加行",
+    "rowsDeletedTitle": "已删除行",
+    "rowsDeletedMessage": "已删除 {count} 行",
+    "deleteRowsErrorTitle": "删除行出错",
+    "deleteRowsErrorMessage": "无法删除所选行",
     "nameLabel": "名称 *",
     "descriptionLabel": "描述",
     "rowsPerPage": "每页行数：",
@@ -1007,8 +1223,8 @@
       "lastNamePlaceholder": "Doe",
       "password": "密码",
       "passwordMismatch": "密码不匹配",
-      "passwordPlaceholder": "至少 8 个字符",
-      "passwordTooShort": "密码必须至少为 8 个字符",
+      "passwordPlaceholder": "至少 12 个字符",
+      "passwordTooShort": "密码必须至少为 12 个字符",
       "signIn": "登录",
       "submit": "创建账户",
       "subtitle": "在一分钟内开始使用 LiveContext。",
@@ -1194,6 +1410,7 @@
     },
     "scheduledAgent": "定时代理",
     "webhookAgent": "Webhook 代理",
+    "taskConversation": "任务对话",
     "more": {
       "title": "更多",
       "back": "返回"
@@ -1368,6 +1585,7 @@
           "ORG_INVITATION_PENDING": "{count, plural, one {# 个组织邀请} other {# 个组织邀请}}",
           "BADGE_UNLOCKED": "{count, plural, other {# 项新成就}}",
           "CREATOR_PUBLISHED": "{count, plural, other {你关注的创作者发布了 # 个新应用}}",
+          "CREATOR_FOLLOWED": "{count, plural, other {# 位新订阅者}}",
           "BUDGET_REACHED": "{count, plural, other {# 个工作流因支出上限而停止}}",
           "CREDIT_LOW": "{count, plural, one {点数即将用完} other {点数即将用完 (#)}}",
           "CREDIT_EXHAUSTED": "{count, plural, one {点数已用完} other {点数已用完 (#)}}",
@@ -2017,6 +2235,7 @@
   },
   "errors": {
     "retry": "重试",
+    "signInUnreachable": "无法连接到登录服务。请检查网络连接后重试。",
     "dismiss": "关闭",
     "debugInfo": "调试信息",
     "pleaseWait": "请等待 {seconds} 秒后重试。",
@@ -2026,7 +2245,8 @@
     "notFound": "未找到",
     "server": "服务器错误",
     "maintenance": "维护中",
-    "unknown": "错误"
+    "unknown": "错误",
+    "restrictedDataProvider": "此对话或工作流包含来自 Gmail 或 Google Drive 的数据，这些数据只能由经批准的 AI 提供商处理。请切换到 Anthropic 或 OpenAI 模型后重试。"
   },
   "runs": {
     "never": "从不",
@@ -2463,6 +2683,7 @@
     "own": "您的发布",
     "pendingReview": "待审核",
     "previewUnavailable": "预览不可用",
+    "previewWithheldRestrictedData": "无预览：此应用的示例运行包含 Gmail 或 Google Drive 数据，这些数据从不公开显示。",
     "rejected": "已拒绝",
     "rejectionReasonTitle": "拒绝原因",
     "resourceType": {
@@ -2699,6 +2920,10 @@
       "gotIt": "知道了",
       "technicalDetails": "技术详情",
       "kinds": {
+        "restrictedData": {
+          "title": "这些数据不能发送给此 AI 提供商",
+          "description": "此对话或工作流包含来自 Gmail 或 Google Drive 的数据，这些数据只能由经批准的 AI 提供商处理。请切换到 Anthropic 或 OpenAI 模型后重试。"
+        },
         "interrupted": {
           "title": "回答被中断",
           "description": "助手回答时服务重启了。已保存部分回答。请重新发送消息以继续。"
@@ -4219,6 +4444,10 @@
         "browser_agent": {
           "label": "浏览器代理",
           "hint": "可用于浏览器代理的模型。排名决定默认顺序；停用后该模型将从浏览器代理运行中移除。"
+        },
+        "free_tier": {
+          "label": "免费版",
+          "hint": "向免费版开放的模型，按免费账户看到的顺序排列。第一个是免费账户默认打开的模型。此排名独立于聊天 / 代理的排名。"
         }
       },
       "allProviders": "所有提供商",
@@ -4274,10 +4503,10 @@
       "stateOff": "已关闭",
       "stateUnlisted": "未列出",
       "listing": {
-        "unlist": "取消列出：模型仍可使用，但不再在选择器中提供",
+        "unlist": "取消列出：模型仍可使用，选择器仅在“隐藏的模型”中显示它",
         "list": "重新列出",
-        "unlistFromOff": "重新启用但不列出：使用它的内容继续在其上运行，选择器不提供它",
-        "unlistedTooltip": "未列出：仍可使用，因此使用它的智能体、工作流和对话会继续在其上运行。选择器中不再提供它（消息输入框将其显示在隐藏的模型中），它也永远不会成为默认模型。其替代模型已暂停。"
+        "unlistFromOff": "重新启用但不列出：使用它的内容继续在其上运行，选择器仅在“隐藏的模型”中显示它",
+        "unlistedTooltip": "未列出：仍可使用，因此使用它的智能体、工作流和对话会继续在其上运行。模型选择器和消息输入框仅在“隐藏的模型”中显示它，它也永远不会成为默认模型。其替代模型已暂停。"
       },
       "replacementPaused": "（已暂停）",
       "replacementPausedTooltip": "模型未列出期间不生效：使用它的内容继续在其上运行。如果您关闭该模型，替代会重新生效。",
@@ -5284,6 +5513,8 @@
       "scopedAccess": "受限访问",
       "scopedAccessHint": "仅限您选择的工具",
       "createdAt": "创建于 {date}",
+      "expiresAt": "{date} 过期",
+      "expired": "已于 {date} 过期",
       "revoke": "吊销",
       "revokeConfirm": "撤销密钥",
       "revokedTitle": "密钥已吊销",
@@ -6208,6 +6439,12 @@
         "foundingUntilKept": "创始价保证有效至 <b>{date}</b>，之后只要持续订阅即可一直保留",
         "foundingUntil": "创始价保证有效至 <b>{date}</b>"
       }
+    },
+    "partnerRecommendation": {
+      "title": "由您的合作伙伴推荐",
+      "body": "{plan}，每月 {credits} 积分{cycle, select, yearly {，按年计费} other {}}：这是您的合作伙伴为您选择的套餐。",
+      "offer": "使用代码 {code}，您的新账户可获赠 {credits} 积分。",
+      "badge": "由您的合作伙伴推荐"
     }
   },
   "storage": {
@@ -6838,7 +7075,7 @@
       "updatePassword": "更新密码",
       "changing": "正在更新…",
       "passwordMismatch": "两次输入的新密码不一致。",
-      "passwordTooShort": "新密码至少需要 8 个字符。",
+      "passwordTooShort": "新密码至少需要 12 个字符。",
       "currentPasswordIncorrect": "当前密码不正确。",
       "passwordChangeSuccess": "密码已更新。请使用新密码重新登录。",
       "passwordChangeError": "无法更新您的密码。请重试。",
@@ -6937,6 +7174,14 @@
         "tasks": {
           "title": "任务",
           "description": "有任务分配给你、提到你或等待你审核。通过每日摘要发送。"
+        },
+        "following": {
+          "title": "你关注的创作者",
+          "description": "你订阅的创作者发布了新应用。在每日摘要中发送。"
+        },
+        "audience": {
+          "title": "新订阅者",
+          "description": "有人订阅了你。在每日摘要中发送。"
         }
       },
       "delivery": {
@@ -6949,7 +7194,8 @@
     "advanced": {
       "deleteTitle": "删除账户",
       "deleteWarning": "您的账户会立即停用，并在宽限期结束后被永久删除。届时您的数据、订阅和配置将永久丢失。",
-      "deleteButton": "删除我的账户"
+      "deleteButton": "删除我的账户",
+      "description": "针对账户本身的操作，其中部分操作无法撤销。"
     },
     "deleteDialog": {
       "title": "删除账户？",
@@ -8840,7 +9086,11 @@
       "note": {
         "text": "便签文本",
         "placeholder": "输入您的便签文本...",
-        "color": "Color"
+        "color": "Color",
+        "attachedTo": "附加到",
+        "attachedToNone": "无节点（独立便签）",
+        "attachedToHint": "便签显示在该节点旁边，聚焦该节点时显示，并随该节点一起删除。",
+        "emptyText": "双击编辑..."
       },
       "choices": {
         "title": "Choices",
@@ -11415,7 +11665,28 @@
     "resolveApprovalTitle": "解决此审批？",
     "resumeContinue": "我已授权该操作 - 请继续。",
     "resumeInstalled": "我已自行安装该应用 - 它现在在我的工作区中。无需再次获取即可继续。",
-    "runSubtitle": "代理想要运行一个敏感操作",
+    "runSubtitle": "该智能体想使用一个可能消耗额度或在此聊天之外进行更改的工具，因此需要等待你的同意。",
+    "detailsToggle": "查看详情",
+    "workflowExecuteTitle": "运行此工作流？",
+    "workflowExecuteTitleNamed": "运行“{name}”？",
+    "workflowExecuteSubtitle": "其步骤将立即运行：这会消耗额度，并可能在你已连接的账户中执行操作（发送消息、写入数据）。",
+    "restartFromNodeTitle": "重新运行本次运行的一部分？",
+    "restartFromNodeSubtitle": "某个步骤及其之后的所有步骤将再次运行，额度消耗和影响与一次新运行相同。",
+    "restartFromNodeSubtitleNamed": "“{node}”及其之后的所有步骤将再次运行，额度消耗和影响与一次新运行相同。",
+    "runNodeTitle": "立即运行此步骤？",
+    "runNodeSubtitle": "单个步骤将使用你已连接的账户立即运行，不属于任何工作流。",
+    "runNodeSubtitleNamed": "一个“{nodeType}”步骤将使用你已连接的账户立即运行，不属于任何工作流。",
+    "applicationExecuteTitle": "运行此应用？",
+    "applicationExecuteSubtitle": "它将立即运行：这会消耗额度，并可能在你已连接的账户中执行操作。",
+    "agentExecuteTitle": "启动另一个智能体？",
+    "agentExecuteTitleNamed": "启动“{name}”？",
+    "agentExecuteSubtitle": "该智能体想把一项任务交给这个智能体。它在工作时会消耗 AI 额度，并可使用自己的工具。",
+    "catalogExecuteTitle": "调用外部服务？",
+    "catalogExecuteSubtitle": "该智能体想使用你已连接的账户调用第三方 API。该调用可能会更改该服务上的数据。",
+    "disarmTitle": "让此智能体不再先征求你的同意？",
+    "disarmTitleNamed": "让“{name}”不再先征求你的同意？",
+    "disarmSubtitle": "该智能体想为那个智能体关闭此授权确认。之后它会在不询问你的情况下执行付费或外部操作。",
+    "mailboxSendSubtitleTo": "该智能体想从已连接的邮箱向 {to} 发送一封邮件。邮件会立即送达收件人，且无法撤回。",
     "runTitle": "运行此操作？",
     "mailboxSendTitle": "发送这封邮件吗？",
     "mailboxSendSubtitle": "该智能体想从已连接的邮箱发送一封邮件。邮件会立即送达收件人，且无法撤回。",
@@ -11647,7 +11918,8 @@
     "otherConversations": "其他会话",
     "deleteConversation": "删除会话",
     "deleteConversationMessage": "删除与 {name} 的会话？它只会从你的收件箱中消失--新消息会让它重新出现。",
-    "searchPlaceholder": "搜索会话"
+    "searchPlaceholder": "搜索会话",
+    "yourPartner": "您的合作伙伴"
   },
   "version": {
     "title": "版本",
@@ -11680,9 +11952,15 @@
     "dismiss": "知道了",
     "learnMore": "查看全部更新",
     "latest": {
-      "title": "逐个周期浏览一次运行，并使用你自己的时区",
-      "body": "在画布上，运行胶囊现在可以展开一条包含所有周期的时间线：逐个切换，跳到下一个失败，画布、分析标签页和日志都会跟随你选择的周期。分析可以并排比较任意两个周期。账户设置中的时区和语言现在决定应用中的每一个日期以及你收到的每一封邮件，登录页面也不例外。布局魔杖现在会让分叉两侧的分支保持平衡。",
-      "mediaAlt": "两个并排的图标：一排高低不同的竖条，说明文字为在画布、分析和日志中逐个周期浏览一次运行；以及一个时钟，说明文字为你的时区和语言全面生效"
+      "title": "智能体撰写的便签，以及刷新后依然保留的页面",
+      "body": "智能体现在可以把便签附加到它所说明的节点上：画布会把每条便签放在对应节点旁边，并在你选中该节点时高亮显示，编辑器和运行视图中都是如此。搜索、筛选、排序、标签页和页码都会保存在地址中，刷新页面或打开分享链接时，页面会保持你离开时的样子。\n\n其他更新：\n• 在运行时间线或分析图表中悬停某个周期，会打开它的卡片，显示结果、日期和时长。周期对比中的节点名称可以点击。\n• 执行敏感操作前，聊天卡片会说明即将运行什么，以及为什么需要你的确认。\n• 模型选择器也会提供管理员隐藏的模型，它们列在最后，并有单独的标题。\n• 表格中的进度单元格会显示说明文字，被拒绝的编辑会恢复为已保存的值。\n• 暂停一个持续失败的工作流后，它的“仍在失败”提醒会随之停止。",
+      "mediaAlt": "两个并排的图标：一张便签，说明文字为智能体附加在所说明节点旁的便签；一个链接，说明文字为保存在地址中的搜索、筛选、标签页和页码"
+    },
+    "latestCloud": {
+      "title": "LiveContext 合作伙伴计划正式开放",
+      "body": "为客户构建自动化的代理机构、顾问和自由职业者，现在可以成为 LiveContext 合作伙伴。你可以在 12 个月内从每位客户支付的发票中获得分成：通过审核起即为 30%，达到 Gold 为 40%，达到 Platinum 为 50%。金色合作伙伴徽章会显示在你的市场个人资料、你发布的每个应用以及搜索结果中你的名字旁边；设置中的合作伙伴空间可以为每位客户生成附带你推荐方案的专属链接。\n\n其他更新：\n• 智能体可以把便签附加到它所说明的节点上：画布会把每条便签放在对应节点旁边，并在你选中该节点时高亮显示。\n• 搜索、筛选、排序、标签页和页码都会保存在地址中，刷新页面或打开分享链接时，页面会保持你离开时的样子。\n• 在运行时间线或分析图表中悬停某个周期，会打开它的卡片，显示结果、日期和时长。\n• 执行敏感操作前，聊天卡片会说明即将运行什么以及会产生多少费用。\n• 创作者会收到新订阅者的邮件提醒，关注者会收到所关注创作者发布新应用的邮件提醒。\n• 暂停一个持续失败的工作流后，它的“仍在失败”提醒会随之停止。",
+      "mediaAlt": "左侧是一位合作伙伴的市场个人资料，名字旁带有金色合作伙伴徽章和 Platinum 标签，说明文字为你市场个人资料上的合作伙伴徽章。右侧是三根依次升高的银色、金色和铂金色柱子，分别标注 30%、40% 和 50%，说明文字为每位客户 12 个月内最高 50%",
+      "action": "成为合作伙伴"
     }
   },
   "optionalComponents": {
@@ -12868,6 +13146,8 @@
     "selfHosted": "自托管",
     "signIn": "登录",
     "getStarted": "免费开始",
+    "openApp": "打开应用",
+    "account": "您的账户",
     "docs": "文档",
     "product": "产品",
     "models": "模型",
@@ -16428,5 +16708,34 @@
     "dismiss": "关闭",
     "unavailable": "实时更新无法到达此页面。",
     "unavailableHint": "页面仍可使用，但其他地方的更改只有在重新加载后才会显示。如果一直如此，可能是代理或防火墙阻止了实时连接。"
+  },
+  "securityDisclosure": {
+    "metadata": {
+      "title": "安全漏洞披露",
+      "description": "如何报告 LiveContext 中的安全漏洞、我们的承诺以及善意安全研究的规则。"
+    },
+    "title": "安全漏洞披露",
+    "intro": "我们欢迎安全研究人员和用户提交报告。如果您认为在 LiveContext 中发现了安全漏洞，请私下告知我们，以便我们在漏洞被利用之前将其修复。",
+    "reportTitle": "如何报告",
+    "reportBody": "请发送电子邮件至 <email>security@livecontext.ai</email>，或使用<contact>联系表单</contact>中的安全类别。请附上问题描述、复现步骤、受影响的网址或组件以及您观察到的影响。请不要提交公开的问题单。您可以使用英语或法语撰写。",
+    "commitTitle": "我们的承诺",
+    "commitAck": "我们会在 5 个工作日内确认收到您的报告。",
+    "commitUpdates": "在调查和修复期间，我们会随时向您通报进展，并在问题解决后通知您。",
+    "commitCredit": "如您愿意，我们会在修复发布后在版本说明中致谢您。",
+    "rulesTitle": "善意研究规则",
+    "rules": {
+      "ownAccount": "仅使用您自己拥有或已获明确授权使用的账户和数据进行测试。",
+      "noData": "不要访问、修改或删除属于其他用户的数据。如果您意外接触到他人的数据，请立即停止，并在报告中说明。",
+      "noDisruption": "不要进行拒绝服务测试，不要发送垃圾信息，也不要以会降低其他用户服务质量的规模进行扫描。",
+      "noSocial": "不要对我们的团队、用户或场所使用社会工程、网络钓鱼或物理攻击。",
+      "disclosure": "在任何公开披露之前，请给我们合理的修复时间，并与我们商定披露时间。"
+    },
+    "safeHarborTitle": "善意研究",
+    "safeHarbor": "如果您遵守这些规则并本着善意行事，我们将视您的研究为已获授权，并且不会因此对您采取法律行动。",
+    "scopeTitle": "范围",
+    "scopeIn": "范围内：livecontext.ai 及其子域名，以及 LiveContext Community Edition 的源代码。",
+    "scopeOut": "范围外：我们所使用的第三方服务中的漏洞（请向相应供应商报告），以及没有已证实安全影响的发现，例如仅仅缺少某个最佳实践响应头。",
+    "bountyNote": "我们目前没有提供有偿漏洞赏金计划。",
+    "machineReadable": "我们的机器可读文件 <file>security.txt</file> 也引用了本政策。"
   }
 }

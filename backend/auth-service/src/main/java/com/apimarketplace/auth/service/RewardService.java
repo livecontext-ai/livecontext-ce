@@ -134,6 +134,7 @@ public class RewardService {
         SELF_REFERRAL,      // a user cannot redeem their own referral (or partner) code
         ALREADY_PAID,       // existing paid subscriber: a first conversion can never fire
         ALREADY_ATTRIBUTED, // the user is already attributed to a partner (first code wins)
+        PARTNER_ACCOUNT,    // a partner (owner of a partner code, live or not) is never attributed to another partner
         EMAIL_NOT_VERIFIED, // a code that grants credits or a plan waits for a verified email
         NOT_NEW_ACCOUNT,    // a partner code is for accounts created recently (new users it brought)
         NOTHING_TO_GRANT,   // a plan-only code this account cannot receive: refused, the use is kept
@@ -255,6 +256,13 @@ public class RewardService {
         boolean ownedProgram = rc.getProgram() == RewardProgram.REFERRAL || rc.getProgram() == RewardProgram.PARTNER;
         if (ownedProgram && redeemerUserId.equals(rc.getOwnerUserId())) {
             return RedeemResult.of(RedeemStatus.SELF_REFERRAL);
+        }
+        // A partner earns on the clients they bring, and is never one of another partner's clients:
+        // otherwise two partners could attribute each other and both earn on their own invoices.
+        // Any partner code counts, live or disabled: the account is a partner's either way.
+        if (rc.getProgram() == RewardProgram.PARTNER
+                && codeRepository.findByOwnerUserIdAndProgram(redeemerUserId, RewardProgram.PARTNER).isPresent()) {
+            return RedeemResult.of(RedeemStatus.PARTNER_ACCOUNT);
         }
         if (redemptionRepository.findByRedeemerUserIdAndRewardCodeId(redeemerUserId, rc.getId()).isPresent()) {
             return RedeemResult.of(RedeemStatus.ALREADY_REDEEMED);

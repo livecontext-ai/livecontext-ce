@@ -51,6 +51,7 @@ export default function NestedDataSourcePage({ params }: Props) {
       <DataTable
         dataSourceId={dataSourceId}
         jsonPath={jsonPath}
+        urlState
       />
     </div>
   );

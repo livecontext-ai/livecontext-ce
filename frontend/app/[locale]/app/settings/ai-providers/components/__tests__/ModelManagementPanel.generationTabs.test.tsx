@@ -144,10 +144,11 @@ async function openTab(container: HTMLElement, id: string) {
 }
 
 describe('ModelManagementPanel - the generation tabs are retired', () => {
-  it('offers the two categories a ranking actually applies to, and nothing else', async () => {
+  it('offers the categories a ranking actually applies to, and nothing else', async () => {
     const { container } = await renderPanel();
 
-    expect(tabs(container)).toEqual(['chat', 'browser_agent']);
+    // free_tier is the free tier's own ranking of the models opened to it (cloud only).
+    expect(tabs(container)).toEqual(['chat', 'browser_agent', 'free_tier']);
   });
 
   it('marks exactly the open tab as pressed, and moves that mark on a switch', async () => {
@@ -278,8 +279,9 @@ describe('the retired categories left no i18n behind', () => {
   const messagesOf = (locale: string) =>
     JSON.parse(readFileSync(path.join(MESSAGES, `${locale}.json`), 'utf8'));
 
-  it.each(LOCALES)('%s declares the two live categories and no retired one', (locale) => {
-    expect(new Set(Object.keys(categoriesOf(locale)))).toEqual(new Set(['chat', 'browser_agent']));
+  it.each(LOCALES)('%s declares the live categories and no retired one', (locale) => {
+    expect(new Set(Object.keys(categoriesOf(locale))))
+      .toEqual(new Set(['chat', 'browser_agent', 'free_tier']));
   });
 
   it.each(LOCALES)('%s kept no per-image price string either', (locale) => {

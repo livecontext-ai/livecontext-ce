@@ -28,7 +28,7 @@ export async function shellLabels(locale: string): Promise<ShellLabels> {
   const capitalize = (persona: PersonaKey) => persona.charAt(0).toUpperCase() + persona.slice(1);
   return {
     pricing: t('pricing'), selfHosted: t('selfHosted'), signIn: t('signIn'),
-    getStarted: t('getStarted'), docs: t('docs'),
+    getStarted: t('getStarted'), docs: t('docs'), openApp: t('openApp'), account: t('account'),
     product: t('product'), models: t('models'), resources: t('resources'), compare: t('compare'),
     company: t('company'), legal: t('legal'),
     // The message key stays `useCases`; only the FIELD is renamed, because a member matching

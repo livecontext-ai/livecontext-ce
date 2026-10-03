@@ -323,6 +323,8 @@ function InlineConfigPanel({
     edges: Edge[];
     tf: (key: string) => string;
 }) {
+    // Heading of the model picker's group of unlisted (hidden) models.
+    const tActions = useTranslations('actions');
     const temperature = data.temperature ?? DEFAULT_TEMPERATURE;
     const maxTokens = data.maxTokens ?? DEFAULT_MAX_TOKENS;
     const maxIterations = data.maxIterations ?? DEFAULT_MAX_ITERATIONS;
@@ -413,6 +415,7 @@ function InlineConfigPanel({
     return (
         <div className="space-y-5 pt-2">
             <ModelPicker
+                hiddenModelsLabel={tActions('unlistedModels')}
                 value={modelSelection}
                 onChange={handleModelPick}
                 disabled={isRunMode}

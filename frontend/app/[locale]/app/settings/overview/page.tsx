@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { Link, useRouter, usePathname } from "@/i18n/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
+import { urlEnum, useUrlState } from "@/hooks/useUrlState";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { useUserProfile } from "@/hooks/useUserProfile";
 import { useTheme, type ThemePreference } from "@/components/ThemeProvider";
@@ -46,7 +47,6 @@ import {
   Bell,
   Shield,
   Palette,
-  MessageSquare,
   Eye,
   EyeOff,
   Settings,
@@ -68,6 +68,9 @@ import { embeddedChangePassword } from "@/lib/providers/embedded-auth-provider";
 import { evaluatePasswordChange } from "@/lib/auth/changePasswordOutcome";
 import { isFederatedAccount, isOrganizationSamlAccount, securityTabSections } from "@/lib/utils/userUtils";
 import { TwoFactorSettingsCard } from "@/components/settings/TwoFactorSettingsCard";
+import { PageHeader, SettingRow } from "@/components/settings";
+import { AdaptiveTabBar } from "@/components/settings/AdaptiveTabBar";
+import { writeLocaleCookie } from "@/lib/utils/locale";
 
 interface Preferences {
   language: string;
@@ -87,6 +90,10 @@ function formatPlanName(planCode: string | undefined): string {
   if (planCode === 'ENTERPRISE') return 'Enterprise';
   return planCode;
 }
+
+// Every tab id this page can show. An id the address carries and this list does not falls back
+// to the profile tab.
+const OVERVIEW_TAB_IDS = ["profile", "security", "trophies", "preferences", "notifications", "advanced"] as const;
 
 export default function SettingsOverviewPage() {
   const { user, isAuthenticated, isAuthChecking } = useAuthGuard();
@@ -153,7 +160,11 @@ export default function SettingsOverviewPage() {
   const { openMode: inspectorOpenMode, setOpenMode: setInspectorOpenMode } = useInspectorOpenMode();
 
   // All useState hooks first
-  const [activeTab, setActiveTab] = useState("profile");
+  // The open tab lives in the address (`?tab=`), so a reload or a shared link reopens it.
+  const [activeTab, setActiveTab] = useUrlState<string>("tab", "profile", {
+    codec: urlEnum(OVERVIEW_TAB_IDS),
+    history: "push",
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -180,14 +191,6 @@ export default function SettingsOverviewPage() {
   useEffect(() => {
     setPreferences(prev => ({ ...prev, language: currentLocale }));
   }, [currentLocale]);
-
-  // Read tab parameter from URL on mount
-  useEffect(() => {
-    const tab = searchParams.get('tab');
-    if (tab) {
-      setActiveTab(tab);
-    }
-  }, [searchParams]);
 
   // Display name editing state
   const [displayNameEditing, setDisplayNameEditing] = useState(false);
@@ -257,30 +260,6 @@ export default function SettingsOverviewPage() {
     }
   }, [isAuthenticated, fetchDisplayNameStatus]);
 
-  // Ref et état pour le slider animé des tabs
-  const tabContainerRef = useRef<HTMLDivElement>(null);
-  const [tabSliderStyle, setTabSliderStyle] = useState<{ left: number; width: number }>({ left: 0, width: 0 });
-
-  // Effet pour calculer la position du slider animé
-  useEffect(() => {
-    const updateSlider = () => {
-      if (!tabContainerRef.current) return;
-      const activeButton = tabContainerRef.current.querySelector(`[data-tab-id="${activeTab}"]`) as HTMLButtonElement;
-      if (activeButton) {
-        const containerRect = tabContainerRef.current.getBoundingClientRect();
-        const buttonRect = activeButton.getBoundingClientRect();
-        setTabSliderStyle({
-          left: buttonRect.left - containerRect.left,
-          width: buttonRect.width,
-        });
-      }
-    };
-
-    updateSlider();
-    window.addEventListener('resize', updateSlider);
-    return () => window.removeEventListener('resize', updateSlider);
-  }, [activeTab]);
-
   // Federated accounts (social login OR org SAML/SSO) manage their password at the
   // upstream provider, so the local Security/password tab doesn't apply to them.
   const isExternalAccount = isFederatedAccount(user);
@@ -306,7 +285,7 @@ export default function SettingsOverviewPage() {
     if (!availableTabIds.includes(activeTab)) {
       setActiveTab("profile");
     }
-  }, [tabs, activeTab]);
+  }, [tabs, activeTab, setActiveTab]);
 
   // Show skeleton only during initial auth check - content appears progressively
   // Use isAuthChecking (not isLoading) for faster UI rendering
@@ -433,55 +412,19 @@ export default function SettingsOverviewPage() {
 
         {/* ===== SETTINGS TABS SECTION ===== */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <div className="relative mb-6 sm:mb-8 flex max-w-full overflow-x-auto scrollbar-hide">
-            <div className="relative mx-auto inline-flex w-max items-center gap-0.5 sm:gap-1 p-1 sm:p-1.5 bg-theme-tertiary rounded-2xl" ref={tabContainerRef}>
-              {/* Slider highlight */}
-              <div
-                className="absolute top-1 sm:top-1.5 bottom-1 sm:bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
-                style={{
-                  left: tabSliderStyle.left,
-                  width: tabSliderStyle.width,
-                  opacity: tabSliderStyle.width ? 1 : 0
-                }}
-              />
-
-              {tabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  data-tab-id={tab.id}
-                  type="button"
-                  onClick={() => setActiveTab(tab.id)}
-                  className={cn(
-                    "relative z-10 flex h-9 items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
-                    activeTab === tab.id
-                      ? "text-[var(--text-primary)]"
-                      : "text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50"
-                  )}
-                >
-                  <tab.icon className={cn("w-4 h-4 flex-shrink-0 transition-colors duration-200", activeTab === tab.id ? "text-[var(--text-primary)]" : "text-current")} />
-                  <span className="whitespace-nowrap hidden sm:inline">{tab.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
+          <AdaptiveTabBar
+            className="mb-6"
+            tabs={tabs.map((tab) => ({ id: tab.id, label: tab.label, icon: <tab.icon className="w-4 h-4" /> }))}
+            value={activeTab}
+            onChange={setActiveTab}
+          />
 
           {/* Profile Tab */}
           <TabsContent value="profile" className="space-y-6">
             <div className="flex flex-col gap-8">
               {/* Account Information */}
               <div className="space-y-6">
-                <div className="flex items-center justify-between flex-wrap gap-4">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-10 h-10 rounded-xl bg-theme-secondary flex items-center justify-center">
-                      <User className="w-5 h-5 text-theme-primary" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-semibold text-theme-primary">{t('profile.accountInfo')}</h3>
-                      <p className="text-sm text-theme-secondary">{t('profile.accountInfoDesc')}</p>
-                    </div>
-                  </div>
-
-                </div>
+                <PageHeader icon={User} title={t('profile.accountInfo')} subtitle={t('profile.accountInfoDesc')} headingLevel="h2" />
 
                 {/* Avatar Gallery */}
                 <AvatarGallery />
@@ -621,15 +564,7 @@ export default function SettingsOverviewPage() {
                 {/* The header titles the password block ("Change Password"), so a social
                     account, whose tab holds only the two-factor card, does not get it. */}
                 {!isExternalAccount && (
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
-                    <Shield className="w-5 h-5 text-theme-primary" />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-semibold text-theme-primary">{t('security.title')}</h3>
-                    <p className="text-sm text-theme-secondary">{t('security.description')}</p>
-                  </div>
-                </div>
+                  <PageHeader icon={Shield} title={t('security.title')} subtitle={t('security.description')} headingLevel="h2" />
                 )}
 
                 {/* Cloud (Keycloak) owns the password - redirect to the
@@ -787,55 +722,39 @@ export default function SettingsOverviewPage() {
           {/* Preferences Tab */}
           <TabsContent value="preferences" className="space-y-6">
             <div className="space-y-6">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
-                  <Palette className="w-5 h-5 text-theme-primary" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-theme-primary">{t('preferences.title')}</h3>
-                  <p className="text-sm text-theme-secondary">{t('preferences.description')}</p>
-                </div>
-              </div>
+              <PageHeader icon={Palette} title={t('preferences.title')} subtitle={t('preferences.description')} headingLevel="h2" />
 
               <div className="space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
-                  <div>
-                    <h4 className="font-medium text-theme-primary">
-                      {t('preferences.language')}
-                    </h4>
-                    <p className="text-sm text-theme-secondary">
-                      {t('preferences.languageDescription')}
-                    </p>
-                  </div>
-                  <Select
-                    value={preferences.language}
-                    onValueChange={(value) => {
-                      setPreferences({ ...preferences, language: value });
-                      // Persist language preference in cookie (1 year)
-                      document.cookie = `NEXT_LOCALE=${value}; path=/; max-age=31536000; SameSite=Lax`;
-                      // Best-effort, never awaited: the switch must not wait on or fail because of it.
-                      reportExplicitLocaleChoice(value);
-                      // Navigate to the new locale path, preserving tab parameter
-                      const tab = searchParams.get('tab');
-                      const path = tab ? `${pathname}?tab=${tab}` : pathname;
-                      router.push(path, { locale: value });
-                    }}
-                  >
-                    <SelectTrigger className="w-full sm:w-[200px]">
-                      <SelectValue placeholder={t('preferences.selectLanguage')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {/* Every supported locale (i18n/routing.ts), native names - same list as
-                          the sidebar language menu and the landing footer select. */}
-                      <SelectItem value="en">English</SelectItem>
-                      <SelectItem value="fr">Français</SelectItem>
-                      <SelectItem value="es">Español</SelectItem>
-                      <SelectItem value="de">Deutsch</SelectItem>
-                      <SelectItem value="pt">Português</SelectItem>
-                      <SelectItem value="zh">中文</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <SettingRow title={t('preferences.language')} description={t('preferences.languageDescription')}>
+                    <Select
+                      value={preferences.language}
+                      onValueChange={(value) => {
+                        setPreferences({ ...preferences, language: value });
+                        // Persist language preference in cookie (1 year)
+                        writeLocaleCookie(value);
+                        // Best-effort, never awaited: the switch must not wait on or fail because of it.
+                        reportExplicitLocaleChoice(value);
+                        // Navigate to the new locale path, preserving tab parameter
+                        const tab = searchParams.get('tab');
+                        const path = tab ? `${pathname}?tab=${tab}` : pathname;
+                        router.push(path, { locale: value });
+                      }}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder={t('preferences.selectLanguage')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {/* Every supported locale (i18n/routing.ts), native names - same list as
+                            the sidebar language menu and the landing footer select. */}
+                        <SelectItem value="en">English</SelectItem>
+                        <SelectItem value="fr">Français</SelectItem>
+                        <SelectItem value="es">Español</SelectItem>
+                        <SelectItem value="de">Deutsch</SelectItem>
+                        <SelectItem value="pt">Português</SelectItem>
+                        <SelectItem value="zh">中文</SelectItem>
+                      </SelectContent>
+                    </Select>
+                </SettingRow>
 
                 {/* Display time zone - stored on the ACCOUNT (auth.users.time_zone), unlike the
                     theme below: it decides how every date in the product reads AND how the
@@ -844,29 +763,21 @@ export default function SettingsOverviewPage() {
                 <TimeZonePreferenceRow />
 
                 {/* Theme - persisted by ThemeProvider (localStorage), 'auto' follows the OS. */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
-                  <div>
-                    <h4 className="font-medium text-theme-primary">
-                      {t('preferences.theme')}
-                    </h4>
-                    <p className="text-sm text-theme-secondary">
-                      {t('preferences.themeDescription')}
-                    </p>
-                  </div>
-                  <Select
-                    value={themePreference}
-                    onValueChange={(value) => setTheme(value as ThemePreference)}
-                  >
-                    <SelectTrigger className="w-full sm:w-[200px]" data-testid="theme-select">
-                      <SelectValue placeholder={t('preferences.selectTheme')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="light">{t('preferences.themeLight')}</SelectItem>
-                      <SelectItem value="dark">{t('preferences.themeDark')}</SelectItem>
-                      <SelectItem value="auto">{t('preferences.themeAuto')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <SettingRow title={t('preferences.theme')} description={t('preferences.themeDescription')}>
+                    <Select
+                      value={themePreference}
+                      onValueChange={(value) => setTheme(value as ThemePreference)}
+                    >
+                      <SelectTrigger className="w-full" data-testid="theme-select">
+                        <SelectValue placeholder={t('preferences.selectTheme')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="light">{t('preferences.themeLight')}</SelectItem>
+                        <SelectItem value="dark">{t('preferences.themeDark')}</SelectItem>
+                        <SelectItem value="auto">{t('preferences.themeAuto')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                </SettingRow>
 
                 {/* Default side-panel opening position - persisted client-side
                     (localStorage), scoped per workspace. Picks where the panel opens
@@ -874,28 +785,20 @@ export default function SettingsOverviewPage() {
                     width) or 'bottom' (docks under the content, using the bottom style
                     below). The two header dock buttons still override the active dock
                     live for the current session. */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
-                  <div>
-                    <h4 className="font-medium text-theme-primary">
-                      {t('preferences.sidePanelDefaultPosition')}
-                    </h4>
-                    <p className="text-sm text-theme-secondary">
-                      {t('preferences.sidePanelDefaultPositionDescription')}
-                    </p>
-                  </div>
-                  <Select
-                    value={sidePanelDefaultPosition}
-                    onValueChange={(value) => setSidePanelDefaultPosition(value as SidePanelDefaultPosition)}
-                  >
-                    <SelectTrigger className="w-full sm:w-[200px]" data-testid="side-panel-default-position-select">
-                      <SelectValue placeholder={t('preferences.sidePanelDefaultPosition')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="right">{t('preferences.sidePanelDefaultPositionRight')}</SelectItem>
-                      <SelectItem value="bottom">{t('preferences.sidePanelDefaultPositionBottom')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <SettingRow title={t('preferences.sidePanelDefaultPosition')} description={t('preferences.sidePanelDefaultPositionDescription')}>
+                    <Select
+                      value={sidePanelDefaultPosition}
+                      onValueChange={(value) => setSidePanelDefaultPosition(value as SidePanelDefaultPosition)}
+                    >
+                      <SelectTrigger className="w-full" data-testid="side-panel-default-position-select">
+                        <SelectValue placeholder={t('preferences.sidePanelDefaultPosition')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="right">{t('preferences.sidePanelDefaultPositionRight')}</SelectItem>
+                        <SelectItem value="bottom">{t('preferences.sidePanelDefaultPositionBottom')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                </SettingRow>
 
                 {/* Workflow reading direction - persisted client-side (localStorage),
                     scoped per workspace like the dock preference above. Drives the
@@ -904,28 +807,20 @@ export default function SettingsOverviewPage() {
                     auto-layout button arranges the graph in. Existing workflows keep
                     their saved node positions; the choice applies to how the canvas
                     is wired and to any layout it computes from then on. */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
-                  <div>
-                    <h4 className="font-medium text-theme-primary">
-                      {t('preferences.workflowLayoutDirection')}
-                    </h4>
-                    <p className="text-sm text-theme-secondary">
-                      {t('preferences.workflowLayoutDirectionDescription')}
-                    </p>
-                  </div>
-                  <Select
-                    value={workflowLayoutDirection}
-                    onValueChange={(value) => setWorkflowLayoutDirection(value as WorkflowLayoutDirection)}
-                  >
-                    <SelectTrigger className="w-full sm:w-[200px]" data-testid="workflow-layout-direction-select">
-                      <SelectValue placeholder={t('preferences.workflowLayoutDirection')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="horizontal">{t('preferences.workflowLayoutDirectionHorizontal')}</SelectItem>
-                      <SelectItem value="vertical">{t('preferences.workflowLayoutDirectionVertical')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <SettingRow title={t('preferences.workflowLayoutDirection')} description={t('preferences.workflowLayoutDirectionDescription')}>
+                    <Select
+                      value={workflowLayoutDirection}
+                      onValueChange={(value) => setWorkflowLayoutDirection(value as WorkflowLayoutDirection)}
+                    >
+                      <SelectTrigger className="w-full" data-testid="workflow-layout-direction-select">
+                        <SelectValue placeholder={t('preferences.workflowLayoutDirection')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="horizontal">{t('preferences.workflowLayoutDirectionHorizontal')}</SelectItem>
+                        <SelectItem value="vertical">{t('preferences.workflowLayoutDirectionVertical')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                </SettingRow>
 
                 {/* Where the node inspector opens - persisted client-side
                     (localStorage), scoped per workspace like the two above. The same
@@ -934,28 +829,20 @@ export default function SettingsOverviewPage() {
                     guarantee: surfaces with no side panel (the standalone builder,
                     the marketplace preview) keep the floating inspector rather than
                     leave it nowhere to open. */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
-                  <div>
-                    <h4 className="font-medium text-theme-primary">
-                      {t('preferences.inspectorDock')}
-                    </h4>
-                    <p className="text-sm text-theme-secondary">
-                      {t('preferences.inspectorDockDescription')}
-                    </p>
-                  </div>
-                  <Select
-                    value={inspectorDock}
-                    onValueChange={(value) => setInspectorDock(value as InspectorDock)}
-                  >
-                    <SelectTrigger className="w-full sm:w-[200px]" data-testid="inspector-dock-select">
-                      <SelectValue placeholder={t('preferences.inspectorDock')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="canvas">{t('preferences.inspectorDockCanvas')}</SelectItem>
-                      <SelectItem value="panel">{t('preferences.inspectorDockPanel')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <SettingRow title={t('preferences.inspectorDock')} description={t('preferences.inspectorDockDescription')}>
+                    <Select
+                      value={inspectorDock}
+                      onValueChange={(value) => setInspectorDock(value as InspectorDock)}
+                    >
+                      <SelectTrigger className="w-full" data-testid="inspector-dock-select">
+                        <SelectValue placeholder={t('preferences.inspectorDock')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="canvas">{t('preferences.inspectorDockCanvas')}</SelectItem>
+                        <SelectItem value="panel">{t('preferences.inspectorDockPanel')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                </SettingRow>
 
                 {/* How much of the inspector a node click opens. Persisted client-side
                     (localStorage), scoped per workspace, and written by the same control
@@ -965,80 +852,59 @@ export default function SettingsOverviewPage() {
                     show (an API step with no tool chosen, anything still on a navigation
                     step) stays compact on its own - a preference must not leave a node
                     unconfigurable. */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
-                  <div>
-                    <h4 className="font-medium text-theme-primary">
-                      {t('preferences.inspectorOpenMode')}
-                    </h4>
-                    <p className="text-sm text-theme-secondary">
-                      {t('preferences.inspectorOpenModeDescription')}
-                    </p>
-                  </div>
-                  <Select
-                    value={inspectorOpenMode}
-                    onValueChange={(value) => setInspectorOpenMode(value as InspectorOpenMode)}
-                  >
-                    <SelectTrigger className="w-full sm:w-[200px]" data-testid="inspector-open-mode-select">
-                      <SelectValue placeholder={t('preferences.inspectorOpenMode')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="simple">{t('preferences.inspectorOpenModeSimple')}</SelectItem>
-                      <SelectItem value="advanced">{t('preferences.inspectorOpenModeAdvanced')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <SettingRow title={t('preferences.inspectorOpenMode')} description={t('preferences.inspectorOpenModeDescription')}>
+                    <Select
+                      value={inspectorOpenMode}
+                      onValueChange={(value) => setInspectorOpenMode(value as InspectorOpenMode)}
+                    >
+                      <SelectTrigger className="w-full" data-testid="inspector-open-mode-select">
+                        <SelectValue placeholder={t('preferences.inspectorOpenMode')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="simple">{t('preferences.inspectorOpenModeSimple')}</SelectItem>
+                        <SelectItem value="advanced">{t('preferences.inspectorOpenModeAdvanced')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                </SettingRow>
 
                 {/* Bottom-panel style - persisted client-side (localStorage), scoped per
                     workspace. The header now carries BOTH dock buttons (bottom + right);
                     this setting only chooses which bottom variant that button opens:
                     'bottom-full' (default) spans the full window width with the sidebar
                     shrinking above it; 'bottom' stays content-width, right of the sidebar. */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
-                  <div>
-                    <h4 className="font-medium text-theme-primary">
-                      {t('preferences.sidePanelBottomMode')}
-                    </h4>
-                    <p className="text-sm text-theme-secondary">
-                      {t('preferences.sidePanelBottomModeDescription')}
-                    </p>
-                  </div>
-                  <Select
-                    value={sidePanelBottomMode}
-                    onValueChange={(value) => setSidePanelBottomMode(value as SidePanelBottomMode)}
-                  >
-                    <SelectTrigger className="w-full sm:w-[200px]" data-testid="side-panel-bottom-mode-select">
-                      <SelectValue placeholder={t('preferences.sidePanelBottomMode')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="bottom-full">{t('preferences.sidePanelBottomModeFull')}</SelectItem>
-                      <SelectItem value="bottom">{t('preferences.sidePanelBottomModeContent')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <SettingRow title={t('preferences.sidePanelBottomMode')} description={t('preferences.sidePanelBottomModeDescription')}>
+                    <Select
+                      value={sidePanelBottomMode}
+                      onValueChange={(value) => setSidePanelBottomMode(value as SidePanelBottomMode)}
+                    >
+                      <SelectTrigger className="w-full" data-testid="side-panel-bottom-mode-select">
+                        <SelectValue placeholder={t('preferences.sidePanelBottomMode')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="bottom-full">{t('preferences.sidePanelBottomModeFull')}</SelectItem>
+                        <SelectItem value="bottom">{t('preferences.sidePanelBottomModeContent')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                </SettingRow>
               </div>
 
               {/* Chat defaults - V312 per-(user, workspace) chat options. The EDITOR lives only
                   on the Agents page "Settings" tab, with the agents it configures. This row is
                   the signpost for anyone who still looks for it under Preferences; it reads the
                   same /v3/chat/defaults store on the other side. */}
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-xl bg-theme-secondary flex items-center justify-center">
-                    <MessageSquare className="w-5 h-5 text-theme-primary" />
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-theme-primary">{t('preferences.chatDefaultsTitle')}</h4>
-                    <p className="text-sm text-theme-secondary">{t('preferences.chatDefaultsDescription')}</p>
-                  </div>
+              <SettingRow title={t('preferences.chatDefaultsTitle')} description={t('preferences.chatDefaultsDescription')}>
+                {/* Wraps rather than nowrap: in French or German the label is wider than the
+                    control column and spilled over the description. */}
+                <div className="flex @lg:justify-end">
+                  <Link
+                    href="/app/agent?view=settings"
+                    className="inline-flex items-center gap-1 text-sm font-medium text-[var(--accent-primary)] hover:underline @lg:text-end"
+                  >
+                    {t('preferences.chatDefaultsLink')}
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </Link>
                 </div>
-                <Link
-                  href="/app/agent?view=settings"
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--accent-primary)] hover:underline whitespace-nowrap"
-                >
-                  {t('preferences.chatDefaultsLink')}
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </Link>
-              </div>
+              </SettingRow>
             </div>
           </TabsContent>
 
@@ -1051,13 +917,14 @@ export default function SettingsOverviewPage() {
 
           {/* Advanced Tab */}
           <TabsContent value="advanced" className="space-y-6">
+            <PageHeader icon={Settings} title={t('tabs.advanced')} subtitle={t('advanced.description')} headingLevel="h2" />
             <div className="border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 rounded-lg p-6">
-              <div className="flex items-start space-x-3">
-                <Trash2 className="w-6 h-6 text-red-600 mt-0.5" />
-                <div className="flex-1">
-                  <h4 className="font-medium text-red-800 dark:text-red-200 mb-2">
+              <div className="flex items-start gap-3">
+                <Trash2 className="w-6 h-6 shrink-0 text-red-600 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-medium text-red-800 dark:text-red-200 mb-2">
                     {t('advanced.deleteTitle')}
-                  </h4>
+                  </h3>
                   <p className="text-sm text-red-700 dark:text-red-300 mb-4">
                     {t('advanced.deleteWarning')}
                   </p>

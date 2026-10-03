@@ -120,6 +120,72 @@ describe('useCanvasContextMenuActions', () => {
     expect(selUpdater(['A', 'B'])).toEqual(['B']);
   });
 
+  describe('notes attached to a node', () => {
+    const note = (id: string, anchor?: string): Node<BuilderNodeData> => ({
+      id,
+      type: 'noteNode',
+      position: { x: 0, y: -150 },
+      data: { id, label: id, kind: 'action', noteText: 'x', ...(anchor ? { noteAttachedTo: anchor } : {}) } as BuilderNodeData,
+    });
+
+    it('deleteNode removes the notes attached to the node, and only those', () => {
+      const nodes = [node('A'), node('B'), note('nA', 'A'), note('nB', 'B'), note('free')];
+      const { actions, setNodes, setSelectedNodeIds } = setup({ nodes });
+      actions.deleteNode('A');
+
+      const nodesUpdater = setNodes.mock.calls[0][0] as (prev: Node<BuilderNodeData>[]) => Node<BuilderNodeData>[];
+      expect(nodesUpdater(nodes).map((n) => n.id)).toEqual(['B', 'nB', 'free']);
+      const selUpdater = setSelectedNodeIds.mock.calls[0][0] as (prev: string[]) => string[];
+      expect(selUpdater(['A', 'nA', 'B'])).toEqual(['B']);
+    });
+
+    it('deleteSelection removes the notes of every selected node', () => {
+      const nodes = [node('A'), node('B'), note('nA', 'A'), note('nB', 'B')];
+      const { actions, setNodes } = setup({ nodes, selectedNodeIds: ['A', 'B'] });
+      actions.deleteSelection();
+
+      const nodesUpdater = setNodes.mock.calls[0][0] as (prev: Node<BuilderNodeData>[]) => Node<BuilderNodeData>[];
+      expect(nodesUpdater(nodes)).toEqual([]);
+    });
+
+    it('addNoteNear attaches the new note to the node it was added from', () => {
+      const { actions, onCreateNode } = setup({ nodes: [node('A')] });
+      actions.addNoteNear('A');
+      expect(onCreateNode.mock.calls[0][0].initialData).toEqual({ noteAttachedTo: 'A' });
+    });
+
+    it('pasting a node with its note attaches the copied note to the copied node', () => {
+      nodeClipboard.set({ nodes: [node('A'), note('nA', 'A')], edges: [] });
+      const { actions, setNodes } = setup();
+      actions.paste({ x: 500, y: 500 });
+
+      const pasted = (setNodes.mock.calls[0][0] as (p: Node<BuilderNodeData>[]) => Node<BuilderNodeData>[])([]);
+      const [copiedNode, copiedNote] = pasted;
+      expect(copiedNote.data.noteAttachedTo).toBe(copiedNode.id);
+    });
+
+    it('pasting a note without its node into a canvas without that node makes it a free note', () => {
+      nodeClipboard.set({ nodes: [note('nA', 'A')], edges: [] });
+      const { actions, setNodes } = setup({ nodes: [node('X')], edges: [] });
+      actions.paste({ x: 500, y: 500 });
+
+      const pasted = (setNodes.mock.calls[0][0] as (p: Node<BuilderNodeData>[]) => Node<BuilderNodeData>[])([]);
+      expect(pasted[0].data.noteAttachedTo).toBeUndefined();
+    });
+  });
+
+  it('duplicating a note alone on its own canvas keeps it on the same node', () => {
+    const nodes = [node('A'), {
+      id: 'nA', type: 'noteNode', position: { x: 0, y: -150 },
+      data: { id: 'nA', label: 'nA', kind: 'action', noteText: 'x', noteAttachedTo: 'A' } as BuilderNodeData,
+    }];
+    const { actions, setNodes } = setup({ nodes, edges: [] });
+    actions.duplicateNode('nA');
+
+    const copies = (setNodes.mock.calls[0][0] as (p: Node<BuilderNodeData>[]) => Node<BuilderNodeData>[])([]);
+    expect(copies[0].data.noteAttachedTo).toBe('A');
+  });
+
   it('selectAll selects every node id', () => {
     const { actions, setSelectedNodeIds } = setup();
     actions.selectAll();

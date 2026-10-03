@@ -450,6 +450,49 @@ class WorkflowPublicationServiceShowcaseEpochClearTest {
     }
 
     @Test
+    @DisplayName("LC-066: a showcase withheld for Gmail/Drive data still publishes, with its epoch pin, and stores only the withheld header")
+    void publishWorkflowWithWithheldShowcaseSucceedsWithoutPreview() {
+        Map<String, Object> withheld = new HashMap<>(Map.of(
+                "version", 1, "sourceRunId", "run-publish", "sourceEpoch", 2,
+                "showcaseWithheld", "RESTRICTED_DATA"));
+        stubPublishWorkflow(withheld, 2);
+
+        WorkflowPublicationEntity published = service.publishWorkflow(
+                WORKFLOW_ID, TENANT_ID, null, "Published title", "Published description",
+                INTERFACE_ID, "run-publish", null, 0, PublicationVisibility.PUBLIC, null,
+                DisplayMode.INTERFACE, 2, false, Map.of("https://img/x.png", TENANT_ID + "/x.png"), null);
+
+        assertThat(published.getShowcaseChosenEpoch()).isEqualTo(2);
+        assertThat(published.getShowcaseSnapshot())
+                .containsEntry("showcaseWithheld", "RESTRICTED_DATA")
+                .doesNotContainKeys("runState", "interfaceRenders", "imageReplacements");
+        assertThat(published.getShowcaseSnapshotCapturedAt()).isNotNull();
+        // Nothing to copy into the publication namespace: no run state, no replacement image.
+        verify(orchestratorClient, never()).copyFile(any(), any());
+    }
+
+    @Test
+    @DisplayName("LC-066: an image replacement is not applied to a withheld showcase")
+    void imageReplacementIsNotAppliedToAWithheldShowcase() {
+        WorkflowPublicationEntity publication = publicationWithEpoch(null);
+        publication.setShowcaseSnapshot(new HashMap<>(Map.of(
+                "version", 1, "sourceRunId", "run-same", "showcaseWithheld", "RESTRICTED_DATA")));
+        publication.setShowcaseRunId("run-same");
+        publication.setDisplayMode(DisplayMode.INTERFACE);
+        stubUpdate(publication);
+        when(orchestratorClient.validateShowcaseRun("run-same", TENANT_ID, null))
+                .thenReturn(Map.of("isStepByStep", false, "publishable", true, "status", "COMPLETED"));
+
+        WorkflowPublicationEntity updated = service.updatePublicationInfo(
+                PUBLICATION_ID, TENANT_ID, null, "Updated title", "Updated description",
+                INTERFACE_ID, "run-same", null, 0, PublicationVisibility.PRIVATE, DisplayMode.INTERFACE,
+                null, false, true, Map.of("https://img/x.png", TENANT_ID + "/x.png"), null);
+
+        assertThat(updated.getShowcaseSnapshot()).doesNotContainKey("imageReplacements");
+        verify(orchestratorClient, never()).copyFile(any(), any());
+    }
+
+    @Test
     @DisplayName("publishWorkflow rejects an empty aggregated byEpoch key as a nonexistent showcase epoch")
     void publishWorkflowRejectsEmptyAggregatedEpochKey() {
         Map<String, Object> emptyEpochSnapshot = Map.of(
@@ -781,7 +824,7 @@ class WorkflowPublicationServiceShowcaseEpochClearTest {
         assertThat(tableNode)
                 .doesNotContainKey("_snapshot_ds_name")
                 .doesNotContainKey("_snapshot_ds_items");
-        verify(dataSourceClient, never()).getAllItems(42L, TENANT_ID, organizationId);
+        verify(dataSourceClient, never()).copyAllItems(42L, TENANT_ID, organizationId);
     }
 
     @Test

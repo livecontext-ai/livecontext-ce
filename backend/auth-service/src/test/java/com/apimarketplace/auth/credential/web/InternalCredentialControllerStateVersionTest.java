@@ -51,7 +51,7 @@ class InternalCredentialControllerStateVersionTest {
         when(credentialService.getCredentialStateVersion("tenant-5", "org-1")).thenReturn("3:1700000000000");
 
         ResponseEntity<Map<String, Object>> response =
-                controller.getCredentialStateVersion("tenant-5", "org-1");
+                controller.getCredentialStateVersion("tenant-5", "org-1", "tenant-5");
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(response.getBody()).containsEntry("version", "3:1700000000000");
@@ -64,7 +64,7 @@ class InternalCredentialControllerStateVersionTest {
         when(credentialService.getCredentialStateVersion("tenant-5", null)).thenReturn("2:42");
 
         ResponseEntity<Map<String, Object>> response =
-                controller.getCredentialStateVersion("tenant-5", null);
+                controller.getCredentialStateVersion("tenant-5", null, "tenant-5");
 
         assertThat(response.getBody()).containsEntry("version", "2:42");
     }
@@ -79,6 +79,7 @@ class InternalCredentialControllerStateVersionTest {
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                         .get("/api/internal/credentials/state-version")
                         .queryParam("userId", "tenant-5")
+                        .header("X-User-ID", "tenant-5")
                         .header("X-Organization-ID", "org-1"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
@@ -88,7 +89,8 @@ class InternalCredentialControllerStateVersionTest {
         when(credentialService.getCredentialStateVersion("tenant-5", null)).thenReturn("2:42");
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                         .get("/api/internal/credentials/state-version")
-                        .queryParam("userId", "tenant-5"))
+                        .queryParam("userId", "tenant-5")
+                        .header("X-User-ID", "tenant-5"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.version").value("2:42"));

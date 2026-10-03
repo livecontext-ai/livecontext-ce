@@ -644,6 +644,7 @@ export const ParameterColumn = (props: ParameterColumnProps) => {
               data={data}
               onUpdate={onUpdate}
               isRunMode={isRunMode}
+              allNodes={allNodes}
             />
           ) : null}
 

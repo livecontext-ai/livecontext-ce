@@ -110,12 +110,12 @@ export function TwoFactorSettingsCard({ standalone = false }: { standalone?: boo
   return (
     <div className="rounded-lg border border-theme bg-theme-tertiary p-6 space-y-4" data-testid="two-factor-card">
       <div className="flex items-start justify-between gap-4">
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 shrink-0 bg-theme-secondary rounded-xl flex items-center justify-center">
             <KeyRound className="w-5 h-5 text-theme-primary" />
           </div>
-          <div>
-            <h4 className="text-base font-semibold text-theme-primary">{t('title')}</h4>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-theme-primary">{t('title')}</h3>
             <p className="text-sm text-theme-secondary">{t('description')}</p>
           </div>
         </div>
@@ -147,7 +147,7 @@ export function TwoFactorSettingsCard({ standalone = false }: { standalone?: boo
           {devices.map((device) => (
             <li
               key={device.id}
-              className="flex items-center justify-between gap-3 rounded-md border border-theme bg-theme-primary px-3 py-2"
+              className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-md border border-theme bg-theme-primary px-3 py-2"
             >
               <div className="flex items-center gap-2 min-w-0">
                 <Smartphone className="h-3.5 w-3.5 shrink-0 text-theme-secondary" />
@@ -176,8 +176,8 @@ export function TwoFactorSettingsCard({ standalone = false }: { standalone?: boo
 
       {data?.totpEnabled && (
         <div className="rounded-md border border-theme bg-theme-primary p-3 space-y-2" data-testid="recovery-codes">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-start gap-2 min-w-0">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-2 min-w-0 flex-1 basis-56">
               <LifeBuoy className="h-3.5 w-3.5 mt-0.5 shrink-0 text-theme-secondary" />
               <div className="min-w-0">
                 <p className="text-sm font-medium text-theme-primary">{t('recoveryTitle')}</p>

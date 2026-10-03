@@ -322,6 +322,20 @@ class UrlSafetyValidatorTest {
     @DisplayName("Template placeholders - {identifier} tolerance")
     class TemplatePlaceholders {
 
+        /**
+         * INVERTED for LC-007 (security audit 2026-08-13). This assertion used to be
+         * {@code assertDoesNotThrow}, and that tolerance WAS the vulnerability:
+         * {@code validateUrl} returned successfully without resolving DNS whenever the host
+         * still held a placeholder, on the written assumption that "the execution layer
+         * re-validates the fully substituted URL". No such re-validation existed, so a caller
+         * could keep a placeholder in the host, pass the only SSRF gate, and have the value
+         * substituted from its own credential data on the way to the request.
+         *
+         * <p>Nothing legitimate CONNECTS to a templated hostname. The registration path, which
+         * genuinely handles templates (158 shipped catalog APIs declare one), uses
+         * {@code validateUrlFormat} instead: see the test immediately below, which still passes
+         * on the same inputs.
+         */
         @ParameterizedTest
         @ValueSource(strings = {
             "https://{account}.api-us1.com/api/3",
@@ -329,8 +343,20 @@ class UrlSafetyValidatorTest {
             "https://monitoring.{region}.amazonaws.com",
             "https://{tenant}.{region}.example.com/v1"
         })
-        @DisplayName("validateUrl should accept URLs with {placeholder} tokens in host")
-        void validateUrlAcceptsPlaceholders(String url) {
+        @DisplayName("validateUrl must REFUSE a URL whose host still holds a {placeholder}")
+        void validateUrlRefusesPlaceholdersInHost(String url) {
+            assertThrows(IllegalArgumentException.class,
+                () -> UrlSafetyValidator.validateUrl(url));
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "https://example.com/v1/{id}/messages",
+            "https://example.com/v1?q={term}"
+        })
+        @DisplayName("a placeholder outside the authority is not the host's problem")
+        void validateUrlToleratesPlaceholdersOutsideTheHost(String url) {
+            // The authority is concrete here, so the DNS + IP check runs and decides normally.
             assertDoesNotThrow(() -> UrlSafetyValidator.validateUrl(url));
         }
 
@@ -346,10 +372,13 @@ class UrlSafetyValidatorTest {
         }
 
         @Test
-        @DisplayName("placeholder-tolerance still rejects non-HTTP schemes")
+        @DisplayName("placeholder handling still rejects non-HTTP schemes")
         void placeholderStillRejectsBadScheme() {
             assertThrows(IllegalArgumentException.class,
                 () -> UrlSafetyValidator.validateUrl("ftp://{host}.example.com/x"));
+            // The registration-time check must reject it too, template or not.
+            assertThrows(IllegalArgumentException.class,
+                () -> UrlSafetyValidator.validateUrlFormat("ftp://{host}.example.com/x"));
         }
 
         @Test

@@ -15,7 +15,7 @@ const sentiments: Array<{
   { id: 'down', icon: ThumbsDown, activeClass: 'bg-rose-100 dark:bg-rose-900/40 ring-2 ring-black/30 dark:ring-white/30', activeFill: 'text-black dark:text-white' },
 ];
 
-export function SentimentCell({ value, rowKey, field, onSaveAndExit }: VisualCellProps) {
+export function SentimentCell({ value, rowKey, field, onSaveAndExit, readOnly }: VisualCellProps) {
   const current = (typeof value === 'string' ? value : 'neutral') as 'up' | 'down' | 'neutral';
 
   return (
@@ -26,14 +26,15 @@ export function SentimentCell({ value, rowKey, field, onSaveAndExit }: VisualCel
           <button
             key={`${rowKey}-${field}-${id}`}
             type="button"
+            disabled={readOnly}
             onClick={(e) => {
               e.stopPropagation();
               onSaveAndExit(active ? 'neutral' : id);
             }}
-            className={`flex h-8 w-8 items-center justify-center rounded-xl transition-all ${
+            className={`flex h-8 w-8 items-center justify-center rounded-xl transition-all disabled:cursor-default! ${
               active
                 ? activeClass
-                : 'bg-slate-100 dark:bg-slate-800 opacity-40 hover:opacity-100 group-hover/cell:opacity-70'
+                : `bg-slate-100 dark:bg-slate-800 opacity-40 enabled:hover:opacity-100 ${readOnly ? '' : 'group-hover/cell:opacity-70'}`
             }`}
           >
             <Icon className={`h-4.5 w-4.5 ${active ? activeFill : 'text-slate-400 dark:text-slate-500'}`} />

@@ -58,6 +58,82 @@ class OrchestratorInternalClientTest {
     }
 
     @Test
+    @DisplayName("LC-066: runRestriction returns the orchestrator's definite answer")
+    void runRestrictionReturnsTheAnswer() {
+        String url = BASE_URL + "/api/internal/publication-support/runs/run_a/restricted";
+        server.expect(requestTo(url)).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"runExists\":true,\"restricted\":true}", MediaType.APPLICATION_JSON));
+        String clean = BASE_URL + "/api/internal/publication-support/runs/run_c/restricted";
+        server.expect(requestTo(clean)).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"runExists\":true,\"restricted\":false}", MediaType.APPLICATION_JSON));
+
+        assertThat(client.runRestriction("run_a")).isEqualTo(OrchestratorInternalClient.RunRestriction.RESTRICTED);
+        assertThat(client.runRestriction("run_c")).isEqualTo(OrchestratorInternalClient.RunRestriction.NOT_RESTRICTED);
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("LC-066 r5-3: a restricted answer carries when the run became restricted; absent or unreadable is unknown (null)")
+    void runRestrictionAnswerCarriesTheFirstRestrictedMoment() {
+        String dated = BASE_URL + "/api/internal/publication-support/runs/run_a/restricted";
+        server.expect(requestTo(dated)).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"runExists\":true,\"restricted\":true,"
+                        + "\"firstRestrictedAt\":\"2026-09-20T10:15:30Z\"}", MediaType.APPLICATION_JSON));
+        String undated = BASE_URL + "/api/internal/publication-support/runs/run_b/restricted";
+        server.expect(requestTo(undated)).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"runExists\":true,\"restricted\":true}", MediaType.APPLICATION_JSON));
+        String garbled = BASE_URL + "/api/internal/publication-support/runs/run_c/restricted";
+        server.expect(requestTo(garbled)).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"runExists\":true,\"restricted\":true,\"firstRestrictedAt\":\"yesterday\"}",
+                        MediaType.APPLICATION_JSON));
+
+        OrchestratorInternalClient.RunRestrictionAnswer a = client.runRestrictionAnswer("run_a");
+        assertThat(a.status()).isEqualTo(OrchestratorInternalClient.RunRestriction.RESTRICTED);
+        assertThat(a.firstRestrictedAt()).isEqualTo(java.time.Instant.parse("2026-09-20T10:15:30Z"));
+        assertThat(client.runRestrictionAnswer("run_b").firstRestrictedAt()).isNull();
+        assertThat(client.runRestrictionAnswer("run_c").firstRestrictedAt()).isNull();
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("LC-066: a deleted source run is reported as RUN_GONE")
+    void runRestrictionReportsADeletedRun() {
+        String url = BASE_URL + "/api/internal/publication-support/runs/run_gone/restricted";
+        server.expect(requestTo(url)).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"runExists\":false}", MediaType.APPLICATION_JSON));
+
+        assertThat(client.runRestriction("run_gone")).isEqualTo(OrchestratorInternalClient.RunRestriction.RUN_GONE);
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("LC-066: runRestriction answers UNKNOWN, never NOT_RESTRICTED, when the lookup fails")
+    void runRestrictionIsUnknownOnFailure() {
+        String url = BASE_URL + "/api/internal/publication-support/runs/run_b/restricted";
+        server.expect(requestTo(url)).andExpect(method(HttpMethod.GET))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators.withServerError());
+
+        assertThat(client.runRestriction("run_b")).isEqualTo(OrchestratorInternalClient.RunRestriction.UNKNOWN);
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("LC-066 regression: an orchestrator that predates the endpoint (404) or the runExists key is UNKNOWN, never NOT_RESTRICTED")
+    void runRestrictionIsUnknownOnAnOlderOrchestrator() {
+        String missing = BASE_URL + "/api/internal/publication-support/runs/run_d/restricted";
+        server.expect(requestTo(missing)).andExpect(method(HttpMethod.GET))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                        .withStatus(org.springframework.http.HttpStatus.NOT_FOUND));
+        String oldShape = BASE_URL + "/api/internal/publication-support/runs/run_e/restricted";
+        server.expect(requestTo(oldShape)).andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("{\"restricted\":false}", MediaType.APPLICATION_JSON));
+
+        assertThat(client.runRestriction("run_d")).isEqualTo(OrchestratorInternalClient.RunRestriction.UNKNOWN);
+        assertThat(client.runRestriction("run_e")).isEqualTo(OrchestratorInternalClient.RunRestriction.UNKNOWN);
+        server.verify();
+    }
+
+    @Test
     @DisplayName("getAcquiredWorkflows sends organization scope to orchestrator")
     void getAcquiredWorkflowsSendsOrganizationScope() {
         String expectedUrl = BASE_URL + "/api/internal/publication-support/workflows/acquired/" + TENANT_ID

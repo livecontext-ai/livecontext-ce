@@ -253,6 +253,20 @@ public class AgentWorkflowFireService {
      */
     public TriggerExecutionResult fire(WorkflowRunEntity run, Trigger trigger,
                                        Map<String, Object> payload) {
+        return fire(run, trigger, payload, false);
+    }
+
+    /**
+     * Same, from a calling execution that may hold Gmail / Drive content (CASA LC-066). The agent
+     * writes {@code data_inputs} itself, so a restricted chat or agent can hand that content to the
+     * run: the fire then carries {@code ReusableTriggerService.RESTRICTED_DATA_MARKER}, and the
+     * replica that runs it marks the run restricted before its first payload is written, exactly as
+     * a chained workflow fired by a restricted upstream run is.
+     *
+     * @param restrictedCaller true when the caller's execution is tagged restricted
+     */
+    public TriggerExecutionResult fire(WorkflowRunEntity run, Trigger trigger,
+                                       Map<String, Object> payload, boolean restrictedCaller) {
         TriggerType type = TriggerType.fromString(trigger.type());
         validateFireable(type);
         if (type == TriggerType.FORM) {
@@ -265,6 +279,9 @@ public class AgentWorkflowFireService {
         // engine to skip its workflow.plan refresh.
         Map<String, Object> sanitized =
                 com.apimarketplace.orchestrator.trigger.ReusableTriggerService.sanitizePlanMarker(payload);
+        if (restrictedCaller) {
+            sanitized = com.apimarketplace.orchestrator.trigger.ReusableTriggerService.withRestrictedDataMarker(sanitized);
+        }
         log.info("[AgentFire] Firing trigger={} type={} on run={}", triggerId, type, run.getRunIdPublic());
         return reusableTriggerService.executeTrigger(run, triggerId, type, sanitized);
     }

@@ -197,6 +197,24 @@ public class AgentTaskService {
     private TaskLabelService taskLabelService;
 
     /**
+     * CASA LC-066: resolves the model execution link of an assignee or reviewer, so a RESTRICTED
+     * task is refused before dispatch when the provider that would RECEIVE it may not
+     * ({@link #restrictedProviderRefusal}). Optional so the test-only constructors stay as they
+     * are; unwired, the agent's own provider decides.
+     */
+    @Autowired(required = false)
+    private com.apimarketplace.agent.service.execution.ExecutionLinkRouter executionLinkRouter;
+
+    /**
+     * Swaps a disabled model for its replacement (V515) before {@link #restrictedProviderRefusal}
+     * resolves the execution link, so the refusal judges the provider that will really run, as the
+     * dispatch itself does. Optional for the test-only constructors (null = no swap). No new bean
+     * cycle: {@code ExecutionLinkRouter} above already depends on it.
+     */
+    @Autowired(required = false)
+    private ModelReplacementResolver modelReplacementResolver;
+
+    /**
      * Self-reference used to invoke {@link #recordEvent} via the Spring proxy,
      * so the method's {@code REQUIRES_NEW} advice actually kicks in. {@link Lazy}
      * avoids the circular-reference error at startup.
@@ -351,6 +369,22 @@ public class AgentTaskService {
                                        String callingUserId,
                                        CreateTaskRequest request,
                                        boolean autoTriggerWorker) {
+        return assignTask(tenantId, callingAgentId, callingUserId, request, autoTriggerWorker,
+                com.apimarketplace.common.classification.DataSensitivity.NORMAL);
+    }
+
+    /**
+     * Same, written from an execution of the given sensitivity (CASA LC-066). A task written from
+     * an execution that holds Gmail / Drive content may carry it in its title, instructions or
+     * context, so it is stored RESTRICTED and every execution that works on it is tagged restricted
+     * (see {@link #executeAgentForTask}). A subtask of a RESTRICTED task is RESTRICTED too.
+     */
+    public AgentTaskEntity assignTask(String tenantId,
+                                       UUID callingAgentId,
+                                       String callingUserId,
+                                       CreateTaskRequest request,
+                                       boolean autoTriggerWorker,
+                                       com.apimarketplace.common.classification.DataSensitivity sensitivity) {
         Objects.requireNonNull(tenantId, "tenantId");
         Objects.requireNonNull(request, "request");
         if (isBlank(request.title())) {
@@ -440,6 +474,7 @@ public class AgentTaskService {
         // 2. Otherwise, implicit inference from calling agent's in-progress task
         UUID parentTaskId = null;
         int depth = 0;
+        boolean restricted = sensitivity != null && sensitivity.isRestricted();
         if (request.parentTaskId() != null) {
             AgentTaskEntity parent = findTaskByIdScoped(request.parentTaskId(), tenantId)
                     .orElseThrow(() -> new IllegalArgumentException("parent task not found: " + request.parentTaskId()));
@@ -449,6 +484,7 @@ public class AgentTaskService {
             }
             parentTaskId = parent.getId();
             depth = parent.getDepth() + 1;
+            restricted |= parent.holdsRestrictedData();
         } else if (callingAgentId != null) {
             Optional<AgentTaskEntity> parent = taskRepository
                     .findTopByTenantIdAndAssignedToAgentIdAndStatusOrderByStartedAtDesc(
@@ -461,6 +497,7 @@ public class AgentTaskService {
                 }
                 parentTaskId = p.getId();
                 depth = p.getDepth() + 1;
+                restricted |= p.holdsRestrictedData();
             }
         }
 
@@ -512,6 +549,9 @@ public class AgentTaskService {
         task.setDepth(depth);
         task.setDueBy(request.dueBy());
         task.setMaxReviewAttempts(maxReviewAttempts);
+        if (restricted) {
+            task.setDataSensitivity(com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+        }
 
         // Human-aware "assigned_to" marker for the audit event + log line.
         String assignedToDisplay = assigneeId != null ? assigneeId.toString()
@@ -1256,6 +1296,17 @@ public class AgentTaskService {
     @Transactional
     public AgentTaskEntity completeTask(String tenantId, UUID taskId, UUID agentId, String result, boolean force,
                                         UUID reviewerExecutionId) {
+        return completeTask(tenantId, taskId, agentId, result, force, reviewerExecutionId, null);
+    }
+
+    /**
+     * As {@link #completeTask(String, UUID, UUID, String, boolean, UUID)}; a restricted
+     * {@code callerSensitivity} ratchets the task to RESTRICTED (CASA LC-066) in this transaction,
+     * once the caller's submission went through, so a refused call tags nothing.
+     */
+    @Transactional
+    public AgentTaskEntity completeTask(String tenantId, UUID taskId, UUID agentId, String result, boolean force,
+                                        UUID reviewerExecutionId, com.apimarketplace.common.classification.DataSensitivity callerSensitivity) {
         if (result != null && utf8Bytes(result) > MAX_RESULT_BYTES) {
             throw new IllegalArgumentException("result exceeds maximum size of " + MAX_RESULT_BYTES + " bytes");
         }
@@ -1294,6 +1345,7 @@ public class AgentTaskService {
         if (updated == 0) {
             throw new IllegalStateException(wrongActionHint(taskId, tenantId, agentId, "complete"));
         }
+        ratchetRestricted(taskId, callerSensitivity);
         AgentTaskEntity task = findTaskByIdScoped(taskId, tenantId).orElseThrow();
         self.recordEvent(taskId, AgentTaskEventEntity.EVT_SUBMITTED_FOR_REVIEW, agentId, null,
                 Map.of("status", "in_progress"), Map.of("status", "in_review"));
@@ -1322,6 +1374,17 @@ public class AgentTaskService {
     @Transactional
     public AgentTaskEntity rejectTask(String tenantId, UUID taskId, UUID agentId, String reason,
                                       UUID reviewerExecutionId) {
+        return rejectTask(tenantId, taskId, agentId, reason, reviewerExecutionId, null);
+    }
+
+    /**
+     * As {@link #rejectTask(String, UUID, UUID, String, UUID)}; a restricted
+     * {@code callerSensitivity} ratchets the task to RESTRICTED (CASA LC-066) in this transaction,
+     * once the caller's failure report went through, so a refused call tags nothing.
+     */
+    @Transactional
+    public AgentTaskEntity rejectTask(String tenantId, UUID taskId, UUID agentId, String reason,
+                                      UUID reviewerExecutionId, com.apimarketplace.common.classification.DataSensitivity callerSensitivity) {
         String effectiveReason = reason == null ? "rejected by agent" : reason;
 
         // Role-rerouting: same idea as completeTask - a reviewer calling task_reject on an
@@ -1333,7 +1396,7 @@ public class AgentTaskService {
                 && AgentTaskEntity.STATUS_IN_REVIEW.equals(existing.getStatus())) {
             logger.warn("[TaskReview] Rerouting task_reject→task_reject_review for task {} by reviewer {} (caller is reviewer, not assignee)",
                     taskId, agentId);
-            return rejectReview(tenantId, taskId, agentId, reviewerExecutionId, effectiveReason);
+            return rejectReview(tenantId, taskId, agentId, reviewerExecutionId, effectiveReason, callerSensitivity);
         }
 
         // Cascade-cancel active children: parent failure invalidates the subtree
@@ -1348,6 +1411,7 @@ public class AgentTaskService {
         if (updated == 0) {
             throw new IllegalStateException(wrongActionHint(taskId, tenantId, agentId, "reject"));
         }
+        ratchetRestricted(taskId, callerSensitivity);
         AgentTaskEntity task = findTaskByIdScoped(taskId, tenantId).orElseThrow();
         self.recordEvent(taskId, AgentTaskEventEntity.EVT_SUBMITTED_FOR_REVIEW, agentId, null,
                 Map.of("status", "in_progress"),
@@ -1403,6 +1467,18 @@ public class AgentTaskService {
     @Transactional
     public AgentTaskEntity rejectReview(String tenantId, UUID taskId, UUID reviewerAgentId,
                                         UUID reviewerExecutionId, String reason) {
+        return rejectReview(tenantId, taskId, reviewerAgentId, reviewerExecutionId, reason, null);
+    }
+
+    /**
+     * As {@link #rejectReview(String, UUID, UUID, UUID, String)}; a restricted
+     * {@code callerSensitivity} ratchets the task to RESTRICTED (CASA LC-066) in this transaction,
+     * once the reviewer's rejection (or the auto-fail it triggers) went through, so a refused call
+     * tags nothing.
+     */
+    @Transactional
+    public AgentTaskEntity rejectReview(String tenantId, UUID taskId, UUID reviewerAgentId,
+                                        UUID reviewerExecutionId, String reason, com.apimarketplace.common.classification.DataSensitivity callerSensitivity) {
         requireReviewerExecutionToken(reviewerExecutionId, "reject_review");
         String effectiveReason = reason == null ? "review rejected" : reason;
 
@@ -1431,6 +1507,7 @@ public class AgentTaskService {
                 // The CAS lost between the increment and the fail UPDATE - task already terminal.
                 throw new IllegalStateException(wrongReviewerActionHint(taskId, tenantId, reviewerAgentId, "reject_review"));
             }
+            ratchetRestricted(taskId, callerSensitivity);
             return failedTask;
         }
 
@@ -1441,6 +1518,7 @@ public class AgentTaskService {
         if (updated == 0) {
             throw new IllegalStateException(wrongReviewerActionHint(taskId, tenantId, reviewerAgentId, "reject_review"));
         }
+        ratchetRestricted(taskId, callerSensitivity);
         AgentTaskEntity task = findTaskByIdScoped(taskId, tenantId).orElseThrow();
         self.recordEvent(taskId, AgentTaskEventEntity.EVT_REVIEW_REJECTED, reviewerAgentId, null,
                 Map.of("status", "in_review"),
@@ -1505,6 +1583,25 @@ public class AgentTaskService {
                                        UUID callingAgentId,
                                        String callingUserId,
                                        UpdateTaskRequest request) {
+        return updateTask(tenantId, taskId, callingAgentId, callingUserId, request,
+                com.apimarketplace.common.classification.DataSensitivity.NORMAL);
+    }
+
+    /**
+     * Same as {@link #updateTask(String, UUID, UUID, String, UpdateTaskRequest)}, plus the
+     * classification of the execution writing the update (CASA LC-066). A RESTRICTED caller that
+     * writes the title or the instructions (the text the assignee's prompt is built from) ratchets
+     * the task to RESTRICTED in the same transaction, so a refused or invalid update tags nothing,
+     * a metadata-only update (status, priority, assignee...) tags nothing, and the kickoff this
+     * update may fire already runs with the tag.
+     */
+    @Transactional
+    public AgentTaskEntity updateTask(String tenantId,
+                                       UUID taskId,
+                                       UUID callingAgentId,
+                                       String callingUserId,
+                                       UpdateTaskRequest request,
+                                       com.apimarketplace.common.classification.DataSensitivity callerSensitivity) {
         AgentTaskEntity task = findTaskByIdScoped(taskId, tenantId)
                 .orElseThrow(() -> new IllegalArgumentException("task not found: " + taskId));
 
@@ -1793,6 +1890,12 @@ public class AgentTaskService {
                 task.setMaxReviewAttempts(cap);
                 newVals.put("max_review_attempts", cap);
             }
+        }
+
+        // CASA LC-066: every validation above has passed; ratchet only when prompt text is written.
+        if (callerSensitivity != null && callerSensitivity.isRestricted()
+                && (request.title() != null || request.instructions() != null)) {
+            task.setDataSensitivity(com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
         }
 
         if (!statusEventRecorded && !newVals.isEmpty()) {
@@ -2345,12 +2448,33 @@ public class AgentTaskService {
 
             String model = reviewer.modelName();
             String provider = reviewer.modelProvider();
+            boolean restricted = lockedTask.holdsRestrictedData();
 
-            // Use the reviewer's existing conversation (one conversation per agent)
-            String conversationId = conversationClient.findOrCreateAgentConversation(
-                    reviewerAgentId.toString(), tenantId, reviewer.name(), lockedTask.getOrganizationId());
+            // LC-066: a reviewer whose model may not receive Gmail / Drive content cannot review a
+            // RESTRICTED task. Refused here, before anything is stored in any conversation, and
+            // the task is failed with the refusal (retrying on the same model cannot succeed).
+            String refusal = restricted ? restrictedProviderRefusal(provider, model, "TASK_REVIEW") : null;
+            if (refusal != null) {
+                logger.warn("[TaskReview] Reviewer agent {} refused for RESTRICTED task {}: provider may not "
+                        + "receive restricted data", reviewerAgentId, taskId);
+                self.autoFailAfterReviewerRejection(taskId, tenantId, reviewerAgentId, executionId, refusal);
+                return;
+            }
+
+            // The reviewer's own conversation (one conversation per agent), except for a
+            // RESTRICTED task: its turn runs in the task's own conversation (LC-066), so the
+            // reviewer's conversation does not become restricted for good.
+            String conversationId = restricted
+                    ? conversationClient.findOrCreateTaskConversation(reviewerAgentId.toString(), taskId.toString(),
+                            tenantId, taskConversationTitle(reviewer.name(), taskId), lockedTask.getOrganizationId())
+                    : conversationClient.findOrCreateAgentConversation(
+                            reviewerAgentId.toString(), tenantId, reviewer.name(), lockedTask.getOrganizationId());
             if (conversationId == null) {
-                logger.error("[TaskReview] Failed to create conversation for reviewer agent {}", reviewerAgentId);
+                logger.error("[TaskReview] Failed to create {} conversation for reviewer agent {}",
+                        restricted ? "the task's" : "a", reviewerAgentId);
+                // A failed review attempt like any other: counted against the cap, so a lasting
+                // error auto-fails the task instead of retrying it forever.
+                handleReviewerFailureToAct(taskId, tenantId, reviewerAgentId, executionId);
                 return;
             }
 
@@ -2360,7 +2484,8 @@ public class AgentTaskService {
             var result = conversationClient.sendChatSync(
                     tenantId, conversationId, prompt,
                     reviewerAgentId.toString(), model, provider, "TASK_REVIEW", taskId.toString(),
-                    lockedTask.getOrganizationId(), executionId.toString(), executionId.toString());
+                    lockedTask.getOrganizationId(), executionId.toString(), executionId.toString(),
+                    taskSensitivity(lockedTask));
 
             boolean success = Boolean.TRUE.equals(result.get("success"));
             if (success) {
@@ -2719,14 +2844,40 @@ public class AgentTaskService {
 
             String model = agent.modelName();
             String provider = agent.modelProvider();
+            // The kickoff's copy can predate a ratchet (task_reject_review tags the row with a bulk
+            // update), so the stored class counts too.
+            com.apimarketplace.common.classification.DataSensitivity sensitivity = taskSensitivity(task)
+                    .max(findTaskByIdScoped(taskId, tenantId).map(AgentTaskService::taskSensitivity)
+                            .orElse(com.apimarketplace.common.classification.DataSensitivity.NORMAL));
+            boolean restricted = sensitivity.isRestricted();
 
-            // Use the agent's existing conversation (one conversation per agent)
-            String conversationId = conversationClient.findOrCreateAgentConversation(
-                    assigneeId.toString(), tenantId, agent.name(), task.getOrganizationId());
+            // LC-066: an assignee whose model may not receive Gmail / Drive content cannot work on
+            // a RESTRICTED task. Refused here, before anything is stored in any conversation; the
+            // refusal is the task's failure reason.
+            String refusal = restricted ? restrictedProviderRefusal(provider, model, "TASK") : null;
+            if (refusal != null) {
+                logger.warn("[TaskExec] Agent {} refused for RESTRICTED task {}: provider may not receive "
+                        + "restricted data", assigneeId, taskId);
+                self.markExecutionFailed(taskId, tenantId, refusal);
+                return;
+            }
+
+            // The agent's own conversation (one conversation per agent), except for a RESTRICTED
+            // task: its turns run in the task's own conversation (LC-066), so the agent's
+            // conversation does not become restricted for good. No fallback to the agent's
+            // conversation when the task's cannot be opened: the task fails instead.
+            String conversationId = restricted
+                    ? conversationClient.findOrCreateTaskConversation(assigneeId.toString(), taskId.toString(),
+                            tenantId, taskConversationTitle(agent.name(), taskId), task.getOrganizationId())
+                    : conversationClient.findOrCreateAgentConversation(
+                            assigneeId.toString(), tenantId, agent.name(), task.getOrganizationId());
             if (conversationId == null) {
-                logger.error("[TaskExec] Failed to create conversation for agent {}, failing task {}", assigneeId, taskId);
-                self.markExecutionFailed(taskId, tenantId,
-                        "failed to create conversation for agent: " + assigneeId);
+                logger.error("[TaskExec] Failed to create {} conversation for agent {}, failing task {}",
+                        restricted ? "the task's" : "a", assigneeId, taskId);
+                self.markExecutionFailed(taskId, tenantId, restricted
+                        ? "failed to open this task's own conversation for agent: " + assigneeId
+                                + " (a task holding Gmail or Google Drive content runs only there); retry the task"
+                        : "failed to create conversation for agent: " + assigneeId);
                 return;
             }
 
@@ -2738,7 +2889,7 @@ public class AgentTaskService {
             var result = conversationClient.sendChatSync(
                     tenantId, conversationId, prompt,
                     assigneeId.toString(), model, provider, "TASK", taskId.toString(), task.getOrganizationId(),
-                    null, executionId.toString());
+                    null, executionId.toString(), sensitivity);
 
             boolean success = Boolean.TRUE.equals(result.get("success"));
             if (success) {
@@ -2780,6 +2931,82 @@ public class AgentTaskService {
             });
         } finally {
             self.unlockAssigneeExecution(taskId, executionId);
+        }
+    }
+
+    /**
+     * CASA LC-066: the classification a task's execution is sent with. A RESTRICTED task makes
+     * conversation-service store its prompt restricted, which tags the turn and refuses it on a
+     * provider outside the allow-list, whichever model the assignee or reviewer runs on.
+     */
+    static com.apimarketplace.common.classification.DataSensitivity taskSensitivity(AgentTaskEntity task) {
+        return task != null && task.holdsRestrictedData()
+                ? com.apimarketplace.common.classification.DataSensitivity.RESTRICTED
+                : com.apimarketplace.common.classification.DataSensitivity.NORMAL;
+    }
+
+    /**
+     * CASA LC-066: the refusal for a RESTRICTED task's turn on this agent's model, or null when the
+     * provider that would run it may receive restricted data. Decided like every agent-service entry
+     * point that can apply a model execution link ({@link
+     * com.apimarketplace.agent.service.execution.RestrictedDataRouting}): on the provider that will
+     * actually receive the content, after the link for this surface ({@code TASK} /
+     * {@code TASK_REVIEW}). An agent with no provider of its own is left to the conversation's
+     * guard, which runs it inside the task's own conversation.
+     */
+    String restrictedProviderRefusal(String provider, String model, String activitySource) {
+        if (provider == null || provider.isBlank()) {
+            return null;
+        }
+        // A disabled model runs on its replacement: judge (and resolve the link of) that pair,
+        // exactly like every other entry point does before it asks for a link.
+        if (modelReplacementResolver != null) {
+            var sub = modelReplacementResolver.substituteIfDisabled(provider, model).orElse(null);
+            if (sub != null) {
+                provider = sub.provider();
+                model = sub.model();
+            }
+        }
+        com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute route = executionLinkRouter != null
+                ? executionLinkRouter.runnableRoute(provider, model, activitySource)
+                : null;
+        try {
+            com.apimarketplace.agent.service.execution.RestrictedDataRouting.apply(
+                    com.apimarketplace.common.classification.DataSensitivity.RESTRICTED, provider, route);
+            return null;
+        } catch (com.apimarketplace.agent.service.execution.RestrictedDataRouting.RefusedException refused) {
+            return refused.getMessage();
+        }
+    }
+
+    /** Title of a RESTRICTED task's own conversation: the agent and the task id, never the task's text. */
+    static String taskConversationTitle(String agentName, UUID taskId) {
+        return (agentName == null || agentName.isBlank() ? "Agent" : agentName)
+                + " - task " + taskId.toString().substring(0, 8);
+    }
+
+    /**
+     * CASA LC-066: records that a task now holds content from a restricted execution (an update,
+     * a result or a rejection written from it). Ratchets only; a no-op when the task is out of the
+     * caller's scope (the action itself then refuses it).
+     */
+    @Transactional
+    public void markTaskRestricted(UUID taskId, String tenantId) {
+        if (taskId == null || findTaskByIdScoped(taskId, tenantId).isEmpty()) {
+            return;
+        }
+        taskRepository.markRestricted(taskId);
+    }
+
+    /**
+     * CASA LC-066: ratchets the task to RESTRICTED when the caller writing into it (a result, a
+     * failure reason, reviewer feedback) runs in a restricted execution. Called inside the
+     * writing transaction, right after the caller's own CAS succeeded (which already proved the
+     * caller's role and the task's scope): it commits or rolls back with the text it tags.
+     */
+    private void ratchetRestricted(UUID taskId, com.apimarketplace.common.classification.DataSensitivity callerSensitivity) {
+        if (callerSensitivity != null && callerSensitivity.isRestricted()) {
+            taskRepository.markRestricted(taskId);
         }
     }
 
@@ -2929,6 +3156,19 @@ public class AgentTaskService {
                             ? taskRepository.findByIdAndOrganizationIdStrict(task.getParentTaskId(), task.getOrganizationId())
                             : taskRepository.findByIdAndTenantId(task.getParentTaskId(), task.getTenantId());
             parentOpt.ifPresent(parent -> {
+                        // LC-066: a NORMAL subtask's turn is untagged, so the text of a parent that
+                        // became RESTRICTED after the subtask was created stays out of it (the
+                        // subtask is not restricted by inheritance in that case).
+                        if (parent.holdsRestrictedData() && !task.holdsRestrictedData()) {
+                            sb.append("\nParent task [#").append(parent.getId().toString(), 0, 8)
+                              .append("]: ")
+                              .append(com.apimarketplace.agent.tools.agent.AgentDelegationModule
+                                      .withheldListingEntry(parent,
+                                              "agent(action='task_get_context', task_id='<id>')")
+                                      .get("note"))
+                              .append("\n");
+                            return;
+                        }
                         sb.append("\nParent task [#").append(parent.getId().toString(), 0, 8)
                           .append("]: ").append(parent.getTitle());
                         if (parent.getInstructions() != null && !parent.getInstructions().isBlank()) {
@@ -2979,7 +3219,7 @@ public class AgentTaskService {
             req.setSourceId(saved.getId().toString());
             Map<String, Object> payload = new HashMap<>();
             payload.put("status", "pending");
-            if (saved.getTitle() != null) payload.put("subjectName", saved.getTitle());
+            putTaskSubjectName(payload, saved);
             payload.put("assigneeAgentId", assigneeId.toString());
             if (saved.getPriority() != null) payload.put("priority", saved.getPriority());
             if (saved.getCreatedByAgentId() != null) {
@@ -3022,7 +3262,7 @@ public class AgentTaskService {
             req.setSourceId(saved.getId() + ":" + role);
             Map<String, Object> payload = new HashMap<>();
             payload.put("status", "pending");
-            if (saved.getTitle() != null) payload.put("subjectName", saved.getTitle());
+            putTaskSubjectName(payload, saved);
             payload.put("role", role);
             if (saved.getPriority() != null) payload.put("priority", saved.getPriority());
             req.setPayload(payload);
@@ -3067,7 +3307,7 @@ public class AgentTaskService {
                 req.setSubjectId(task.getId());
                 req.setSourceId(note.getId() + ":" + recipient);
                 Map<String, Object> payload = new HashMap<>();
-                if (task.getTitle() != null) payload.put("subjectName", task.getTitle());
+                putTaskSubjectName(payload, task);
                 payload.put("noteId", note.getId().toString());
                 req.setPayload(payload);
                 req.setOccurredAt(note.getCreatedAt() != null ? note.getCreatedAt() : Instant.now());
@@ -3113,7 +3353,7 @@ public class AgentTaskService {
             req.setSourceId(task.getId().toString());
             Map<String, Object> payload = new HashMap<>();
             payload.put("status", "in_review");
-            if (task.getTitle() != null) payload.put("subjectName", task.getTitle());
+            putTaskSubjectName(payload, task);
             if (task.getPriority() != null) payload.put("priority", task.getPriority());
             req.setPayload(payload);
             req.setOccurredAt(Instant.now());
@@ -3124,6 +3364,22 @@ public class AgentTaskService {
                         task.getId(), ex.getMessage());
             }
         }, "AGENT_TASK_AWAITING_REVIEW emit");
+    }
+
+    /**
+     * The task's name on a notification. LC-066: a notification row is untagged and is delivered
+     * as it is (the bell, the email and the chat digest), so a RESTRICTED task's title, which may
+     * quote an email, is not copied into it: the payload says {@code restricted: true} instead,
+     * and the bell and the messages fall back to their generic name for the task.
+     */
+    static void putTaskSubjectName(Map<String, Object> payload, AgentTaskEntity task) {
+        if (task.holdsRestrictedData()) {
+            payload.put("restricted", true);
+            return;
+        }
+        if (task.getTitle() != null) {
+            payload.put("subjectName", task.getTitle());
+        }
     }
 
     /** Trims to null - blank/whitespace human ids collapse to "no assignee". */
@@ -3234,11 +3490,28 @@ public class AgentTaskService {
         UUID agentId = "assignee".equals(role) ? task.getAssignedToAgentId() : task.getReviewerAgentId();
         if (agentId != null && redisTemplate != null && conversationClient != null) {
             try {
-                String conversationId = conversationClient.findAgentConversation(
-                        agentId.toString(), tenantId, organizationId);
+                // LC-066: a RESTRICTED task's turns run in the task's own conversation (one per
+                // agent and task, V565). A task tagged while its turn was already running in the
+                // agent's conversation has no live stream there: the agent's conversation is then
+                // the one to stop (setting a cancel key only).
+                String conversationId = null;
+                String streamId = null;
+                if (task.holdsRestrictedData()) {
+                    conversationId = conversationClient.findTaskConversation(
+                            agentId.toString(), taskId.toString(), tenantId, organizationId);
+                    streamId = conversationId != null
+                            ? redisTemplate.opsForValue().get(StreamRedisKeys.convIndexKey(conversationId))
+                            : null;
+                }
+                if (streamId == null) {
+                    String agentConversationId = conversationClient.findAgentConversation(
+                            agentId.toString(), tenantId, organizationId);
+                    if (agentConversationId != null) {
+                        conversationId = agentConversationId;
+                        streamId = redisTemplate.opsForValue().get(StreamRedisKeys.convIndexKey(agentConversationId));
+                    }
+                }
                 if (conversationId != null) {
-                    String convIndexKey = StreamRedisKeys.convIndexKey(conversationId);
-                    String streamId = redisTemplate.opsForValue().get(convIndexKey);
                     if (streamId != null) {
                         String cancelKey = "agent:cancel:" + streamId;
                         redisTemplate.opsForValue().set(cancelKey, "stopped_by_user", Duration.ofMinutes(5));

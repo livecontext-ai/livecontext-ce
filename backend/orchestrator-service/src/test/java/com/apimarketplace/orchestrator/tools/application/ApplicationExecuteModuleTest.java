@@ -338,6 +338,46 @@ class ApplicationExecuteModuleTest {
     }
 
     // ------------------------------------------------------------------
+    // LC-066: an execute from a restricted chat or agent restricts the run
+    // ------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("LC-066 restricted caller")
+    class Lc066RestrictedCaller {
+
+        private boolean firedRestricted(Map<String, Object> credentials) {
+            when(workflowRepository.findByOrganizationIdAndSourcePublicationIdAndWorkflowType(
+                    eq(CALLER_ORG_ID), eq(PUB_ID), eq(WorkflowEntity.WorkflowType.APPLICATION)))
+                    .thenReturn(Optional.of(buildAcquiredWorkflow()));
+            var trigger = mock(com.apimarketplace.orchestrator.domain.workflow.Trigger.class);
+            var run = mock(com.apimarketplace.orchestrator.domain.WorkflowRunEntity.class);
+            when(agentWorkflowFireService.resolveTrigger(any(), any())).thenReturn(trigger);
+            when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID))).thenReturn(run);
+            ToolExecutionContext ctx = new ToolExecutionContext(
+                    TENANT_ID, credentials, Map.of(), Set.of(), null, null, CALLER_ORG_ID, null);
+
+            module.execute("execute", Map.of("application_id", PUB_ID.toString()), TENANT_ID, ctx);
+
+            var restricted = org.mockito.ArgumentCaptor.forClass(Boolean.class);
+            verify(agentWorkflowFireService).fire(eq(run), eq(trigger), any(), restricted.capture());
+            return restricted.getValue();
+        }
+
+        @Test
+        @DisplayName("LC-066: application execute from a restricted context fires the run as restricted")
+        void lc066RestrictedCallerFiresRestrictedRun() {
+            assertThat(firedRestricted(Map.of(
+                    com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "RESTRICTED"))).isTrue();
+        }
+
+        @Test
+        @DisplayName("LC-066: application execute from an ordinary context does not restrict the run")
+        void lc066NormalCallerFiresNormalRun() {
+            assertThat(firedRestricted(Map.of())).isFalse();
+        }
+    }
+
+    // ------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------
 

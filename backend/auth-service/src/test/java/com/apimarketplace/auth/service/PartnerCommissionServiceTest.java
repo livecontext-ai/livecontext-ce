@@ -94,6 +94,20 @@ class PartnerCommissionServiceTest {
     }
 
     @Test
+    @DisplayName("a client who became a partner after being attributed earns their former partner nothing on their own invoices")
+    void customerWhoBecamePartnerEarnsNobody() {
+        RewardCode own = new RewardCode();
+        own.setProgram(RewardProgram.PARTNER);
+        own.setOwnerUserId(CUSTOMER);
+        when(codeRepository.findByOwnerUserIdAndProgram(CUSTOMER, RewardProgram.PARTNER)).thenReturn(Optional.of(own));
+
+        var outcome = service.recordPaidInvoice(CUSTOMER, "in_self", 2400, "usd", Instant.parse("2026-10-01T10:00:00Z"));
+
+        assertThat(outcome).isEqualTo(PartnerCommissionService.RecordOutcome.CUSTOMER_IS_PARTNER);
+        verify(commissionRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("V556: once settled revenue reaches Gold, the next invoice earns the Gold rate and the tier is raised")
     void goldThresholdRaisesTheRateOfTheNextInvoice() {
         when(commissionRepository.sumSettledRevenue(eq(PARTNER), eq("usd"), any())).thenReturn(500_000L);

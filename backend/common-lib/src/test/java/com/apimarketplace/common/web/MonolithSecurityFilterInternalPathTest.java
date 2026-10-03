@@ -77,6 +77,17 @@ class MonolithSecurityFilterInternalPathTest {
         }
     }
 
+    @Test
+    @DisplayName("LC-066: the showcase run-restricted lookup is internal-only like its publication-support siblings")
+    void externalPublicationSupportRunLookupsBlocked() throws Exception {
+        for (String p : List.of(
+                "/api/internal/publication-support/runs/run-1/restricted",
+                "/api/internal/publication-support/runs/run-1/full-snapshot?tenantId=victim",
+                "/api/internal/publication-support/runs/run-1/interface-snapshots?tenantId=victim")) {
+            assertBlocked("GET", p);
+        }
+    }
+
     // ── ALLOWED: the allowlist must stay reachable externally (no over-block / no regression) ──
 
     @Test
@@ -340,6 +351,9 @@ class MonolithSecurityFilterInternalPathTest {
         MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/internal/chat/sync");
         request.setRemoteAddr("127.0.0.1");
+        // A real in-process call carries this boot's secret (CASA LC-032: stamped on the monolith's
+        // own loopback clients, ConversationClient included); a bare loopback peer is not enough.
+        request.addHeader(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret());
         request.addHeader("X-User-ID", "u1");
         request.addHeader("X-Organization-Role", "MEMBER");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -462,6 +476,7 @@ class MonolithSecurityFilterInternalPathTest {
         MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
         MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
         request.setRemoteAddr(remoteAddr);
+        request.addHeader(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret());
         request.addHeader("X-User-ID", "u1"); // trusted header set by the calling in-process service
         MockHttpServletResponse response = new MockHttpServletResponse();
         AtomicReference<ServletRequest> captured = new AtomicReference<>();

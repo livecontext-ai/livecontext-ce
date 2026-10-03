@@ -219,7 +219,7 @@ class CategoryControllerIntegrationTest {
     class InitializeDefaultCategories {
 
         @Test
-        @DisplayName("should return 200 on successful initialization")
+        @DisplayName("should return 200 on successful initialization when the caller is ADMIN")
         void shouldReturn200OnSuccess() throws Exception {
             doNothing().when(categoryService).initializeDefaultCategories();
 

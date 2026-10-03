@@ -3,6 +3,7 @@ import { Paperclip, FileText, Gauge, Hash, Image as ImageIcon, Link2, Star, Tag,
 import type { LucideIcon } from 'lucide-react';
 
 import type { ColumnDisplayConfig, ColumnStructure, ColumnVisualType } from '@/types/data-sources';
+import { ratingStarCount } from '@/components/data-table/cells/RatingCell';
 
 export const splitPath = (path: string) => path.split('.').filter(Boolean);
 
@@ -267,7 +268,7 @@ const thumbnailPreview = () => (
 export const renderPresetPreview = (preset: ColumnStylePreset) => {
   switch (preset.visualType) {
     case 'rating': {
-      const max = (preset.display?.max as number) ?? 5;
+      const max = ratingStarCount(preset.display?.max);
       const filled = Math.ceil(max * 0.6);
       return (
         <div className="flex items-center gap-1 text-amber-500">
@@ -344,6 +345,8 @@ export const renderPresetPreview = (preset: ColumnStylePreset) => {
       );
     }
     case 'progress':
+      // Static sample. 67% is in the green tier of ProgressCell (cells/ProgressCell.tsx, TIERS):
+      // change the sample value and its colour has to follow that table.
       return (
         <div className="flex w-full flex-col items-center gap-1">
           <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700">

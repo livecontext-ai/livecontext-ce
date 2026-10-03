@@ -21,7 +21,8 @@ public class StorageClientConfig {
 
     @Bean
     public StorageClient storageClient(
-            @Value("${services.storage-url:http://localhost:8082}") String storageUrl) {
-        return new StorageClient(storageUrl);
+            @Value("${services.storage-url:http://localhost:8082}") String storageUrl,
+            @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
+        return new StorageClient(storageUrl, gatewaySecretKey);
     }
 }

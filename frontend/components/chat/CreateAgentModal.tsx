@@ -440,6 +440,8 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
 }) => {
   const isEditMode = !!agent?.id;
   const t = useTranslations('modals.createAgent');
+  // Heading of the model picker's group of unlisted (hidden) models.
+  const tActions = useTranslations('actions');
   // Reuse the chat-config strings for the fields shared with the composer Options
   // panel (image generation + the 3 advanced turn-limit overrides) so the labels
   // stay in one place and at i18n parity.
@@ -2117,6 +2119,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                     node inspectors) so the two fields can't drift on casing
                     or silently carry a qualified id. */}
                 <ModelPicker
+                  hiddenModelsLabel={tActions('unlistedModels')}
                   value={{ provider: modelProvider, id: modelName }}
                   onChange={(next) => {
                     setModelProvider(next.provider);
@@ -3003,6 +3006,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                           </div>
                           {compactionModelOpen ? (
                             <ModelPicker
+                              hiddenModelsLabel={tActions('unlistedModels')}
                               value={{ provider: compactionModelProvider, id: compactionModelName }}
                               onChange={(next) => {
                                 setCompactionModelProvider(next.provider);

@@ -260,6 +260,34 @@ public class AgentRemoteExecutionService {
             ? executionLinkRouter.runnableRoute(request.provider(), request.model(), resolveActivitySource(request))
             : null;
 
+        // LC-004: an execution carrying Google restricted-scope content (Gmail, Drive) may only
+        // reach an allow-listed provider (RestrictedDataPolicy). The tag is set upstream by the
+        // conversation (history holds such content) or the workflow run (an earlier step read
+        // it). Decided on the EXECUTION provider, because an execution link can move a run
+        // billed as "anthropic" onto a CLI bridge or an aggregator. When the link is the only
+        // problem, the run stays on the billed provider's direct API (the link's own fallback).
+        //
+        // LC-004 re-audit item 5: this used to re-implement RestrictedDataRouting's drop/refuse
+        // decision locally (same predicates, hand-duplicated) instead of calling the one class
+        // every other agent-service entry point that can apply a model execution link (classify,
+        // guardrail, json-completion) already shares - exactly the kind of duplication that lets
+        // the copies drift out of sync with each other.
+        Object sensitivityTag = com.apimarketplace.common.classification.DataSensitivity
+            .fromCredentials(request.credentials());
+        try {
+            executionRoute = RestrictedDataRouting.apply(sensitivityTag, request.provider(), executionRoute);
+        } catch (RestrictedDataRouting.RefusedException refused) {
+            log.warn("Agent execution refused: restricted data may not be sent to provider {}", refused.getProvider());
+            return new AgentExecutionResponseDto(
+                false, null, null, List.of(), 0, Map.of(),
+                refused.getMessage(),
+                System.currentTimeMillis() - startTime, request.provider(), request.model(),
+                List.of(), AgentStopReason.ERROR.name(),
+                Map.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), null
+            );
+        }
+
         // Execution identity (where the run actually goes; = billed identity unless a link
         // redirected it). executeAgentViaBridge/executeAgentDirect each recompute the full
         // execProvider/execModel pair themselves from executionRoute - this one is only to
@@ -473,6 +501,34 @@ public class AgentRemoteExecutionService {
                                                               String taskId,
                                                               String userRoles) {
         String source = resolveActivitySource(request);
+        // LC-056: the bridge enforces the tenant balance and the agent budget itself, from the
+        // request's fields, and disables each guard whose field is missing or zero. Every
+        // workflow agent node arrived without them, so its run was bounded only by its turn
+        // count. Resolved here on the BILLED model for every bridge run; a request value is kept
+        // only where the platform has none. Any request pricingRates are dropped with it.
+        GuardChainFactory.BridgeBudget budget = guardChainFactory.bridgeBudget(
+            request.tenantId(), agentEntityId, request.provider(), request.model());
+        boolean serverAgentBudget = budget.maxCreditBudget() != null;
+        request = request.withBridgeBudget(
+            budget.tenantBalance() != null ? budget.tenantBalance() : request.tenantBalance(),
+            serverAgentBudget ? budget.maxCreditBudget() : request.maxCreditBudget(),
+            serverAgentBudget ? budget.creditsConsumedSoFar() : request.creditsConsumedSoFar());
+        GuardChainFactory.BridgeBudget sent = new GuardChainFactory.BridgeBudget(
+            request.tenantBalance(), request.maxCreditBudget(), request.creditsConsumedSoFar());
+        String exhausted = sent.exhaustedScope();
+        if (exhausted != null) {
+            log.warn("Bridge agent execution refused before dispatch: tenant={} scope={} balance={} agentBudget={}/{}",
+                request.tenantId(), exhausted, request.tenantBalance(),
+                request.creditsConsumedSoFar(), request.maxCreditBudget());
+            return new AgentExecutionResponseDto(
+                false, null, null, List.of(), 0, Map.of(),
+                sent.refusalMessage(request.provider(), request.model()),
+                System.currentTimeMillis() - startTime, request.provider(), request.model(),
+                List.of(), AgentStopReason.BUDGET_EXHAUSTED.name(),
+                Map.of("budgetScope", exhausted, AgentExecutionResponseDto.REFUSED_BEFORE_DISPATCH, true),
+                List.of(), List.of(), List.of(),
+                List.of(), List.of(), exhausted);
+        }
         // request stays the BILLED identity (fleet activity + relabel reference). When a
         // link is present, dispatchRequest swaps in the CLI bridge EXECUTION target;
         // billing-facing fields are never touched. NB: the bridge's own in-run budget

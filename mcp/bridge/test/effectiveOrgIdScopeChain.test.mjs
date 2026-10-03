@@ -102,17 +102,20 @@ test('mcpServerConfig.env wires ORGANIZATION_ID + ORGANIZATION_ROLE from effecti
   );
 });
 
-test('effectiveOrgId resolution defaults to empty string when header + body field both missing', () => {
+test('effectiveOrgId resolution defaults to empty string when header + body field both missing', async () => {
   // The empty-string fallback is load-bearing for the back-compat path: the
   // downstream MCP server (mcp/agent-cli-server.mjs:101-102) gates header
   // emission on a non-empty value, so an empty string correctly degrades to
   // "no org context" rather than a ReferenceError or stamp of "undefined".
   // If a future refactor changes this to `??` or removes the empty-string
   // tail, the agent-cli-server downstream guard might need to be revisited.
-  assert.match(
-    source,
-    /const effectiveOrgId = req\.headers\['x-organization-id'\] \|\| organizationId \|\| ''/,
-    'effectiveOrgId must resolve header → body → empty string. The empty-string tail is ' +
-    'how no-org callers (daemons, pre-V261 callers) degrade gracefully without throwing.'
-  );
+  // LC-001: the resolution moved to resolveRequestIdentity (lib/bridgeSecurity.mjs). A verified
+  // request uses the SIGNED X-Organization-ID; the header -> body -> '' chain survives only for
+  // enforcement-off launchers. Both tails must still be the empty string.
+  assert.match(source, /const effectiveOrgId = identity\.organizationId;/);
+  const { resolveRequestIdentity } = await import('../lib/bridgeSecurity.mjs');
+  assert.equal(resolveRequestIdentity({ verified: false }, {}, {}).organizationId, '');
+  assert.equal(resolveRequestIdentity({ verified: false }, { organizationId: 'b' }, {}).organizationId, 'b');
+  assert.equal(resolveRequestIdentity({ verified: false }, { organizationId: 'b' }, { 'x-organization-id': 'h' }).organizationId, 'h');
+  assert.equal(resolveRequestIdentity({ verified: true, userId: 'u' }, {}, {}).organizationId, '');
 });

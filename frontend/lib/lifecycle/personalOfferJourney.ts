@@ -1,4 +1,5 @@
 import { PERSONAL_OFFER_PARAM, readPendingPersonalOffer } from './pendingPersonalOffer';
+import { isSafeReturnPath } from '@/lib/security/safeReturnPath';
 
 export const PERSONAL_OFFER_JOURNEY_KEY = 'lc_personal_offer_journey_v1';
 const MAX_AGE_MS = 4 * 24 * 60 * 60 * 1000;
@@ -20,8 +21,7 @@ export function readPersonalOfferJourney(win: Window, userKey?: string, now = Da
     if (!Number.isFinite(value.savedAt) || now < value.savedAt || now - value.savedAt >= MAX_AGE_MS ||
         !Number.isInteger(value.creditTierIndex) || value.creditTierIndex < 0 ||
         !['monthly', 'yearly'].includes(value.billingCycle) ||
-        typeof value.returnToWork !== 'string' || !value.returnToWork.startsWith('/') ||
-        value.returnToWork.startsWith('//') ||
+        !isSafeReturnPath(value.returnToWork) ||
         (userKey && value.userKey && userKey !== value.userKey)) {
       win.sessionStorage.removeItem(PERSONAL_OFFER_JOURNEY_KEY);
       return null;

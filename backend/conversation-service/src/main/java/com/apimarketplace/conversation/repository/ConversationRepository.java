@@ -160,9 +160,22 @@ public interface ConversationRepository extends JpaRepository<Conversation, Stri
      */
     @Query("SELECT c FROM Conversation c "
          + "WHERE c.organizationId = :orgId AND c.agentId = :agentId AND c.active = true "
+         // LC-066: a RESTRICTED task's own conversation (V563) is never the agent's conversation.
+         + "AND c.taskId IS NULL "
          + "ORDER BY c.createdAt ASC")
     List<Conversation> findByOrganizationIdStrictAndAgentIdAndActiveTrueOrderByCreatedAtAsc(
             @Param("orgId") String orgId, @Param("agentId") String agentId);
+
+    /**
+     * CASA LC-066: the conversation that holds a RESTRICTED delegated task's turns for one agent
+     * (its assignee or its reviewer), in the task's workspace. Oldest first, so a duplicate left by
+     * a race resolves to the same row every time.
+     */
+    @Query("SELECT c FROM Conversation c "
+         + "WHERE c.organizationId = :orgId AND c.agentId = :agentId AND c.taskId = :taskId "
+         + "AND c.active = true ORDER BY c.createdAt ASC")
+    List<Conversation> findTaskConversations(
+            @Param("orgId") String orgId, @Param("agentId") String agentId, @Param("taskId") String taskId);
 
     /**
      * Strict-org message-content search. JOIN onto messages and scope by the

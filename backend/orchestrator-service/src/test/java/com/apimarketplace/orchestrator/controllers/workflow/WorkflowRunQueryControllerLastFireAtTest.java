@@ -77,7 +77,8 @@ class WorkflowRunQueryControllerLastFireAtTest {
                 storageService,
                 new ObjectMapper(),
                 workflowEpochRepository,
-                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.ApplicationRunVersionBatchService.class)
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.ApplicationRunVersionBatchService.class),
+                org.mockito.Mockito.mock(com.apimarketplace.auth.client.access.OrgAccessGuard.class)
         );
     }
 
@@ -126,7 +127,7 @@ class WorkflowRunQueryControllerLastFireAtTest {
 
         ResponseEntity<List<WorkflowRunSummary>> response =
                 (ResponseEntity<List<WorkflowRunSummary>>) (ResponseEntity<?>)
-                        controller.listRuns(WORKFLOW_ID, 15, 0, OWNER, null);
+                        controller.listRuns(WORKFLOW_ID, 15, 0, OWNER, null, null);
 
         List<WorkflowRunSummary> body = response.getBody();
         assertThat(body).hasSize(1);
@@ -159,7 +160,7 @@ class WorkflowRunQueryControllerLastFireAtTest {
 
         ResponseEntity<List<WorkflowRunSummary>> dresponse =
                 (ResponseEntity<List<WorkflowRunSummary>>) (ResponseEntity<?>)
-                        controller.listRuns(WORKFLOW_ID, 15, 0, OWNER, null);
+                        controller.listRuns(WORKFLOW_ID, 15, 0, OWNER, null, null);
 
         WorkflowRunSummary dsummary = dresponse.getBody().get(0);
         assertThat(dsummary.lastEpochDurationMs()).isEqualTo(7_000L);
@@ -184,7 +185,7 @@ class WorkflowRunQueryControllerLastFireAtTest {
 
         ResponseEntity<List<WorkflowRunSummary>> nresponse =
                 (ResponseEntity<List<WorkflowRunSummary>>) (ResponseEntity<?>)
-                        controller.listRuns(WORKFLOW_ID, 15, 0, OWNER, null);
+                        controller.listRuns(WORKFLOW_ID, 15, 0, OWNER, null, null);
 
         assertThat(nresponse.getBody().get(0).lastEpochDurationMs()).isNull();
     }
@@ -206,7 +207,7 @@ class WorkflowRunQueryControllerLastFireAtTest {
 
         ResponseEntity<List<WorkflowRunSummary>> response =
                 (ResponseEntity<List<WorkflowRunSummary>>) (ResponseEntity<?>)
-                        controller.listRuns(WORKFLOW_ID, 15, 0, OWNER, null);
+                        controller.listRuns(WORKFLOW_ID, 15, 0, OWNER, null, null);
 
         WorkflowRunSummary summary = response.getBody().get(0);
         assertThat(summary.startedAt()).isEqualTo(runBirth);
@@ -230,7 +231,7 @@ class WorkflowRunQueryControllerLastFireAtTest {
         when(workflowEpochRepository.getLatestEpochStartedAtByRunIds(anyList()))
                 .thenReturn(Map.of(RUN_ID_PUBLIC, lastFire));
 
-        ResponseEntity<?> response = controller.getPinnedRun(WORKFLOW_ID, OWNER, null);
+        ResponseEntity<?> response = controller.getPinnedRun(WORKFLOW_ID, OWNER, null, null);
         WorkflowRunSummary summary = (WorkflowRunSummary) response.getBody();
         assertThat(summary).isNotNull();
         assertThat(summary.startedAt()).isEqualTo(runBirth);
@@ -254,7 +255,7 @@ class WorkflowRunQueryControllerLastFireAtTest {
         when(workflowEpochRepository.getLatestEpochStartedAtByRunIds(anyList()))
                 .thenReturn(Map.of(RUN_ID_PUBLIC, lastFire));
 
-        ResponseEntity<?> response = controller.getLatestRun(WORKFLOW_ID, OWNER, null);
+        ResponseEntity<?> response = controller.getLatestRun(WORKFLOW_ID, OWNER, null, null);
         WorkflowRunSummary summary = (WorkflowRunSummary) response.getBody();
         assertThat(summary).isNotNull();
         assertThat(summary.startedAt()).isEqualTo(runBirth);
@@ -274,7 +275,7 @@ class WorkflowRunQueryControllerLastFireAtTest {
         when(workflowEpochRepository.getLatestEpochStartedAtByRunIds(anyList()))
                 .thenReturn(Map.of(RUN_ID_PUBLIC, lastFire));
 
-        ResponseEntity<?> response = controller.getRunByPublicId(RUN_ID_PUBLIC, OWNER, null);
+        ResponseEntity<?> response = controller.getRunByPublicId(RUN_ID_PUBLIC, OWNER, null, null);
         WorkflowRunSummary summary = (WorkflowRunSummary) response.getBody();
         assertThat(summary).isNotNull();
         assertThat(summary.startedAt()).isEqualTo(runBirth);
@@ -298,7 +299,7 @@ class WorkflowRunQueryControllerLastFireAtTest {
         when(workflowEpochRepository.getLatestEpochStartedAtByRunIds(anyList()))
                 .thenReturn(Map.of(RUN_ID_PUBLIC, lastFire));
 
-        ResponseEntity<?> response = controller.getApplicationRun(WORKFLOW_ID, publicationId, OWNER, null);
+        ResponseEntity<?> response = controller.getApplicationRun(WORKFLOW_ID, publicationId, OWNER, null, null);
         WorkflowRunSummary summary = (WorkflowRunSummary) response.getBody();
         assertThat(summary).isNotNull();
         assertThat(summary.startedAt()).isEqualTo(runBirth);

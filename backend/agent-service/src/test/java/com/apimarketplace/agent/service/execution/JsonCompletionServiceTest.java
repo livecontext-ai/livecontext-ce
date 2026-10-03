@@ -649,6 +649,82 @@ class JsonCompletionServiceTest {
         }
     }
 
+    /**
+     * LC-004 re-audit: {@code request.dataSensitivity()} is the tag that flows all the way from
+     * {@code ColdSummarizerService} through {@code HttpLlmJsonInvoker} into this DTO (see
+     * {@code HttpLlmJsonInvokerTest}). This nested class pins that once it arrives here,
+     * {@link RestrictedDataRouting#apply} is actually consulted and can refuse the call before
+     * any transport (direct API or bridge) is touched - the earlier gap: on the pre-fix wiring
+     * {@code dataSensitivity} was always null, so this branch never fired for the one production
+     * caller of this endpoint.
+     */
+    @Nested
+    @DisplayName("LC-004 restricted data routing")
+    class RestrictedData {
+
+        @Test
+        @DisplayName("restricted content, execution link to a disallowed processor, billed provider also "
+            + "disallowed: refused before any transport is called")
+        void restrictedContentLinkedToDisallowedProcessorIsRefused() {
+            JsonCompletionRequestDto restrictedReq = new JsonCompletionRequestDto(
+                "deepseek", BILLED_MODEL, SYSTEM, USER, TENANT, "RESTRICTED");
+            ModelExecutionLinkService.ExecutionRoute disallowedRoute =
+                new ModelExecutionLinkService.ExecutionRoute("openrouter", "some-model");
+            when(executionLinkRouter.runnableRoute("deepseek", BILLED_MODEL, null)).thenReturn(disallowedRoute);
+
+            assertThatThrownBy(() -> service.complete(restrictedReq, null))
+                .isInstanceOf(RestrictedDataRouting.RefusedException.class)
+                .hasMessageContaining("openrouter");
+
+            verifyNoInteractions(jsonInvoker);
+            verify(bridgeDispatcher, never()).execute(any(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("restricted content, billed provider not allowed, no link: refused before any transport")
+        void restrictedContentNoLinkDisallowedBilledProviderIsRefused() {
+            JsonCompletionRequestDto restrictedReq = new JsonCompletionRequestDto(
+                "deepseek", BILLED_MODEL, SYSTEM, USER, TENANT, "RESTRICTED");
+            when(executionLinkRouter.runnableRoute("deepseek", BILLED_MODEL, null)).thenReturn(null);
+
+            assertThatThrownBy(() -> service.complete(restrictedReq, null))
+                .isInstanceOf(RestrictedDataRouting.RefusedException.class)
+                .hasMessageContaining("deepseek");
+
+            verifyNoInteractions(jsonInvoker);
+        }
+
+        @Test
+        @DisplayName("restricted content, link to a disallowed processor but billed provider allowed: "
+            + "the link is dropped and the call runs on the billed pair, not refused")
+        void restrictedContentLinkDroppedWhenBilledProviderIsAllowed() {
+            JsonCompletionRequestDto restrictedReq = new JsonCompletionRequestDto(
+                BILLED_PROVIDER, BILLED_MODEL, SYSTEM, USER, TENANT, "RESTRICTED");
+            ModelExecutionLinkService.ExecutionRoute disallowedRoute =
+                new ModelExecutionLinkService.ExecutionRoute("openrouter", "some-model");
+            when(executionLinkRouter.runnableRoute(BILLED_PROVIDER, BILLED_MODEL, null)).thenReturn(disallowedRoute);
+            when(jsonInvoker.invokeWithUsage(BILLED_PROVIDER, BILLED_MODEL, SYSTEM, USER, TENANT))
+                .thenReturn(result(JSON));
+
+            assertThat(service.complete(restrictedReq, null)).isEqualTo(JSON);
+
+            verify(jsonInvoker).invokeWithUsage(BILLED_PROVIDER, BILLED_MODEL, SYSTEM, USER, TENANT);
+        }
+
+        @Test
+        @DisplayName("NORMAL (default) sensitivity: a disallowed-processor link runs exactly as before")
+        void normalSensitivityIsNeverGated() {
+            JsonCompletionRequestDto normalReq = request();
+            ModelExecutionLinkService.ExecutionRoute disallowedRoute =
+                new ModelExecutionLinkService.ExecutionRoute("openrouter", "some-model");
+            when(executionLinkRouter.runnableRoute(BILLED_PROVIDER, BILLED_MODEL, null)).thenReturn(disallowedRoute);
+            when(jsonInvoker.invokeWithUsage("openrouter", "some-model", SYSTEM, USER, TENANT))
+                .thenReturn(result(JSON));
+
+            assertThat(service.complete(normalReq, null)).isEqualTo(JSON);
+        }
+    }
+
     @Nested
     @DisplayName("model replacement reaches the observability record")
     class ModelReplacementStamp {

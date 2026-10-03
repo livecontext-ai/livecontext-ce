@@ -194,6 +194,29 @@ describe('ModelManagementPanel - header/row grid parity', () => {
     expect(name.getAttribute('aria-label')).toContain('modelConfig.editName');
   });
 
+  it('regression - header and rows scroll sideways together below the table width, instead of being cut', async () => {
+    // The list scrolls vertically, which makes it clip sideways too: a row wider than it lost
+    // its right-hand columns, and scrolling them into view left the header behind.
+    mocks.getEffectiveModels.mockResolvedValue([buildModel()]);
+    render(<ModelManagementPanel t={t} />);
+    await screen.findByTestId('model-toggle-openai-gpt-5');
+
+    const scroller = screen.getByTestId('model-table-scroll');
+    expect(scroller.className).toContain('overflow-x-auto');
+    const table = scroller.firstElementChild as HTMLElement;
+    // The minimum must hold what the row cannot shrink below: every fixed track, the 8px gaps,
+    // the row's padding and border (26px), the scrollbar gutter (15px), and room for the
+    // provider badge and the two auto columns (at least 90px).
+    const minWidth = Number(table.className.match(/min-w-\[(\d+)px\]/)?.[1]);
+    const row = tableGrids(document.body).find((g) => g.getAttribute('data-testid') !== 'model-list-header'
+      && !g.hasAttribute('data-testid'))!;
+    const tracks = templateOf(row).replace(/^grid-cols-\[|\]$/g, '').split('_');
+    const fixed = tracks.reduce((sum, track) => sum + (Number(track.match(/^(\d+)px$/)?.[1]) || 0), 0);
+    expect(minWidth).toBeGreaterThanOrEqual(fixed + (tracks.length - 1) * 8 + 26 + 15 + 90);
+    expect(table).toContainElement(screen.getByTestId('model-list-header'));
+    expect(table).toContainElement(screen.getByTestId('model-list'));
+  });
+
   it('cloud build renders the CE-ship chip inside its own fixed column', async () => {
     mocks.getEffectiveModels.mockResolvedValue([buildModel({ bundleEnabled: true })]);
 

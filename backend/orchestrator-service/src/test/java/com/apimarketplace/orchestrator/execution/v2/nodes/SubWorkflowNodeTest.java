@@ -1,5 +1,8 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.common.classification.DataSensitivity;
+import com.apimarketplace.common.classification.RestrictedDataPolicy;
+
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.workflow.Core;
@@ -75,6 +78,9 @@ class SubWorkflowNodeTest {
 
     @Mock
     private WorkflowStepDataRepository workflowStepDataRepository;
+
+    @Mock
+    private com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
 
     private ExecutionContext context;
 
@@ -509,6 +515,124 @@ class SubWorkflowNodeTest {
             Map<String, Object> result = (Map<String, Object>) execResult.output().get("result");
             assertNotNull(result);
             assertEquals(stepOutput, result.get("mcp:api_call"));
+        }
+    }
+
+    // ===============================================================
+    // execute() - LC-066 restricted-data taint propagation to the child run
+    // ===============================================================
+
+    @Nested
+    @DisplayName("execute() - restricted-data taint propagation")
+    class RestrictedDataTaintTests {
+
+        private SubWorkflowNode nodeWithStepPayloadService() {
+            Core.SubWorkflowConfig config = new Core.SubWorkflowConfig(WORKFLOW_ID, null, 60, 5);
+            SubWorkflowNode node = createNode(config);
+            node.setStepPayloadService(stepPayloadService);
+            return node;
+        }
+
+        private void stubSuccessfulFire() {
+            WorkflowEntity entity = createMockEntity();
+            when(workflowRepository.findById(UUID.fromString(WORKFLOW_ID))).thenReturn(Optional.of(entity));
+
+            WorkflowRunEntity run = createMockRun(RunStatus.WAITING_TRIGGER);
+            stubActiveRun(run);
+
+            when(reusableTriggerService.executeTriggerInternal(
+                eq(run), anyString(), any(), any(), eq(true), anyMap()))
+                .thenReturn(createSuccessTriggerResult(1));
+
+            when(workflowStepDataRepository.findCompletedOutputRefsByRunIdAndEpoch(RUN_ID_PUBLIC, 1))
+                .thenReturn(List.of());
+        }
+
+        @Test
+        @DisplayName("parent run holds Gmail / Drive data: the child run is marked restricted BEFORE the trigger fires")
+        void marksChildRunRestrictedWhenParentIsRestricted() {
+            when(stepPayloadService.isRunRestricted("run-1")).thenReturn(true);
+            stubSuccessfulFire();
+
+            NodeExecutionResult execResult = nodeWithStepPayloadService().execute(context);
+
+            assertTrue(execResult.isSuccess());
+            InOrder order = inOrder(stepPayloadService, reusableTriggerService);
+            order.verify(stepPayloadService).markRunRestricted(RUN_ID_PUBLIC);
+            order.verify(reusableTriggerService).executeTriggerInternal(
+                any(), anyString(), any(), any(), eq(true), anyMap());
+        }
+
+        /** A successful fire whose epoch produced one stored step output. */
+        private void stubFireWithOutput(Map<String, Object> storedOutput) {
+            stubSuccessfulFire();
+            UUID storageId = UUID.randomUUID();
+            when(workflowStepDataRepository.findCompletedOutputRefsByRunIdAndEpoch(RUN_ID_PUBLIC, 1))
+                .thenReturn(List.of(outputRef("fetch_mail", storageId)));
+            when(stepOutputService.loadRawOutput(storageId, TENANT_ID)).thenReturn(storedOutput);
+        }
+
+        @Test
+        @DisplayName("regression (LC-066 re-audit): the child's outputs of THIS call naming Gmail tag this node's output, which restricts the caller")
+        void childGmailOutputTagsTheNodeOutput() {
+            stubFireWithOutput(Map.of("output", Map.of("messages", List.of("Wire approved"),
+                "metadata", Map.of("iconSlug", "gmail"))));
+
+            NodeExecutionResult execResult = nodeWithStepPayloadService().execute(context);
+
+            assertTrue(execResult.isSuccess());
+            // Stored as this step's output, the tag classifies it RESTRICTED and marks this run.
+            assertEquals("RESTRICTED", execResult.output().get(DataSensitivity.CREDENTIAL_KEY));
+            assertTrue(RestrictedDataPolicy.fromToolMetadata(execResult.output()).isRestricted());
+        }
+
+        @Test
+        @DisplayName("regression (LC-066 re-audit): a child run restricted by ANOTHER caller does not restrict an unrelated workflow whose call read no Gmail")
+        void childRunRestrictedByAnotherCallerDoesNotSpread() {
+            // Workflow A (Gmail) called this child earlier, so its shared run is restricted for good;
+            // this call's outputs hold nothing of A's. The caller itself holds no Gmail.
+            when(stepPayloadService.isRunRestricted("run-1")).thenReturn(false);
+            lenient().when(stepPayloadService.isRunRestricted(RUN_ID_PUBLIC)).thenReturn(true);
+            stubFireWithOutput(Map.of("output", Map.of("summary", "weekly sales")));
+
+            NodeExecutionResult execResult = nodeWithStepPayloadService().execute(context);
+
+            assertTrue(execResult.isSuccess());
+            assertFalse(execResult.output().containsKey(DataSensitivity.CREDENTIAL_KEY));
+            verify(stepPayloadService, never()).markRunRestricted("run-1");
+        }
+
+        @Test
+        @DisplayName("a nested sub-workflow's tagged output (flattened or under output) is recognised one level up")
+        void taggedNestedOutputIsRecognised() {
+            assertTrue(SubWorkflowNode.holdsRestrictedData(Map.of(DataSensitivity.CREDENTIAL_KEY, "RESTRICTED")));
+            assertTrue(SubWorkflowNode.holdsRestrictedData(
+                Map.of("output", Map.of(DataSensitivity.CREDENTIAL_KEY, "RESTRICTED"))));
+            assertFalse(SubWorkflowNode.holdsRestrictedData(Map.of("output", Map.of("iconSlug", "github"))));
+            assertFalse(SubWorkflowNode.holdsRestrictedData("not a map"));
+        }
+
+        @Test
+        @DisplayName("ordinary parent run: the child run is never tagged")
+        void doesNotTagChildRunWhenParentIsOrdinary() {
+            when(stepPayloadService.isRunRestricted("run-1")).thenReturn(false);
+            stubSuccessfulFire();
+
+            NodeExecutionResult execResult = nodeWithStepPayloadService().execute(context);
+
+            assertTrue(execResult.isSuccess());
+            verify(stepPayloadService, never()).markRunRestricted(anyString());
+        }
+
+        @Test
+        @DisplayName("stepPayloadService not wired: fires normally, no NPE")
+        void firesNormallyWithoutStepPayloadService() {
+            stubSuccessfulFire();
+            SubWorkflowNode node = createNode(new Core.SubWorkflowConfig(WORKFLOW_ID, null, 60, 5));
+
+            NodeExecutionResult execResult = node.execute(context);
+
+            assertTrue(execResult.isSuccess());
         }
     }
 

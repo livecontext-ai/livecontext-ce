@@ -376,6 +376,39 @@ class RunCloneServiceCloneStorageTest {
         verify(fileStorageService).download(ownerTenant, s3Key);
     }
 
+    @Test
+    @DisplayName("LC-011: a clone of a RESTRICTED row stays RESTRICTED and keeps its retention deadline and caller expiry")
+    void lc011CloneKeepsRestrictedClassAndExpiry() {
+        // A clone that lost the tag or the deadline would be an ordinary row kept forever and
+        // handed to models outside the restricted-data allow-list.
+        UUID sourceId = UUID.randomUUID();
+        Instant stamp = Instant.parse("2026-10-30T00:00:00Z");
+        Instant callerTtl = Instant.parse("2027-01-01T00:00:00Z");
+        StorageEntity source = jsonRow(sourceId);
+        source.setData("{}");
+        source.setDataSensitivity("RESTRICTED");
+        source.setRetentionExpiresAt(stamp);
+        source.setExpiresAt(callerTtl);
+        UUID normalId = UUID.randomUUID();
+        StorageEntity normal = jsonRow(normalId);
+        normal.setData("{}");
+
+        when(storageRepository.findAllById(Set.of(sourceId, normalId))).thenReturn(List.of(source, normal));
+        when(storageRepository.save(any(StorageEntity.class)))
+                .thenAnswer(inv -> { StorageEntity a = inv.getArgument(0); a.setId(UUID.randomUUID()); return a; });
+        lenient().when(storageRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        runCloneService.cloneStorageEntries(Set.of(sourceId, normalId), "new-run", "tenant-bob", UUID.randomUUID());
+
+        verify(storageRepository, org.mockito.Mockito.times(2)).save(savedCaptor.capture());
+        assertThat(savedCaptor.getAllValues())
+                .extracting(StorageEntity::getDataSensitivity, StorageEntity::getRetentionExpiresAt,
+                        StorageEntity::getExpiresAt)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("RESTRICTED", stamp, callerTtl),
+                        org.assertj.core.groups.Tuple.tuple("NORMAL", null, null));
+    }
+
     private static StorageEntity jsonRow(UUID id) {
         StorageEntity e = new StorageEntity();
         e.setId(id);

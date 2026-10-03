@@ -75,14 +75,14 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('ResetPasswordPage', () => {
-  it('refuses a 7-character password, pinning the mirrored minimum as a NUMBER', async () => {
-    // The backend pins 8 with a literal in PasswordAuthServiceTest because
+  it('refuses an 11-character password, pinning the mirrored minimum (12) as a NUMBER', async () => {
+    // The backend pins 12 (CASA LC-084, was 8) with a literal in PasswordAuthServiceTest because
     // nothing can enforce the mirror across the two languages. Measured: without
     // this case, changing the constant to 7 left all 9 tests green, so the drift
     // the backend comment warns about was undetected on this side.
     render(<ResetPasswordPage />);
 
-    fill('7charac', '7charac');
+    fill('elevenchars', 'elevenchars');
 
     expect(resetSpy).not.toHaveBeenCalled();
     expect(screen.getByRole('alert')).toBeInTheDocument();

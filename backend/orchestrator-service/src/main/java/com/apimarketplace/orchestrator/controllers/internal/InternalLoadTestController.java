@@ -55,8 +55,11 @@ public class InternalLoadTestController {
             @RequestBody(required = false) Map<String, Object> payload,
             @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
         log.debug("[LoadTest] trigger/manual runId={} plan={}", runId, userPlan);
-        return triggerController.triggerManual(runId, payload, userPlan, userId, orgId);
+        // Forwarded so this internal shim cannot become a way around the intra-org gate the
+        // real endpoint applies (LC-012, security audit 2026-08-13).
+        return triggerController.triggerManual(runId, payload, userPlan, userId, orgId, orgRole);
     }
 }

@@ -9,7 +9,7 @@
  */
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within, cleanup, waitFor } from '@testing-library/react';
 
 const t = vi.hoisted(() => (key: string, values?: Record<string, unknown>) =>
@@ -20,7 +20,7 @@ vi.mock('../modelLabels', () => ({
 }));
 vi.mock('../../OwnKeyRowNote', () => ({ OwnKeyRowNote: () => null }));
 
-import { UsageHistoryPanel } from '../UsageHistoryPanel';
+import { UsageHistoryPanel, rowsThatFit, MIN_FITTED_ROWS, MAX_FITTED_ROWS } from '../UsageHistoryPanel';
 
 const entry = (id: number, extra: Record<string, unknown> = {}) => ({
   id,
@@ -205,5 +205,160 @@ describe('UsageHistoryPanel - full screen', () => {
     renderPanel(page([entry(1)], 1));
     fireEvent.click(toggle());
     await waitFor(() => expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true));
+  });
+});
+
+/**
+ * In full screen a page fills the screen: fifteen rows used to leave most of a large screen empty,
+ * so the panel tells the caller how many rows the table shows without scrolling.
+ */
+describe('UsageHistoryPanel - full screen fills the table', () => {
+  // jsdom lays nothing out: the table container reports the height the test gives it.
+  let tableHeight = 0;
+  let resize: (() => void) | null = null;
+
+  beforeEach(() => {
+    tableHeight = 0;
+    resize = null;
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.testid === 'usage-history-table' ? tableHeight : 0;
+    });
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(cb: () => void) { resize = cb; }
+      observe() {}
+      disconnect() {}
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function renderFitting(onFittedRowsChange: (rows: number | null) => void) {
+    return render(
+      <UsageHistoryPanel history={page([entry(1)], 3) as never} pageSize={15}
+        amountHeader="h" formatAmount={String} modelNames={null}
+        onFittedRowsChange={onFittedRowsChange} />,
+    );
+  }
+
+  it('reports the rows that fit once full screen opens, and nothing while inline', async () => {
+    tableHeight = 1229; // 30 rows of 40px plus the 29 borders between them
+    const onFit = vi.fn();
+    renderFitting(onFit);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(onFit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('usage-history-fullscreen-toggle'));
+
+    await waitFor(() => expect(onFit).toHaveBeenCalledWith(30));
+  });
+
+  it('re-measures when the window is resized', async () => {
+    tableHeight = 1229;
+    const onFit = vi.fn();
+    renderFitting(onFit);
+    fireEvent.click(screen.getByTestId('usage-history-fullscreen-toggle'));
+    await waitFor(() => expect(onFit).toHaveBeenLastCalledWith(30));
+
+    tableHeight = 819; // 20 rows
+    resize?.();
+
+    await waitFor(() => expect(onFit).toHaveBeenLastCalledWith(20));
+  });
+
+  it('closing full screen hands the inline size back with null', async () => {
+    tableHeight = 1229;
+    const onFit = vi.fn();
+    renderFitting(onFit);
+    fireEvent.click(screen.getByTestId('usage-history-fullscreen-toggle'));
+    await waitFor(() => expect(onFit).toHaveBeenLastCalledWith(30));
+
+    fireEvent.click(screen.getByRole('button', { name: 'history.exitFullscreen' }));
+
+    await waitFor(() => expect(onFit).toHaveBeenLastCalledWith(null));
+  });
+
+  it('dragging a window edge requests one size, not one per resize event', async () => {
+    tableHeight = 1229;
+    const onFit = vi.fn();
+    renderFitting(onFit);
+    fireEvent.click(screen.getByTestId('usage-history-fullscreen-toggle'));
+    await waitFor(() => expect(onFit).toHaveBeenLastCalledWith(30));
+    onFit.mockClear();
+
+    for (const h of [1100, 1000, 900, 819]) {
+      tableHeight = h;
+      resize?.();
+    }
+
+    await waitFor(() => expect(onFit).toHaveBeenCalledWith(20));
+    expect(onFit).toHaveBeenCalledTimes(1);
+  });
+
+  it('unmounting while in full screen still hands the inline size back', async () => {
+    tableHeight = 1229;
+    const onFit = vi.fn();
+    const { unmount } = renderFitting(onFit);
+    fireEvent.click(screen.getByTestId('usage-history-fullscreen-toggle'));
+    await waitFor(() => expect(onFit).toHaveBeenLastCalledWith(30));
+
+    unmount();
+
+    expect(onFit).toHaveBeenLastCalledWith(null);
+  });
+
+  it('a page padded to the fitted size fills the table down to the pager', () => {
+    render(
+      <UsageHistoryPanel history={page([entry(1), entry(2)], 3) as never} pageSize={30}
+        amountHeader="h" formatAmount={String} modelNames={null} />,
+    );
+    expect(screen.getAllByTestId('usage-history-filler')).toHaveLength(28);
+  });
+});
+
+describe('rowsThatFit', () => {
+  const box = (height: number) => {
+    const el = document.createElement('div');
+    Object.defineProperty(el, 'clientHeight', { value: height });
+    return el;
+  };
+
+  it('counts whole rows of 40px and the borders between them', () => {
+    expect(rowsThatFit(box(409))).toBe(10);
+    expect(rowsThatFit(box(408))).toBe(9);
+  });
+
+  it('subtracts the header row', () => {
+    const el = box(449);
+    const head = document.createElement('thead');
+    vi.spyOn(head, 'getBoundingClientRect').mockReturnValue({ height: 40 } as DOMRect);
+    const table = document.createElement('table');
+    table.appendChild(head);
+    el.appendChild(table);
+    expect(rowsThatFit(el)).toBe(10);
+  });
+
+  it('regression - measures the row pitch on screen, so rows rounded to fractional pixels are counted as drawn', () => {
+    const el = box(1000);
+    const table = document.createElement('table');
+    const body = document.createElement('tbody');
+    // 42.5px a row, as a zoomed browser can draw them, instead of the 41px the formula assumes.
+    [0, 42.5, 85].forEach((top) => {
+      const tr = document.createElement('tr');
+      tr.dataset.testid = 'usage-history-row';
+      vi.spyOn(tr, 'getBoundingClientRect').mockReturnValue({ top } as DOMRect);
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    el.appendChild(table);
+    expect(rowsThatFit(el)).toBe(23); // floor(1001 / 42.5), where the formula would say 24
+  });
+
+  it('stays within bounds, and says nothing before the table has a height', () => {
+    expect(rowsThatFit(box(0))).toBeNull();
+    expect(rowsThatFit(box(60))).toBe(MIN_FITTED_ROWS);
+    expect(rowsThatFit(box(100_000))).toBe(MAX_FITTED_ROWS);
   });
 });

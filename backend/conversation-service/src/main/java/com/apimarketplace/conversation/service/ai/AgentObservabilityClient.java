@@ -254,6 +254,7 @@ public class AgentObservabilityClient {
             body.put("durationMs", 0L);
             body.put("iterationCount", 0);
             body.put("conversationId", conversationId);
+            putSensitivity(body, conversationId);
             if (executionId != null && !executionId.isBlank()) {
                 body.put("executionId", executionId);
             }
@@ -328,6 +329,26 @@ public class AgentObservabilityClient {
         }
     }
 
+    /** LC-066: tags the observability row when this conversation holds Gmail / Drive data. */
+    private RestrictedDataTransferGuard restrictedDataTransferGuard;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setRestrictedDataTransferGuard(RestrictedDataTransferGuard restrictedDataTransferGuard) {
+        this.restrictedDataTransferGuard = restrictedDataTransferGuard;
+    }
+
+    void putSensitivity(Map<String, Object> body, String conversationId) {
+        try {
+            if (restrictedDataTransferGuard != null
+                    && restrictedDataTransferGuard.conversationHoldsRestrictedData(conversationId)) {
+                body.put("dataSensitivity", com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+            }
+        } catch (Exception e) {
+            // Never lose the observability row over the tag: the tool calls are still classified.
+            log.warn("Could not classify conversation {} for observability: {}", conversationId, e.getMessage());
+        }
+    }
+
     @SuppressWarnings("unchecked")
     Map<String, Object> buildRequestBody(String agentId, AgentExecutionResponseDto response,
                                                    String systemPrompt, String userPrompt,
@@ -348,6 +369,7 @@ public class AgentObservabilityClient {
         body.put("durationMs", response.durationMs());
         body.put("iterationCount", response.iterations());
         body.put("conversationId", conversationId);
+        putSensitivity(body, conversationId);
         body.put("systemPrompt", systemPrompt);
         body.put("userPrompt", userPrompt);
 

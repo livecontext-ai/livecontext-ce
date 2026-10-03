@@ -61,11 +61,27 @@ public class ToolResult {
     @Column(name = "execution_id")
     private String executionId;
 
+    /**
+     * NORMAL, or RESTRICTED when this tool result derives from a Google restricted-scope integration
+     * (Gmail, Drive; see common-lib RestrictedDataPolicy). RESTRICTED content is excluded from
+     * message search and redacted after the retention window by RestrictedConversationContentPurger.
+     */
+    @Column(name = "data_sensitivity", nullable = false, length = 16)
+    private String dataSensitivity = "NORMAL";
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     public ToolResult() {}
+
+    public String getDataSensitivity() {
+        return dataSensitivity;
+    }
+
+    public void setDataSensitivity(String dataSensitivity) {
+        this.dataSensitivity = dataSensitivity == null ? "NORMAL" : dataSensitivity;
+    }
 
     public ToolResult(String conversationId, String tenantId, String toolName, String toolCallId,
                       boolean success, Long durationMs, String contentFull, String errorMessage) {

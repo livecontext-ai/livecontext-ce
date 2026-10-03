@@ -23,9 +23,30 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, UUID> {
 
     Optional<ApiKey> findByKeyHashAndRevokedAtIsNull(String keyHash);
 
+    /** Named-key lookup over every hash form the key can be stored under, in one query. */
+    List<ApiKey> findByKeyHashInAndRevokedAtIsNull(java.util.Collection<String> keyHashes);
+
+    /**
+     * Moves a named key's stored hash to the current HMAC key after a successful lookup under an
+     * older form (CASA LC-070). Compare-and-set on the old hash, own transaction.
+     */
+    @Modifying
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Query("UPDATE ApiKey k SET k.keyHash = :newHash WHERE k.id = :id AND k.keyHash = :oldHash")
+    int rehash(@Param("id") UUID id, @Param("oldHash") String oldHash, @Param("newHash") String newHash);
+
     List<ApiKey> findByUserIdAndRevokedAtIsNullOrderByCreatedAtDesc(Long userId);
 
     long countByUserIdAndRevokedAtIsNull(Long userId);
+
+    /**
+     * Keys that still count against the per-user cap: not revoked and not expired (CASA LC-054).
+     * An expired key cannot authenticate, so it must not block the user from creating its
+     * replacement.
+     */
+    @Query("SELECT COUNT(k) FROM ApiKey k WHERE k.userId = :userId AND k.revokedAt IS NULL "
+            + "AND (k.expiresAt IS NULL OR k.expiresAt > :now)")
+    long countUsableByUserId(@Param("userId") Long userId, @Param("now") LocalDateTime now);
 
     /**
      * Best-effort last-used stamp, in its OWN transaction: the resolve path runs

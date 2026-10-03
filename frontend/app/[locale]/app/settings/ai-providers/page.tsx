@@ -1,9 +1,11 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import { AdaptiveTabBar } from "@/components/settings/AdaptiveTabBar";
 import { BotMessageSquare, Cloud, Key, Terminal, SlidersHorizontal, User, Shield, Route } from "lucide-react";
 import { InfoPopover } from "@/components/ui/info-popover";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
+import { urlEnum, useUrlState } from "@/hooks/useUrlState";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { credentialService } from "@/lib/api/orchestrator/credential.service";
 import { cloudLinkService, cloudSourceErrorKey, type CloudLinkStatus } from "@/lib/api/cloud-link.service";
@@ -141,6 +143,18 @@ function LoadingDot() {
   return <span className="h-4 w-4 rounded-full border-2 border-current border-t-transparent animate-spin" />;
 }
 
+type ConnectionMode = "api_key" | "claude_code" | "codex" | "gemini_cli" | "mistral_vibe" | "models" | "execution_links" | "your_keys";
+
+// The tabs this edition draws. The last two exist on cloud only, so a self-hosted address
+// naming one falls back to the first tab instead of an empty page.
+const CONNECTION_MODES: readonly ConnectionMode[] = [
+  "api_key", "claude_code", "codex", "gemini_cli", "mistral_vibe", "models",
+  ...(IS_CLOUD ? (["execution_links", "your_keys"] as const) : []),
+];
+
+// What ModelManagementPanel keeps in the address.
+const MODELS_TAB_URL_KEYS = ["category", "q", "tier", "status", "new", "provider", "sort"] as const;
+
 export default function AiProvidersPage() {
   const { isAuthenticated, isAuthChecking, isLoading: isAuthLoading } = useAuthGuard();
   const { loginWithRedirect, hasRole } = useAuth();
@@ -153,7 +167,13 @@ export default function AiProvidersPage() {
   // the ones never offered to end users (aggregators the platform prices on its own).
   const userKeyDefinitions = PROVIDER_DEFINITIONS.filter((def) => !isProviderHiddenInCe(def.providerName));
 
-  const [connectionMode, setConnectionMode] = useState<"api_key" | "claude_code" | "codex" | "gemini_cli" | "mistral_vibe" | "models" | "execution_links" | "your_keys">("api_key");
+  // The open tab lives in the address (`?tab=`). The filters of the models list under it leave
+  // with the tab.
+  const [connectionMode, setConnectionMode] = useUrlState<ConnectionMode>("tab", "api_key", {
+    codec: urlEnum(CONNECTION_MODES),
+    history: "push",
+    clears: MODELS_TAB_URL_KEYS,
+  });
   const [statuses, setStatuses] = useState<LlmProviderStatus[]>([]);
   const [cloudLinkStatus, setCloudLinkStatus] = useState<CloudLinkStatus | null>(null);
   const [llmSource, setLlmSource] = useState<"CLOUD" | "BYOK">("BYOK");
@@ -180,27 +200,6 @@ export default function AiProvidersPage() {
       ? [{ id: "your_keys" as const, label: t("mode.yourKeys"), icon: User, iconSrc: null as string | null }]
       : []),
   ];
-
-  const tabContainerRef = useRef<HTMLDivElement>(null);
-  const [tabSliderStyle, setTabSliderStyle] = useState<{ left: number; width: number }>({ left: 0, width: 0 });
-
-  useEffect(() => {
-    const updateSlider = () => {
-      if (!tabContainerRef.current) return;
-      const activeButton = tabContainerRef.current.querySelector(`[data-tab-id="${connectionMode}"]`) as HTMLButtonElement;
-      if (activeButton) {
-        const containerRect = tabContainerRef.current.getBoundingClientRect();
-        const buttonRect = activeButton.getBoundingClientRect();
-        setTabSliderStyle({
-          left: buttonRect.left - containerRect.left,
-          width: buttonRect.width,
-        });
-      }
-    };
-    requestAnimationFrame(() => requestAnimationFrame(updateSlider));
-    window.addEventListener('resize', updateSlider);
-    return () => window.removeEventListener('resize', updateSlider);
-  }, [connectionMode, loading, isAuthChecking]);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -413,41 +412,22 @@ export default function AiProvidersPage() {
         </div>
       </div>
 
-      {/* Connection mode toggle */}
-      <div className="flex max-w-full overflow-x-auto scrollbar-hide -mx-1 px-1">
-        <div className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl w-max" ref={tabContainerRef}>
-          <div
-            className="absolute top-1.5 bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
-            style={{
-              left: tabSliderStyle.left,
-              width: tabSliderStyle.width,
-              opacity: tabSliderStyle.width ? 1 : 0,
-            }}
-          />
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              data-tab-id={tab.id}
-              type="button"
-              onClick={() => setConnectionMode(tab.id)}
-              title={tab.label}
-              className={cn(
-                "relative z-10 flex h-9 flex-shrink-0 items-center gap-2 px-3 sm:px-4 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
-                connectionMode === tab.id
-                  ? "text-[var(--text-primary)]"
-                  : "text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50"
-              )}
-            >
-              {tab.iconSrc ? (
-                <ServiceLogo src={tab.iconSrc} alt="" className="w-4 h-4 flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-              ) : (
-                <tab.icon className={cn("w-4 h-4 flex-shrink-0 transition-colors duration-200", connectionMode === tab.id ? "text-[var(--text-primary)]" : "text-current")} />
-              )}
-              <span className="hidden sm:inline whitespace-nowrap">{tab.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Connection mode toggle. Eight tabs on cloud: the shared bar shows the labels only
+          while they fit, so "Execution links" and "Your keys" are never pushed off the edge. */}
+      <AdaptiveTabBar
+        tabs={tabs.map((tab) => ({
+          id: tab.id,
+          label: tab.label,
+          icon: tab.iconSrc ? (
+            <ServiceLogo src={tab.iconSrc} alt="" className="w-4 h-4" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+          ) : (
+            <tab.icon className="w-4 h-4" />
+          ),
+        }))}
+        value={connectionMode}
+        onChange={setConnectionMode}
+        data-testid="ai-providers-tab-bar"
+      />
 
       {connectionMode === "api_key" && (
         <>

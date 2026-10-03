@@ -39,6 +39,7 @@ import {
   type InvitationInfo,
 } from "@/lib/api/organization-api";
 import { IS_CE } from "@/lib/edition";
+import { MIN_PASSWORD_LENGTH } from "@/lib/auth/changePasswordOutcome";
 import { AuthLayout } from "@/components/auth/AuthLayout";
 
 // Shared field/button styling, kept byte-identical to the login & register pages
@@ -192,7 +193,7 @@ export default function AcceptInvitationPage() {
     async (e: React.FormEvent) => {
       e.preventDefault();
       setErrorMessage("");
-      if (password.length < 8) {
+      if (password.length < MIN_PASSWORD_LENGTH) {
         setErrorMessage(t("passwordTooShort"));
         return;
       }

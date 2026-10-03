@@ -268,4 +268,59 @@ class PlaintextTokenBackfillTest {
 
         assertThat(n).isEqualTo(1);
     }
+
+    @Test
+    @DisplayName("LC-024/070 at write-version 2: a hashed row still in v1 with the password-keyed hash is re-sealed AND re-hashed")
+    void writeVersion2ResealsAndRehashesMigratedRows() {
+        plaintextRow(1, "wh_one");
+        backfill.migrateAll(List.of(SPEC));   // v1 envelope + password-keyed hash (SERVICE writes version 1)
+        String v1Token = (String) row(1).get("TOKEN");
+        String legacyHash = (String) row(1).get("TOKEN_HASH");
+        CredentialEncryptionService v2 = new CredentialEncryptionService("test-password-123", "0123456789abcdef",
+                "", "", false, false, "2", "allow", "");
+        TokenAtRest.install(v2);
+        try {
+            int n = backfill.migrateAll(List.of(SPEC));
+
+            Map<String, Object> r = row(1);
+            assertThat(n).isEqualTo(1);
+            assertThat((String) r.get("TOKEN")).startsWith("ENC:v2.").isNotEqualTo(v1Token);
+            assertThat(TokenAtRest.decrypt((String) r.get("TOKEN"))).isEqualTo("wh_one");
+            assertThat(r.get("TOKEN_HASH")).isEqualTo(v2.hmacHash("wh_one")).isNotEqualTo(legacyHash);
+            assertThat(r.get("NAME")).isEqualTo("n");
+            assertThat(backfill.migrateAll(List.of(SPEC))).as("idempotent").isZero();
+        } finally {
+            TokenAtRest.install(SERVICE);
+        }
+    }
+
+    @Test
+    @DisplayName("rotation: a row sealed and hashed under the PREVIOUS key is re-sealed and re-hashed under the current one")
+    void rotationReseals() {
+        CredentialEncryptionService oldV2 = new CredentialEncryptionService("test-password-123", "0123456789abcdef",
+                "", "", false, false, "2", "allow", "");
+        jdbc.update("INSERT INTO t_tokens (id, token, token_hash, name, updated_at) VALUES (1, ?, ?, 'n', '2026-01-01 00:00:00')",
+                oldV2.encrypt("wh_rot"), oldV2.hmacHash("wh_rot"));
+        CredentialEncryptionService rotated = new CredentialEncryptionService("brand-new-password-456", "fedcba9876543210",
+                "test-password-123", "0123456789abcdef", false, false, "2", "allow", "");
+        TokenAtRest.install(rotated);
+        try {
+            assertThat(backfill.migrateAll(List.of(SPEC))).isEqualTo(1);
+            assertThat((String) row(1).get("TOKEN")).contains("." + rotated.currentKeyId() + ".");
+            assertThat(row(1).get("TOKEN_HASH")).isEqualTo(rotated.hmacHash("wh_rot"));
+        } finally {
+            TokenAtRest.install(SERVICE);
+        }
+    }
+
+    @Test
+    @DisplayName("at write-version 1 the re-seal pass is a no-op (the old forms are the current ones)")
+    void writeVersion1DoesNotReseal() {
+        plaintextRow(1, "wh_one");
+        backfill.migrateAll(List.of(SPEC));
+        String token = (String) row(1).get("TOKEN");
+
+        assertThat(backfill.resealAndRehash(SPEC)).isZero();
+        assertThat(row(1).get("TOKEN")).isEqualTo(token);
+    }
 }

@@ -139,7 +139,8 @@ class MonolithSecurityConfigTest {
         ApiKeyService apiKeyService = mock(ApiKeyService.class);
 
         MonolithSecurityFilter filter = new MonolithSecurityConfig()
-                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService);
+                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService,
+                        "livecontext", "livecontext", false, noSessions());
 
         // A garbage bearer on a CONFIGURED public path must be ignored and the request forwarded
         // anonymously (200). On a path that was NOT in properties.getPublicPaths() the same garbage
@@ -184,7 +185,8 @@ class MonolithSecurityConfigTest {
         when(sharedLinkService.getByToken("sl_scope")).thenReturn(Optional.of(link));
 
         MonolithSecurityFilter filter = new MonolithSecurityConfig()
-                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService);
+                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService,
+                        "livecontext", "livecontext", false, noSessions());
 
         MockHttpServletRequest request =
                 externalRequest("/api/publications/00000000-0000-0000-0000-000000000123");
@@ -228,7 +230,8 @@ class MonolithSecurityConfigTest {
         when(apiKeyService.resolveByPlaintextKey(plaintext)).thenReturn(resolved);
 
         MonolithSecurityFilter filter = new MonolithSecurityConfig()
-                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService);
+                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService,
+                        "livecontext", "livecontext", false, noSessions());
 
         // A SCOPED key is confined to the MCP streamable endpoint (it 403s on any
         // other path), so the scope-forwarding assertion must run against /mcp.
@@ -266,7 +269,8 @@ class MonolithSecurityConfigTest {
         when(apiKeyService.resolveByPlaintextKey(plaintext)).thenReturn(resolved);
 
         MonolithSecurityFilter filter = new MonolithSecurityConfig()
-                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService);
+                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService,
+                        "livecontext", "livecontext", false, noSessions());
 
         MockHttpServletRequest request = externalRequest("/api/workflows");
         request.addHeader("X-API-Key", plaintext);
@@ -294,5 +298,11 @@ class MonolithSecurityConfigTest {
                 captured.set(request);
             }
         };
+    }
+
+    /** No CeSessionRevocationService bean (the session check is exercised in common-lib). */
+    @SuppressWarnings("unchecked")
+    private static org.springframework.beans.factory.ObjectProvider<com.apimarketplace.auth.service.CeSessionRevocationService> noSessions() {
+        return mock(org.springframework.beans.factory.ObjectProvider.class);
     }
 }

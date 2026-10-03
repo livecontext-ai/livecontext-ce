@@ -248,13 +248,19 @@ export interface PublicationCardProps {
    * actually has the installed resource; omitted → no Open button (badge only).
    */
   openHref?: string;
+  /**
+   * The publisher's badge when the page already knows it (a partner's offer page knows its partner).
+   * Given, the badge is drawn from it with no lookup: the id-keyed badge lookup needs a signed-in
+   * caller, so on a page an anonymous visitor reads the badge would otherwise never show.
+   */
+  publisherBadge?: { verified: boolean; partner: boolean };
 }
 
 // memo: during an install the shared store ticks progress every 50ms and the
 // whole grid re-renders; memo confines that to the ONE card whose
 // installProgress prop actually changes (iframe previews make a full-grid
 // re-render at 20Hz genuinely expensive).
-export const PublicationCard = memo(function PublicationCard({ publication, currentUserId, ownedByMe, onAcquire, isAcquired, showStats, mine, remote, acquired, installProgress, installBlocked, openHref }: PublicationCardProps) {
+export const PublicationCard = memo(function PublicationCard({ publication, currentUserId, ownedByMe, onAcquire, isAcquired, showStats, mine, remote, acquired, installProgress, installBlocked, openHref, publisherBadge }: PublicationCardProps) {
   const t = useTranslations('marketplace');
   const tAcquire = useTranslations('modals.acquire');
   // The sound labels live in the applications namespace, where the app card
@@ -532,7 +538,7 @@ export const PublicationCard = memo(function PublicationCard({ publication, curr
             </span>
             {/* Verified check sits immediately right of the name, never inside the
                 truncating span - a truncated name must not be able to clip it away. */}
-            <VerifiedBadge userId={publication.publisherId} size="xs" />
+            <VerifiedBadge userId={publication.publisherId} verified={publisherBadge?.verified} partner={publisherBadge?.partner} size="xs" />
           </UserActionMenu>
           {/* Node/integration icons sit right next to the publisher (not pushed to the
               far edge): they read as "published by X, built with these integrations". */}

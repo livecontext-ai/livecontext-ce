@@ -204,8 +204,9 @@ public class InternalAccessController {
                 StreamEvent.started(streamId, conversationId, metadata.model()));
 
         // 2. Replay stored tool events (tool_call/tool_result)
+        // concatMap, not flatMap: a result published before its call leaves the card pending.
         Mono<Void> replayTools = streamStateService.getToolEvents(streamId)
-                .flatMap(json -> {
+                .concatMap(json -> {
                     try {
                         StreamEvent event = streamPubSubService.deserializeEvent(json);
                         return streamPubSubService.publish(streamId, event);

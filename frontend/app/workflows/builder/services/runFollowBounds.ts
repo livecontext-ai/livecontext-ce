@@ -76,6 +76,18 @@ export interface FollowEventDetail {
 
 export interface IdentifiedNode extends FollowNodeLike {
   id: string;
+  /** Set on a sticky note: the id of the node it explains. */
+  data?: { noteAttachedTo?: string } | null;
+}
+
+/**
+ * The nodes with these ids, plus the notes attached to them: a node is framed together
+ * with what explains it, in a run as on a step click.
+ */
+export function withAttachedNotes<T extends IdentifiedNode>(nodes: T[], ids: Iterable<string>): T[] {
+  const wanted = new Set(ids);
+  return nodes.filter((node) => wanted.has(node.id)
+    || (!!node.data?.noteAttachedTo && wanted.has(node.data.noteAttachedTo)));
 }
 
 /**
@@ -97,6 +109,5 @@ export function resolveFollowFrame(
   // A canvas with no id follows nothing. Comparing two undefined ids would be
   // vacuously true and would wave through any dispatcher that omitted the field.
   if (!workflowId || detail.workflowId !== workflowId) return null;
-  const wanted = new Set(detail.nodeIds);
-  return computeFollowBounds(nodes.filter((node) => wanted.has(node.id)), options);
+  return computeFollowBounds(withAttachedNotes(nodes, detail.nodeIds), options);
 }

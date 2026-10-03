@@ -390,6 +390,22 @@ describe('NotificationPreferencesPanel', () => {
     expect(screen.getAllByText('personScoped')).toHaveLength(1);
   });
 
+  it('shows the creator topics, emailable on a Free plan and applying in every workspace', () => {
+    const person = (name: string) => ({ ...topic(name, 'EMAIL', true), personScoped: true });
+    loaded(prefs({ topics: [...prefs().topics, person('FOLLOWING'), person('AUDIENCE')] }));
+    render(<NotificationPreferencesPanel enabled />);
+
+    const following = screen.getByLabelText('topics.following.title') as HTMLSelectElement;
+    const audience = screen.getByLabelText('topics.audience.title') as HTMLSelectElement;
+    expect(following.value).toBe('EMAIL');
+    // Free plan (emailRequiredPlan STARTER), yet email stays available for these two.
+    expect(optionsOf(following)).toContainEqual({ value: 'EMAIL', disabled: false });
+    expect(optionsOf(audience)).toContainEqual({ value: 'EMAIL', disabled: false });
+    expect(screen.getByText('topics.audience.description')).toBeTruthy();
+    // Credits + the two creator topics carry the every-workspace mark.
+    expect(screen.getAllByText('personScoped')).toHaveLength(3);
+  });
+
   it('warns when the saved choice delivers nothing (Free plan, no channel, the default Both)', () => {
     loaded(prefs({ channel: { connected: false, channel: null, title: null } }));
     render(<NotificationPreferencesPanel enabled />);

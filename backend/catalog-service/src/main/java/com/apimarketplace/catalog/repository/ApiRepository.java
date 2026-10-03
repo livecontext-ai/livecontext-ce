@@ -22,50 +22,56 @@ public interface ApiRepository extends CrudRepository<ApiEntity, UUID> {
     Optional<ApiEntity> findByApiName(String apiName);
 
     /**
-     * True when this credential key is held by a shipped integration, or by a credential row the
-     * given owner does not own.
+     * True when this credential key belongs to anybody other than {@code ownerId}: the ONE
+     * ownership predicate behind registration (refuse a taken key), deletion (never remove a row
+     * that is not yours) and execution (never resolve a stored secret filed under someone else's
+     * key). CASA readiness, LC-002 / LC-057.
      *
-     * <p>{@code catalog.credentials.credential_name} is UNIQUE with no tenant column, so a custom
-     * API registering under an existing key overwrites that template for the whole installation,
-     * and deleting the custom API removes it. Registration refuses that collision, and deletion
-     * leaves such a row alone; this is the lookup both use.
-     *
-     * <p>It reads BOTH tables, and each is there for a case the other cannot see.
-     * {@code catalog.credentials} is where the rows at risk live, and it is the only table that
-     * knows about a NATIVE template, which has no API row at all: {@code imap} and {@code smtp}
-     * are both on production under {@code variant='primary'}, exactly what this registration path
-     * writes, so an API named "IMAP" would have upserted straight over the template the Email
-     * Inbox node depends on. Variant is deliberately NOT part of the predicate: the hazard is the
-     * name.
-     *
-     * <p>It asks TWO questions, because either one alone leaves the key open.
-     *
-     * <p>The first is whether a SHIPPED api row holds the key. That clause exists because the
-     * credential row is exactly what a collision destroys: production carried a Ghost integration
-     * whose 41 tools had lost every {@code tool_credentials} link and whose {@code catalog
-     * .credentials} row was gone, so a guard that only read that table saw nothing left to
-     * protect and waved the next registration through. Matching {@code icon_slug} as well as
-     * {@code platform_credential_name} covers a shipped row whose credential name was never set.
-     *
-     * <p>The second is whether a credential row exists that the CALLER does not own. Scoping the
-     * exemption to the caller is the point: keying it on "any custom API" meant the first
-     * squatter disabled the guard permanently, for that key, for everybody after them. Your own
-     * rows still exempt you, so re-registering your own API, and the delete-then-recreate an
-     * update performs, both pass.
+     * <p>Ownership is decided by {@code created_by}, never by {@code source}: {@code source} is
+     * whatever the submission said it was, while {@code created_by} is set from the gateway
+     * identity. The key is foreign when:
+     * <ol>
+     *   <li>an API row carries it (as {@code platform_credential_name} or {@code icon_slug}) and
+     *       was created by somebody else - a shipped integration, a bundle row, another tenant; or</li>
+     *   <li>a {@code catalog.credentials} template of that name exists that the owner does not
+     *       own. A template is the owner's only when ALL of these hold:
+     *       <ul>
+     *         <li>it was written by the custom-API path: {@code credential_type} is NULL and its
+     *             metadata carries none of the {@code provider}/{@code category}/{@code source}
+     *             markers that every migration-seeded (smtp, imap, ssh, sftp, database, llm_*),
+     *             imported and bundle-applied template carries - so a NATIVE template, which has
+     *             no API row at all, is always foreign;</li>
+     *         <li>its {@code customApiOwner} stamp, when present, is the owner (rows written before
+     *             the stamp existed have none);</li>
+     *         <li>no tool of an API created by somebody else links it.</li>
+     *       </ul>
+     *       The previous version exempted a template whenever ONE of the owner's custom APIs
+     *       carried the key, which was circular: an authType:none custom API named {@code imap}
+     *       made the native imap template "its own", so deleting that API deleted the template
+     *       for the whole installation and executing it kept the platform fallback.</li>
+     * </ol>
      */
     @Query("""
             SELECT EXISTS (
-                SELECT 1 FROM catalog.apis shipped
-                WHERE shipped.source IS DISTINCT FROM 'custom'
-                  AND (shipped.platform_credential_name = :key OR shipped.icon_slug = :key)
+                SELECT 1 FROM catalog.apis a
+                WHERE (a.platform_credential_name = :key OR a.icon_slug = :key)
+                  AND a.created_by IS DISTINCT FROM :ownerId
             ) OR EXISTS (
                 SELECT 1 FROM catalog.credentials c
                 WHERE c.credential_name = :key
-                  AND NOT EXISTS (
-                      SELECT 1 FROM catalog.apis mine
-                      WHERE mine.source = 'custom'
-                        AND mine.created_by = :ownerId
-                        AND mine.platform_credential_name = c.credential_name
+                  AND NOT (
+                        c.credential_type IS NULL
+                    AND c.metadata ->> 'provider' IS NULL
+                    AND c.metadata ->> 'category' IS NULL
+                    AND c.metadata ->> 'source' IS NULL
+                    AND COALESCE(c.metadata ->> 'customApiOwner', :ownerId) = :ownerId
+                    AND NOT EXISTS (
+                        SELECT 1 FROM catalog.tool_credentials tc
+                        JOIN catalog.api_tools t ON t.id = tc.api_tool_id
+                        JOIN catalog.apis o ON o.id = t.api_id
+                        WHERE tc.credential_name = c.credential_name
+                          AND o.created_by IS DISTINCT FROM :ownerId
+                    )
                   )
             )
             """)
@@ -73,22 +79,30 @@ public interface ApiRepository extends CrudRepository<ApiEntity, UUID> {
                                                      @Param("ownerId") String ownerId);
 
     /**
-     * The identity-free half of the check above: does a SHIPPED catalogue integration hold this
-     * credential key?
-     *
-     * <p>Used where there is no caller to scope the ownership exemption to. Asking the full
-     * predicate with a null owner would make the ownership half match nothing and therefore fire
-     * for every key that has any credential row, which silently turns a fail-OPEN site into a
-     * fail-CLOSED one.
+     * The identity-free variant, for a caller with no owner to exempt: ANY API row or template
+     * carrying the key is a collision. Fail closed by construction.
      */
     @Query("""
             SELECT EXISTS (
-                SELECT 1 FROM catalog.apis shipped
-                WHERE shipped.source IS DISTINCT FROM 'custom'
-                  AND (shipped.platform_credential_name = :key OR shipped.icon_slug = :key)
+                SELECT 1 FROM catalog.apis a
+                WHERE a.platform_credential_name = :key OR a.icon_slug = :key
+            ) OR EXISTS (
+                SELECT 1 FROM catalog.credentials c WHERE c.credential_name = :key
             )
             """)
     boolean existsShippedIntegrationWithCredentialKey(@Param("key") String key);
+
+    /**
+     * Ids of the API rows carrying this credential key that {@code ownerId} did not create. Used to
+     * find the shipped integration whose hosts a host-bound credential may be sent to.
+     */
+    @Query("""
+            SELECT a.id FROM catalog.apis a
+            WHERE (a.platform_credential_name = :key OR a.icon_slug = :key)
+              AND a.created_by IS DISTINCT FROM :ownerId
+            """)
+    List<UUID> findIdsHoldingCredentialKeyNotCreatedBy(@Param("key") String key,
+                                                      @Param("ownerId") String ownerId);
     
     /**
      * Find APIs by category

@@ -124,6 +124,10 @@ public class AgentAsyncCompletionService {
     @Autowired(required = false)
     private RedisInFlightStore inFlightStore;
 
+    /** LC-066: tags the observability row of an agent that ran in a run holding restricted data. */
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
+
     /**
      * Local E2E-only delay inserted immediately after {@link RedisInFlightStore#stage}.
      * Default is 0 and production behavior is unchanged. The post-OOM crash/restart E2E
@@ -2007,6 +2011,9 @@ public class AgentAsyncCompletionService {
 
             var req = new com.apimarketplace.agent.client.dto.AgentObservabilityRequest();
             req.setTenantId(pending.tenantId());
+            if (stepPayloadService != null && stepPayloadService.isRunRestricted(pending.runId())) {
+                req.setDataSensitivity(com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
+            }
             // PR20 - propagate workspace identity from the enqueue-time snapshot
             // so the async-delivery row is scoped identically to the sync path.
             req.setOrganizationId(pending.organizationId());

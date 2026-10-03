@@ -44,6 +44,9 @@ public class CredentialClient {
         factory.setConnectTimeout((int) Duration.ofSeconds(2).toMillis());
         factory.setReadTimeout((int) Duration.ofSeconds(3).toMillis());
         this.restTemplate = new RestTemplate(factory);
+        // CASA LC-035: v2 gateway signature (method + path + roles) added at send time.
+        this.restTemplate.getInterceptors().add(
+                new com.apimarketplace.common.web.GatewaySignatureV2Interceptor(() -> gatewaySecretKey));
         this.baseUrl = baseUrl;
         this.gatewaySecretKey = gatewaySecretKey;
     }

@@ -10,13 +10,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -24,12 +23,13 @@ import static org.mockito.Mockito.when;
 class CreatorFollowServiceTest {
 
     @Mock private CreatorFollowRepository repo;
+    @Mock private CreatorFollowNotifier notifier;
 
     private CreatorFollowService service;
 
     @BeforeEach
     void setUp() {
-        service = new CreatorFollowService(repo);
+        service = new CreatorFollowService(repo, notifier);
     }
 
     @Test
@@ -113,10 +113,31 @@ class CreatorFollowServiceTest {
     }
 
     @Test
-    @DisplayName("followerIds lists the creator's followers for the publish fan-out")
-    void followerIds() {
-        when(repo.findFollowerIds("7")).thenReturn(List.of("5", "9"));
+    @DisplayName("a REAL new follow tells the creator")
+    void newFollowNotifiesCreator() {
+        when(repo.insertIfAbsent("5", "7")).thenReturn(1);
 
-        assertThat(service.followerIds("7")).containsExactly("5", "9");
+        service.follow("5", "7");
+
+        verify(notifier).onFollowed("5", "7");
+    }
+
+    @Test
+    @DisplayName("regression: a repeated follow (nothing inserted) does not notify the creator again")
+    void repeatFollowIsSilent() {
+        when(repo.insertIfAbsent("5", "7")).thenReturn(0);
+
+        service.follow("5", "7");
+
+        verifyNoInteractions(notifier);
+    }
+
+    @Test
+    @DisplayName("a refused follow (self) and an unfollow never notify")
+    void refusedFollowAndUnfollowAreSilent() {
+        assertThatThrownBy(() -> service.follow("7", "7")).isInstanceOf(IllegalArgumentException.class);
+        service.unfollow("5", "7");
+
+        verifyNoInteractions(notifier);
     }
 }

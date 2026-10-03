@@ -150,7 +150,7 @@ class SignalResumeServicePerItemContinuationTest {
         lenient().when(mockRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
         lenient().when(mockStorageService.saveJsonWithContext(
             anyString(), anyMap(), anyString(), any(), any(), anyString(), anyString(),
-            anyInt(), anyInt(), any(), anyString()))
+            anyInt(), anyInt(), anyInt(), any(), anyString(), any()))
             .thenReturn(UUID.fromString("22222222-2222-2222-2222-222222222222"));
         return run;
     }

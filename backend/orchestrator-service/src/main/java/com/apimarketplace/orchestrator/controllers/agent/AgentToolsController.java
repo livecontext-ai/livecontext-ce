@@ -70,6 +70,9 @@ public class AgentToolsController {
         if (request.get("workflowRunId") != null) {
             credentials.put("__workflowRunId__", request.get("workflowRunId"));
         }
+        // Restricted-data tag forwarded by the calling service (Gmail / Drive content in the caller's
+        // context). Only RESTRICTED is honoured: a body can tighten what a tool does, never relax it.
+        com.apimarketplace.common.classification.DataSensitivity.restoreForwardedTag(request, credentials);
         if (request.get("workflowNodeId") != null) {
             credentials.put("__workflowNodeId__", request.get("workflowNodeId"));
         }
@@ -302,6 +305,9 @@ public class AgentToolsController {
         if (request.get("workflowRunId") != null) {
             credentials.put("__workflowRunId__", request.get("workflowRunId"));
         }
+        // Restricted-data tag forwarded by the calling service (Gmail / Drive content in the caller's
+        // context). Only RESTRICTED is honoured: a body can tighten what a tool does, never relax it.
+        com.apimarketplace.common.classification.DataSensitivity.restoreForwardedTag(request, credentials);
         if (request.get("workflowNodeId") != null) {
             credentials.put("__workflowNodeId__", request.get("workflowNodeId"));
         }
@@ -326,12 +332,10 @@ public class AgentToolsController {
         if (request.get("allowedFileIds") != null) {
             credentials.put("allowedFileIds", request.get("allowedFileIds"));
         }
-        // Access mode keys for ToolAccessControl (read/write per resource)
-        for (String am : ToolAccessControl.ACCESS_MODE_KEYS) {
-            if (request.get(am) != null) {
-                credentials.put(am, request.get(am));
-            }
-        }
+        // Access mode keys for ToolAccessControl (read/write per resource), matched by suffix so
+        // the axis-less modes a scoped MCP API key derives (catalogAccessMode, ...) are carried
+        // too instead of being dropped into "unrestricted" (LC-055).
+        ToolAccessControl.copyAccessModesBySuffix(request, credentials);
 
         @SuppressWarnings("unchecked")
         Set<String> approvedServices = request.get("approvedServices") instanceof Collection
@@ -343,7 +347,11 @@ public class AgentToolsController {
 
         String orgId = httpRequest.getHeader("X-Organization-ID");
         String orgRole = httpRequest.getHeader("X-Organization-Role");
-        if (orgId == null) orgId = (String) request.get("orgId");
+        // CASA LC-013: the workspace comes from the X-Organization-ID HEADER only (gateway-injected,
+        // or set by the internal caller next to the signed X-User-ID). The body "orgId" fallback let
+        // a caller whose gateway resolved no active org name any workspace. Every internal caller
+        // (RemoteToolExecutionService, RemoteToolGateway, the conversation relay) already sends the
+        // header from the same value it puts in the body.
         // The ROLE is never taken from the request body. This endpoint is gateway-routed, and the
         // gateway strips the caller's own identity HEADERS but not the body, so a user whose
         // gateway resolved no active org could name a workspace AND assert OWNER in it in one
@@ -358,10 +366,6 @@ public class AgentToolsController {
         // OWNER did not merely avoid the VIEWER refusal, it bypassed that workspace's whole
         // restricted-resource list. Do not re-read this as "the role only ever refuses" and
         // restore the fallback.
-        //
-        // orgId is STILL read from the body, and that is a compatibility decision, not a safety
-        // one: it is forgeable by the same route. Closing it needs the internal callers to name
-        // the workspace by header first, which is a separate change.
 
         ToolsProvider.ToolExecutionContext context = new ToolsProvider.ToolExecutionContext(
             tenantId, credentials, Map.of(), approvedServices,
@@ -411,7 +415,11 @@ public class AgentToolsController {
 
         String orgId = httpRequest.getHeader("X-Organization-ID");
         String orgRole = httpRequest.getHeader("X-Organization-Role");
-        if (orgId == null) orgId = (String) request.get("orgId");
+        // CASA LC-013: the workspace comes from the X-Organization-ID HEADER only (gateway-injected,
+        // or set by the internal caller next to the signed X-User-ID). The body "orgId" fallback let
+        // a caller whose gateway resolved no active org name any workspace. Every internal caller
+        // (RemoteToolExecutionService, RemoteToolGateway, the conversation relay) already sends the
+        // header from the same value it puts in the body.
         // The ROLE is never taken from the request body. This endpoint is gateway-routed, and the
         // gateway strips the caller's own identity HEADERS but not the body, so a user whose
         // gateway resolved no active org could name a workspace AND assert OWNER in it in one
@@ -426,10 +434,6 @@ public class AgentToolsController {
         // OWNER did not merely avoid the VIEWER refusal, it bypassed that workspace's whole
         // restricted-resource list. Do not re-read this as "the role only ever refuses" and
         // restore the fallback.
-        //
-        // orgId is STILL read from the body, and that is a compatibility decision, not a safety
-        // one: it is forgeable by the same route. Closing it needs the internal callers to name
-        // the workspace by header first, which is a separate change.
 
         ToolsProvider.ToolExecutionContext context = new ToolsProvider.ToolExecutionContext(
             tenantId, credentials, Map.of(), approvedServices, viewingWorkflowId, viewingWorkflowName, orgId, orgRole
@@ -464,7 +468,7 @@ public class AgentToolsController {
             // vision bytes), but the log line must NOT dump multi-MB base64 - strip it first.
             log.info("Tool {} execution success - data keys: {}, metadata: {}", toolName,
                 data instanceof Map ? ((Map<?, ?>) data).keySet() : "not a map",
-                ToolMediaMetadata.withoutHeavyMedia(result.metadata()));
+                com.apimarketplace.common.logging.PayloadLogSafety.describeAny(ToolMediaMetadata.withoutHeavyMedia(result.metadata())));
             return ResponseEntity.ok(response);
         } else {
             response.put("error", result.error() != null ? result.error() : "Unknown error");

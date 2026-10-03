@@ -69,8 +69,33 @@ public final class ToolAccessControl {
         // Left in place rather than deleted so that removing a permission check is a deliberate
         // decision rather than a side effect. Wiring a real axis means the full producer chain
         // (record + parser + every relay list + schema + help + frontend), not just a key here.
+        // ONE producer does exist for these axis-less categories (LC-055): an MCP API key
+        // restricted by scope. McpProtocolService.restrictionCredentials derives
+        // <category>AccessMode from the key scopes, and receivers carry it with
+        // copyAccessModesBySuffix, so a key granted only catalog.search runs catalog read-only.
         Map.entry("catalog",     Set.of("search", "response_schema", "help")),
-        Map.entry("web_search",  Set.of("search", "fetch")),
+        // LC-029: 'fetch' is NOT a read. It issues an outbound request to a URL the model
+        // produced, so whatever the agent has already read (mailbox content included) can be
+        // carried out of the platform in that URL. A read-only agent must not have an egress
+        // channel, which is exactly what classifying fetch as READ used to hand it:
+        // checkWriteAccess short-circuits on isReadAction before it ever looks at the mode.
+        // 'search' stays READ - its destination is the platform's own search backend, not a
+        // host the model picks, so it opens no channel out.
+        // Knock-on (deliberate, and bounded): McpProtocolService.restrictionCredentials derives
+        // an API key's mode from its granted actions, so a key scoped web_search.fetch now
+        // resolves to write mode instead of read. That does not widen the key: actionInScope
+        // (LC-054) refuses any action the key was not granted BEFORE execution, so such a key
+        // still cannot call agent_browse or the browse_* controls.
+        Map.entry("web_search",  Set.of("search")),
+        // LC-029, CE edition. With websearch.enabled=false (the CE monolith default) the
+        // browser-agent capability is registered as its OWN top-level tool named
+        // "agent_browse" (CloudRelayBrowserAgentToolsProvider), not as a web_search action,
+        // so it needs its own category: checkWriteAccess derives the credential key from the
+        // category, and a "web_search" category would read a "web_searchAccessMode" that an
+        // agent_browse-scoped key never emits. Only browse_status is a read (it inspects a
+        // session already running). Starting a session and steering / aborting / screenshotting
+        // one are writes, exactly as the same five actions are classified under web_search.
+        Map.entry("agent_browse", Set.of("browse_status", "help")),
         // Files: read actions. Write actions (create_folder / move_to_folder) are NOT
         // listed, so a read-only agent (fileAccessMode='read') is blocked from them.
         // Singular "file" matches the allow-list category (CREDENTIAL_KEYS) and the
@@ -105,11 +130,37 @@ public final class ToolAccessControl {
      * be one or the other: a new tool category that is neither is a category whose read/write
      * switch nobody wired, which is exactly the omission this pair exists to make loud.
      */
-    public static final Set<String> AXIS_LESS_CATEGORIES = Set.of("catalog", "web_search");
+    public static final Set<String> AXIS_LESS_CATEGORIES = Set.of("catalog", "web_search", "agent_browse");
 
     /** Plain credential keys, as the tool controllers receive them. */
     public static final List<String> ACCESS_MODE_KEYS =
         ENFORCED_ACCESS_MODE_CATEGORIES.stream().map(c -> c + "AccessMode").toList();
+
+    /** Suffix shared by every per-category access-mode credential key. */
+    public static final String ACCESS_MODE_SUFFIX = "AccessMode";
+
+    /**
+     * Copies every {@code <category>AccessMode} key found in {@code source} into {@code target},
+     * matched by SUFFIX instead of against {@link #ACCESS_MODE_KEYS} (LC-055).
+     *
+     * <p>For the receivers of a scoped MCP API key call relayed from another service: the key
+     * can carry a mode for an axis-less category ({@code catalogAccessMode},
+     * {@code generationAccessMode}), and a receiver iterating only the enforced list dropped it,
+     * which reads as UNRESTRICTED at the tool. Copying a mode can only narrow what the caller may
+     * do (the alternative is no mode, i.e. full access), so matching by suffix cannot widen
+     * anything.
+     */
+    public static void copyAccessModesBySuffix(Map<String, Object> source, Map<String, Object> target) {
+        if (source == null || target == null) {
+            return;
+        }
+        source.forEach((key, value) -> {
+            if (key != null && value != null && key.endsWith(ACCESS_MODE_SUFFIX)
+                    && key.length() > ACCESS_MODE_SUFFIX.length()) {
+                target.put(key, value);
+            }
+        });
+    }
 
     /** The same keys in the in-process agent-loop namespace ({@code __<key>__}). */
     public static final List<String> INTERNAL_ACCESS_MODE_KEYS =

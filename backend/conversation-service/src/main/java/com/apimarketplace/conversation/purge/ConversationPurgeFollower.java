@@ -33,8 +33,10 @@ public class ConversationPurgeFollower implements PurgeFollower.Handler, PurgeFo
     @org.springframework.beans.factory.annotation.Autowired   // two constructors: Spring must be told which one
     public ConversationPurgeFollower(JdbcTemplate jdbc,
                                      @Value("${services.auth-service.url:http://localhost:8083}") String authServiceUrl,
+                                     @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey,
                                      @Value("${purge.follower.enabled:true}") boolean enabled) {
-        this(jdbc, new AuthClient(authServiceUrl), enabled);
+        // Signed: /api/internal/auth/purges sits under the prefix auth-service can HMAC-gate.
+        this(jdbc, new AuthClient(authServiceUrl, gatewaySecretKey), enabled);
     }
 
     ConversationPurgeFollower(JdbcTemplate jdbc, AuthClient authClient, boolean enabled) {

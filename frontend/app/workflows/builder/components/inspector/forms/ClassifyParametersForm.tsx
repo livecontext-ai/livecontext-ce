@@ -93,6 +93,8 @@ export function ClassifyParametersForm({
   handleSetHandleRef,
 }: ClassifyParametersFormProps) {
   const t = useTranslations('workflowBuilder.forms');
+  // Heading of the model picker's group of unlisted (hidden) models.
+  const tActions = useTranslations('actions');
   const temperature = data.temperature ?? DEFAULT_TEMPERATURE;
   const maxTokens = data.maxTokens ?? DEFAULT_MAX_TOKENS;
 
@@ -198,6 +200,7 @@ export function ClassifyParametersForm({
   return (
     <div className="space-y-5 pt-2">
       <ModelPicker
+        hiddenModelsLabel={tActions('unlistedModels')}
         value={modelSelection}
         onChange={handleModelPick}
         disabled={isRunMode}

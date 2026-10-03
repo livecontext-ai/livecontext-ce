@@ -64,6 +64,21 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * A turn refused because the conversation holds Gmail / Drive content and the chosen model
+     * provider may not receive it (LC-004). 403: a policy refusal the user resolves by switching
+     * model, not a fault.
+     */
+    @ExceptionHandler(com.apimarketplace.conversation.service.ai.RestrictedDataTransferGuard.RestrictedDataTransferDeniedException.class)
+    public ResponseEntity<Map<String, Object>> handleRestrictedDataTransferDenied(
+            com.apimarketplace.conversation.service.ai.RestrictedDataTransferGuard.RestrictedDataTransferDeniedException ex) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("code", "RESTRICTED_DATA_PROVIDER_NOT_ALLOWED");
+        body.put("message", ex.getMessage());
+        body.put("provider", ex.getProviderName());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body);
+    }
+
+    /**
      * Representation minimale d'une erreur REST.
      */
     public record ErrorResponse(String code, String message) { }

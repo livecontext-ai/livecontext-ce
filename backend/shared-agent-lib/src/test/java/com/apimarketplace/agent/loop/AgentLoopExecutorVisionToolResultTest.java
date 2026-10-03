@@ -72,9 +72,9 @@ class AgentLoopExecutorVisionToolResultTest {
     @SuppressWarnings("unchecked")
     private void invokeAddToolResultMessages(List<ToolResult> results, boolean providerSupportsImages) throws Exception {
         Method m = AgentLoopExecutor.class.getDeclaredMethod(
-                "addToolResultMessages", LoopExecutionState.class, List.class, boolean.class);
+                "addToolResultMessages", LoopExecutionState.class, List.class, boolean.class, String.class);
         m.setAccessible(true);
-        m.invoke(executor, state, results, providerSupportsImages);
+        m.invoke(executor, state, results, providerSupportsImages, "anthropic");
     }
 
     @Test

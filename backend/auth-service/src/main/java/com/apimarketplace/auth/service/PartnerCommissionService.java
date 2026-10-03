@@ -38,7 +38,7 @@ public class PartnerCommissionService {
 
     private static final Logger log = LoggerFactory.getLogger(PartnerCommissionService.class);
 
-    public enum RecordOutcome { RECORDED, DUPLICATE, NOT_ATTRIBUTED, NOT_REVENUE_SHARE, WINDOW_ENDED, ZERO_AMOUNT }
+    public enum RecordOutcome { RECORDED, DUPLICATE, NOT_ATTRIBUTED, NOT_REVENUE_SHARE, WINDOW_ENDED, ZERO_AMOUNT, CUSTOMER_IS_PARTNER }
 
     private final PartnerCommissionRepository commissionRepository;
     private final RewardRedemptionRepository redemptionRepository;
@@ -75,6 +75,13 @@ public class PartnerCommissionService {
         if (!redemption.isActive() || redemption.getStatus() == RewardStatus.CLAWED_BACK
                 || redemption.getOwnerUserId() == null) {
             return RecordOutcome.NOT_ATTRIBUTED;
+        }
+        // A partner is never another partner's client. Redeem refuses the code to a partner, but a
+        // client attributed first can become a partner later (or be given a code by an admin):
+        // their own invoices then earn nobody, or two partners could pay each other a kickback on
+        // their own subscriptions. Checked here, on every invoice, so the order does not matter.
+        if (codeRepository.findByOwnerUserIdAndProgram(customerUserId, RewardProgram.PARTNER).isPresent()) {
+            return RecordOutcome.CUSTOMER_IS_PARTNER;
         }
         RewardCode code = codeRepository.findById(redemption.getRewardCodeId()).orElse(null);
         // A disabled code stops earning, including on customers it already brought (that is

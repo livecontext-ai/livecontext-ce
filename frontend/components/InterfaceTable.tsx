@@ -37,6 +37,8 @@ import { BulkDeleteModal } from '@/components/ui/BulkDeleteModal';
 import { SelectionActionBar, BulkBarButton } from '@/components/ui/SelectionActionBar';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PaginationBar } from '@/components/ui/PaginationBar';
+import { useUrlListView } from '@/hooks/useUrlListView';
+import { useEffectOnChange } from '@/hooks/useEffectOnChange';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import PublishResourceModal from '@/components/marketplace/PublishResourceModal';
 import { useResourceRowsDeleted } from '@/lib/resources/resourceDeleted';
@@ -323,18 +325,22 @@ export function InterfaceTable({ className = '', interfaceTypeFilter }: Interfac
   const { favoriteIds, toggleFavorite } = useResourceFavorites('INTERFACE', handleFavoriteError);
   const [interfaces, setInterfaces] = useState<InterfaceRow[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  // The list's view lives in the address, so a reload reopens it as it was.
+  const {
+    searchQuery, setSearchQuery, sortBy, setSortBy, visibilityFilter, setVisibilityFilter,
+    page, setPage, pageSize, setPageSize,
+  } = useUrlListView<ListSortKey>({
+    sortKeys: ['lastModified', 'name'],
+    defaultSort: 'lastModified',
+    defaultPageSize: 25,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Bumped on workspace switch to force a reload; the load effect keys on it (and the search term /
   // type) rather than on the fetch callback identity, so an unstable callback can never re-fire it.
   const [reloadKey, setReloadKey] = useState(0);
-  const [searchQuery, setSearchQuery] = useState('');
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
   // Default order = most-recently-modified first; visibility filter = no restriction.
-  const [sortBy, setSortBy] = useState<ListSortKey>('lastModified');
-  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>('all');
   // Publication status now ships WITH each list page (publicationStatuses envelope), so it is always
   // resolved by the time a card renders - no separate sweep, no Lock-flash gate.
   const { selectedIds: selectedInterfaces, toggle: toggleInterfaceSelection, clear: clearInterfaceSelection } = useSelectableItems();
@@ -446,7 +452,7 @@ export function InterfaceTable({ className = '', interfaceTypeFilter }: Interfac
   }, [page, pageSize, debouncedSearch, interfaceTypeFilter, sortBy, visibilityFilter, folders.folderIdParam]);
 
   // Reset to page 0 when the search term, type, sort, visibility filter or folder changes.
-  useEffect(() => {
+  useEffectOnChange(() => {
     setPage(0);
   }, [debouncedSearch, interfaceTypeFilter, sortBy, visibilityFilter, folders.folderIdParam]);
 
@@ -513,8 +519,11 @@ export function InterfaceTable({ className = '', interfaceTypeFilter }: Interfac
 
   // Snap back if the active page fell out of range (e.g. a last-page deletion narrowed the total).
   useEffect(() => {
-    if (!loading && page > 0 && page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
-  }, [loading, page, totalPages]);
+    // Not after a failed load: the count is 0 then because nothing came back, not because the
+    // list is empty, and snapping would erase from the address the very page a reload after a
+    // dropped connection is meant to come back to.
+    if (!loading && !error && page > 0 && page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
+  }, [loading, error, page, totalPages, setPage]);
 
   // Pull the full html/css/js of the given pages into `templatesById`, at most once each
   // (deduped via fetchedTemplateIds). The list payload deliberately omits those heavy fields,

@@ -68,6 +68,10 @@ public class SkillToolsProvider implements ToolsProvider {
                 return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "tenantId is required");
             }
 
+            if (writesRestrictedSkillContent(action, parameters, context)) {
+                return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, RESTRICTED_SKILL_REFUSAL);
+            }
+
             if (crudModule.canHandle(action)) {
                 return crudModule.execute(action, parameters, tenantId, context)
                     .orElse(ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "CRUD module failed for action: " + action));
@@ -94,6 +98,45 @@ public class SkillToolsProvider implements ToolsProvider {
             log.error("Error executing skill action {}: {}", action, e.getMessage(), e);
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Error: " + e.getMessage());
         }
+    }
+
+    /** Text fields of a skill: what create/update would store and later inject into other runs. */
+    private static final List<String> SKILL_CONTENT_FIELDS = List.of("name", "description", "instructions", "icon");
+
+    static final String RESTRICTED_SKILL_REFUSAL =
+        com.apimarketplace.common.classification.RestrictedDataPolicy.REFUSAL_CODE
+        + ": Content from Gmail or Google Drive seen earlier in this conversation cannot be written into a "
+        + "skill: a skill is kept indefinitely and loaded into the prompts of other agents and future "
+        + "conversations, and a marketplace listing is public. In this conversation no skill can be created "
+        + "or published and no skill text can be changed (reading, assigning, deleting, moving and "
+        + "unpublishing skills still work). Tell the user: they can write or publish the skill from a "
+        + "conversation that has not read Gmail or Google Drive.";
+
+    /**
+     * LC-004 / LC-066: a skill is the memory tool's twin. It has no expiry and its description is
+     * loaded into every later prompt of every agent it is assigned to, so writing Gmail / Drive
+     * content into one would extend that data's retention indefinitely and hand it to whatever
+     * provider those agents run on. The memory tool REFUSES a save in a restricted execution
+     * rather than tagging the entry; a skill follows the same rule, for the same reason: a tag
+     * would make every agent carrying the skill restricted for good. Only a call that stores
+     * skill text is refused: reads, delete, assign, unpublish and a folder-only move are unaffected.
+     * {@code publish} is refused whole: it writes a free-text title and description to the public
+     * marketplace, which no tag can follow.
+     */
+    static boolean writesRestrictedSkillContent(String action, Map<String, Object> parameters,
+                                                ToolExecutionContext context) {
+        if (!"create".equals(action) && !"update".equals(action) && !"publish".equals(action)) {
+            return false;
+        }
+        if (context == null || !com.apimarketplace.common.classification.DataSensitivity
+                .fromCredentials(context.credentials()).isRestricted()) {
+            return false;
+        }
+        if ("create".equals(action) || "publish".equals(action)) {
+            return true;
+        }
+        Map<String, Object> merged = com.apimarketplace.agent.tools.common.ToolParamUtils.mergeParams(parameters);
+        return SKILL_CONTENT_FIELDS.stream().anyMatch(field -> merged.get(field) != null);
     }
 
     // ==================== Unified Tool Definition ====================

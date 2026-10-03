@@ -154,7 +154,7 @@ public class CatalogToolsGateway implements ToolsGateway {
                         List.of(Map.of("type", "credential_selection_error", "message", message)),
                         List.of());
             }
-            return crudToolExecutor.execute(toolId, input, tenantId);
+            return crudToolExecutor.execute(toolId, input, tenantId, billingIdentifiers);
         }
 
         try {

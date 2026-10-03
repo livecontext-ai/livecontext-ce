@@ -158,22 +158,30 @@ describe('ModelPicker - the classify node offers both engines', () => {
     expect(screen.getAllByText('Anthropic').length).toBeGreaterThan(0);
   });
 
-  it('does not offer an UNLISTED decision model (V554), its provider included when nothing else is left', () => {
+  it('offers an UNLISTED decision model in the hidden group, after the offered ones (V554)', () => {
     h.categoryData = {
       ...DECISION_CATALOG,
-      providers: [provider('typesafe', [{ ...model('typesafe', 'jev-legacy', 'decision'), unlisted: true }], 20)],
+      providers: [provider('typesafe', [
+        { ...model('typesafe', 'jev-legacy', 'decision'), unlisted: true },
+        model('typesafe', 'jev-latest', 'decision'),
+      ], 20)],
     };
     render(
       <ModelPicker
-        value={{ provider: '', id: '' }}
+        value={{ provider: 'typesafe', id: '' }}
         onChange={noop}
         filterCapability={CLASSIFY_ENGINES}
         unionCategory="classification"
+        hiddenModelsLabel="Hidden models"
       />,
     );
 
-    expect(screen.queryByText('TypeSafe')).toBeNull();
-    expect(screen.queryByText('jev-legacy')).toBeNull();
+    // Offered first, the unlisted one under the heading, and the trigger on the offered one.
+    const heading = screen.getByTestId('model-picker-hidden-group');
+    expect(heading).toHaveTextContent('Hidden models');
+    // The row right after the heading is the unlisted model; the offered one comes before it.
+    expect(heading.nextElementSibling).toHaveTextContent('jev-legacy');
+    expect(heading.previousElementSibling).toHaveTextContent('jev-latest');
   });
 
   it('still shows an unlisted decision model a classify node already runs on', () => {

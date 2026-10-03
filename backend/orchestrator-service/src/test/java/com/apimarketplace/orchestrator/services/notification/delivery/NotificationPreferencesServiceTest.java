@@ -63,7 +63,10 @@ class NotificationPreferencesServiceTest {
                         org.assertj.core.groups.Tuple.tuple("FAILURES", false),
                         org.assertj.core.groups.Tuple.tuple("CREDITS", true),
                         org.assertj.core.groups.Tuple.tuple("ACCOUNT", false),
-                        org.assertj.core.groups.Tuple.tuple("TASKS", false));
+                        org.assertj.core.groups.Tuple.tuple("TASKS", false),
+                        // The creator topics are emailed on every plan, like credits.
+                        org.assertj.core.groups.Tuple.tuple("FOLLOWING", true),
+                        org.assertj.core.groups.Tuple.tuple("AUDIENCE", true));
     }
 
     @Test

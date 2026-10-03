@@ -172,7 +172,7 @@ class ConversationAgentServiceAgentOverrideRoutingTest {
         // model=deepseek-chat, the Claude CLI emitted its "model not found"
         // line, and that string ended up as the assistant message in
         // conversation dfadb561.
-        verify(bridgeClient, never()).executeViaBridge(any(AgentExecutionRequestDto.class));
+        verify(bridgeClient, never()).executeViaBridge(any(AgentExecutionRequestDto.class), any());
     }
 
     @Test
@@ -206,11 +206,11 @@ class ConversationAgentServiceAgentOverrideRoutingTest {
             Map.of(), Collections.emptyList(), Collections.emptyList(), Collections.emptyList(),
             null, null, null
         );
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class))).thenReturn(bridgeResponse);
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any())).thenReturn(bridgeResponse);
 
         service.executeStreaming(request, streamOutput, "conv-1");
 
-        verify(bridgeClient).executeViaBridge(any(AgentExecutionRequestDto.class));
+        verify(bridgeClient).executeViaBridge(any(AgentExecutionRequestDto.class), any());
         verify(agentClient, never()).executeAgent(any(AgentExecutionRequestDto.class));
     }
 
@@ -251,7 +251,7 @@ class ConversationAgentServiceAgentOverrideRoutingTest {
 
         assertThat(result.get("success")).isEqualTo(true);
         verify(agentClient).executeAgent(any(AgentExecutionRequestDto.class));
-        verify(bridgeClient, never()).executeViaBridge(any(AgentExecutionRequestDto.class));
+        verify(bridgeClient, never()).executeViaBridge(any(AgentExecutionRequestDto.class), any());
     }
 
     @Test
@@ -286,13 +286,13 @@ class ConversationAgentServiceAgentOverrideRoutingTest {
             Map.of(), Collections.emptyList(), Collections.emptyList(), Collections.emptyList(),
             null, null, null
         );
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class))).thenReturn(bridgeResponse);
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any())).thenReturn(bridgeResponse);
 
         service.executeStreaming(request, streamOutput, "conv-1");
 
         ArgumentCaptor<AgentExecutionRequestDto> dtoCaptor =
             ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-        verify(bridgeClient).executeViaBridge(dtoCaptor.capture());
+        verify(bridgeClient).executeViaBridge(dtoCaptor.capture(), any());
         AgentExecutionRequestDto sent = dtoCaptor.getValue();
         assertThat(sent.provider()).isEqualTo("claude-code");
         assertThat(sent.model()).isEqualTo("claude-opus-4-7");

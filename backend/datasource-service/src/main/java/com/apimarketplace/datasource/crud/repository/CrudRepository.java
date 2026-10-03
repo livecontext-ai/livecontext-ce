@@ -1,5 +1,6 @@
 package com.apimarketplace.datasource.crud.repository;
 
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.datasource.crud.domain.WhereCondition;
 import com.apimarketplace.datasource.crud.dto.CreateColumnRequest;
 import com.apimarketplace.datasource.crud.dto.CreateRowRequest;
@@ -64,16 +65,47 @@ public class CrudRepository {
         return value;
     }
 
+    /** {@code "RESTRICTED"} for any RESTRICTED-shaped input, {@code "NORMAL"} (never null) otherwise. */
+    private static String normalizeSensitivity(String dataSensitivity) {
+        return DataSensitivity.parse(dataSensitivity).name();
+    }
+
     /**
-     * Create rows in the datasource.
+     * Create rows in the datasource. Equivalent to {@link #createRows(Long, String, List, String)}
+     * with {@code dataSensitivity="NORMAL"} - kept for the callers (tests, the vector-column path)
+     * that have no restricted-run context to pass.
      *
      * @param dataSourceId The datasource ID
      * @param tenantId The tenant ID
      * @param rows The rows to insert
      * @return List of inserted row IDs
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<Long> createRows(Long dataSourceId, String tenantId, List<CreateRowRequest.RowData> rows) {
+        return createRows(dataSourceId, tenantId, rows, DataSensitivity.NORMAL.name());
+    }
+
+    /**
+     * Create rows in the datasource, tagged with a sensitivity classification.
+     *
+     * <p>LC-066/LC-011 re-audit item 2: {@code dataSensitivity} is {@code RESTRICTED} when the
+     * calling orchestrator node is executing inside a run/conversation already tagged restricted
+     * (Gmail/Drive-derived content) - see {@code StepPayloadService.isRunRestricted} on the
+     * orchestrator side, threaded here via {@code CrudRequest.isRestricted()}. User tables are
+     * user-directed storage (the user chose to save this data into their own table), so unlike
+     * the platform's own sinks (storage.storage, conversation.*, agent.*) this tag does NOT bound
+     * retention or trigger a hard-delete sweep - it exists so a later read can withhold the row
+     * from a disallowed LLM processor. See the privacy page for the explicit retention statement.
+     *
+     * @param dataSourceId    The datasource ID
+     * @param tenantId        The tenant ID
+     * @param rows            The rows to insert
+     * @param dataSensitivity {@code "RESTRICTED"} or {@code "NORMAL"} ({@link DataSensitivity#name()})
+     * @return List of inserted row IDs
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public List<Long> createRows(Long dataSourceId, String tenantId, List<CreateRowRequest.RowData> rows,
+                                 String dataSensitivity) {
+        String sensitivity = normalizeSensitivity(dataSensitivity);
         List<Long> insertedIds = new ArrayList<>();
 
         for (CreateRowRequest.RowData row : rows) {
@@ -96,6 +128,7 @@ public class CrudRepository {
             params.addValue("data_source_id", dataSourceId);
             params.addValue("tenant_id", tenantId);
             params.addValue("priority", 0);
+            params.addValue("data_sensitivity", sensitivity);
 
             // Build JSONB object from columns
             StringBuilder jsonbBuilder = new StringBuilder("jsonb_build_object(");
@@ -116,8 +149,8 @@ public class CrudRepository {
             jsonbBuilder.append(")");
 
             String sql = String.format(
-                "INSERT INTO %s (data_source_id, tenant_id, data, priority, created_at) " +
-                "VALUES (:data_source_id, :tenant_id, %s, :priority, NOW()) RETURNING id",
+                "INSERT INTO %s (data_source_id, tenant_id, data, priority, data_sensitivity, created_at) " +
+                "VALUES (:data_source_id, :tenant_id, %s, :priority, :data_sensitivity, NOW()) RETURNING id",
                 TABLE_NAME, jsonbBuilder
             );
 
@@ -168,7 +201,7 @@ public class CrudRepository {
         }
 
         String sql = String.format(
-            "SELECT id, data, priority, created_at FROM %s " +
+            "SELECT id, data, priority, created_at, data_sensitivity FROM %s " +
             "WHERE data_source_id = :data_source_id AND tenant_id = :tenant_id%s " +
             "ORDER BY priority DESC, id DESC LIMIT :limit OFFSET :offset",
             TABLE_NAME, whereClause
@@ -192,7 +225,8 @@ public class CrudRepository {
      * Javadoc was removed in the 2026-05-13 scalability fix - page sizing
      * now lives in {@code CrudExecutorService} (MAX_READ_LIMIT=10 000).
      *
-     * @return rows in the same shape as {@link #readRows} (id, data, priority, created_at)
+     * @return rows in the same shape as {@link #readRows} (id, data, priority, created_at,
+     *         data_sensitivity)
      */
     public List<Map<String, Object>> findRowsByIds(Long dataSourceId, String tenantId, List<Long> ids) {
         if (ids == null || ids.isEmpty()) return List.of();
@@ -200,8 +234,11 @@ public class CrudRepository {
         params.addValue("data_source_id", dataSourceId);
         params.addValue("tenant_id", tenantId);
         params.addValue("ids", ids);
+        // LC-066 re-audit item 1: data_sensitivity added so callers building table-trigger row
+        // snapshots (CrudExecutorService.snapshotRowsById) can tag the trigger payload, same as
+        // readRows already does for find_rows/read_rows.
         String sql = String.format(
-            "SELECT id, data, priority, created_at FROM %s " +
+            "SELECT id, data, priority, created_at, data_sensitivity FROM %s " +
             "WHERE data_source_id = :data_source_id AND tenant_id = :tenant_id AND id IN (:ids)",
             TABLE_NAME
         );
@@ -232,7 +269,9 @@ public class CrudRepository {
     }
 
     /**
-     * Update rows in the datasource.
+     * Update rows in the datasource. Equivalent to
+     * {@link #updateRows(Long, String, WhereCondition, Map, boolean)} with {@code restricted=false}
+     * - kept for callers with no restricted-run context to pass.
      *
      * @param dataSourceId The datasource ID
      * @param tenantId The tenant ID
@@ -240,8 +279,31 @@ public class CrudRepository {
      * @param setColumns Columns to update
      * @return Number of affected rows
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public int updateRows(Long dataSourceId, String tenantId, WhereCondition where, Map<String, Object> setColumns) {
+        return updateRows(dataSourceId, tenantId, where, setColumns, false);
+    }
+
+    /**
+     * Update rows in the datasource, ratcheting {@code data_sensitivity} to RESTRICTED when
+     * {@code restricted} is true.
+     *
+     * <p>LC-066/LC-011 re-audit item 2: classification only ever ratchets UP
+     * ({@link DataSensitivity#max}) - an update NOT flagged restricted never downgrades a row
+     * that a PRIOR write already tagged RESTRICTED (e.g. a first insert made from a restricted
+     * run, later patched by an ordinary one still carries Gmail/Drive-derived content in the
+     * fields the patch did not touch).
+     *
+     * @param dataSourceId The datasource ID
+     * @param tenantId The tenant ID
+     * @param where The WHERE condition
+     * @param setColumns Columns to update
+     * @param restricted true when the calling orchestrator node is executing inside a
+     *                   restricted run/conversation (see {@code StepPayloadService.isRunRestricted})
+     * @return Number of affected rows
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int updateRows(Long dataSourceId, String tenantId, WhereCondition where, Map<String, Object> setColumns,
+                          boolean restricted) {
         where.validate();
 
         if (setColumns == null || setColumns.isEmpty()) {
@@ -270,6 +332,14 @@ public class CrudRepository {
             params.addValue(keyParam, safeColumnName);
             params.addValue(valParam, serializeIfComplex(entry.getValue()));
             i++;
+        }
+
+        // Ratchet-only: only ever WRITE 'RESTRICTED', never write 'NORMAL' over a row's existing
+        // tag (an unrelated ordinary edit must not un-tag a row a restricted write classified
+        // earlier).
+        if (restricted) {
+            setClause.append(", data_sensitivity = :data_sensitivity");
+            params.addValue("data_sensitivity", DataSensitivity.RESTRICTED.name());
         }
 
         String whereClause = buildWhereClause(where, params);

@@ -158,6 +158,10 @@ public class ConversationAgentService {
     @Autowired
     private ToolAuthorizationApprovalService toolAuthorizationApprovalService;
 
+    /** LC-004: keeps Gmail / Drive content in this conversation away from non-allowed providers. */
+    @Autowired(required = false)
+    private RestrictedDataTransferGuard restrictedDataTransferGuard;
+
     /** Clears the running-turn "don't ask again" grant once a new turn has read the persisted one. */
     @Autowired(required = false)
     private ToolApprovalGateResolver toolApprovalGateResolver;
@@ -370,7 +374,7 @@ public class ConversationAgentService {
             AgentExecutionResponseDto response;
             try {
                 response = useBridge
-                        ? dispatchToBridge(dto, request.getOrgId())
+                        ? dispatchToBridge(dto, request.getOrgId(), request.getUserRoles())
                         : dispatchAgentExecution(dto, request.getUserRoles());
             } catch (RuntimeException ex) {
                 // Inner try only exists to emit a paired execution_completed(FAILED)
@@ -739,6 +743,16 @@ public class ConversationAgentService {
             // Credits are now consumed in agent-service during recordFromChat() to ensure
             // per-execution credit tracking. No double consumption.
 
+            // A run agent-service refused before dispatching it (budget) published nothing on the
+            // stream: its reason is in error only, so show it rather than an empty reply. Any other
+            // failure already reached the stream from its producer, and ends as before.
+            if (!response.success() && response.wasRefusedBeforeDispatch()
+                    && response.error() != null && !response.error().isBlank()) {
+                streamOutput.sendError(response.error());
+                recordObservability(request, context, response, conversationId);
+                return;
+            }
+
             streamOutput.sendDone(
                 response.content() != null ? response.content() : "",
                 response.model(), response.provider(),
@@ -783,7 +797,7 @@ public class ConversationAgentService {
      * other. {@code MemoryInjectionCallsiteInvariantTest} fails the build if a third
      * direct call appears.
      */
-    private AgentExecutionResponseDto dispatchToBridge(AgentExecutionRequestDto dto, String organizationId) {
+    private AgentExecutionResponseDto dispatchToBridge(AgentExecutionRequestDto dto, String organizationId, String userRoles) {
         AgentExecutionRequestDto enriched = dto;
         try {
             enriched = dto.withSystemPrompt(agentClient.appendMemoryBlock(
@@ -807,7 +821,7 @@ public class ConversationAgentService {
             log.warn("Long-term memory unavailable for this bridge run, continuing without it: {}",
                 memoryUnavailable.toString());
         }
-        return bridgeClient.executeViaBridge(enriched);
+        return bridgeClient.executeViaBridge(enriched, userRoles);
     }
 
     private void executeViaBridge(ChatRequest request, AgentLoopContext context, AgentExecutionRequestDto dto,
@@ -837,7 +851,7 @@ public class ConversationAgentService {
             publishFleetEvent(agentEntityId, executionId, "execution_started",
                 dto.model(), dto.source() != null ? dto.source() : "CONVERSATION", taskId);
 
-            AgentExecutionResponseDto response = dispatchToBridge(dto, request.getOrgId());
+            AgentExecutionResponseDto response = dispatchToBridge(dto, request.getOrgId(), request.getUserRoles());
 
             if (response == null) {
                 log.error("Bridge returned null response for conversation: {}", conversationId);
@@ -939,6 +953,13 @@ public class ConversationAgentService {
         }
         String toolCallbackUrl = selfUrl + "/api/internal/conversation/tools/execute";
         credentials.put("__toolCallbackUrl__", toolCallbackUrl);
+
+        // LC-004: every turn re-sends the history. When it holds Gmail / Drive content, tag the
+        // execution (agent-service and the bridge read the tag) and refuse a provider outside
+        // the restricted-data allow-list. Runs for both dispatch routes, which share this builder.
+        if (restrictedDataTransferGuard != null) {
+            restrictedDataTransferGuard.apply(conversationId, context.provider(), credentials);
+        }
 
         // Inject task id when this chat execution is servicing an agent_tasks row.
         // AgentRemoteExecutionService reads __taskId__ from credentials and stamps it on
@@ -1076,6 +1097,23 @@ public class ConversationAgentService {
         if (tool.metadata() != null) map.put("metadata", tool.metadata());
         if (tool.timeoutMs() != null) map.put("timeoutMs", tool.timeoutMs());
         return map;
+    }
+
+    /** RESTRICTED when any tool result of the turn came from a restricted integration. */
+    @SuppressWarnings("unchecked")
+    static com.apimarketplace.common.classification.DataSensitivity turnSensitivity(List<Map<String, Object>> toolResults) {
+        com.apimarketplace.common.classification.DataSensitivity sensitivity =
+            com.apimarketplace.common.classification.DataSensitivity.NORMAL;
+        if (toolResults == null) {
+            return sensitivity;
+        }
+        for (Map<String, Object> tr : toolResults) {
+            if (tr != null && tr.get("metadata") instanceof Map<?, ?> metadata) {
+                sensitivity = sensitivity.max(com.apimarketplace.common.classification.RestrictedDataPolicy
+                    .fromToolMetadata((Map<String, Object>) metadata));
+            }
+        }
+        return sensitivity;
     }
 
     /**
@@ -1270,8 +1308,10 @@ public class ConversationAgentService {
                 toolCallsJson = objectMapper.writeValueAsString(toolCallsList);
             }
 
+            // The assistant text of a turn that read Gmail / Drive quotes that content, so it
+            // carries the same classification as the tool results it was written from.
             addAssistantMessage(request, conversationId, hasContent ? content : "", toolCallsJson,
-                response.model(), executionId);
+                response.model(), executionId, turnSensitivity(toolResults));
 
             log.info("Persisted remote execution results: conversationId={}, contentLen={}, toolEntries={}, thinkingSections={}",
                 conversationId, content.length(), toolCallsList.size(),
@@ -1296,7 +1336,8 @@ public class ConversationAgentService {
      * so a return means the row exists.
      */
     private void addAssistantMessage(ChatRequest request, String conversationId, String content,
-                                     String toolCallsJson, String model, String executionId) {
+                                     String toolCallsJson, String model, String executionId,
+                                     com.apimarketplace.common.classification.DataSensitivity sensitivity) {
         MessageDto messageDto = new MessageDto();
         messageDto.setConversationId(conversationId);
         messageDto.setRole("assistant");
@@ -1311,6 +1352,10 @@ public class ConversationAgentService {
         // a caller that has no executionId passes null and grouping falls back to
         // the turn boundary.
         messageDto.setExecutionId(executionId);
+        // Null leaves it to MessageService, which classifies by the conversation (CASA LC-066).
+        if (sensitivity != null) {
+            messageDto.setDataSensitivity(sensitivity.name());
+        }
 
         messageService.addMessage(conversationId, messageDto);
     }
@@ -1390,7 +1435,7 @@ public class ConversationAgentService {
             }
             // Trimmed like the normal write, so a rescued reply is stored as it would have been.
             addAssistantMessage(request, conversationId, reply.get().content().trim(), null,
-                dto.model(), dto.executionId());
+                dto.model(), dto.executionId(), null);
             log.warn("[RESCUE] Saved the buffered reply of stream {} ({} chars, state {}) to conversation {}: "
                     + "its producer's answer never reached conversation-service",
                 streamId, reply.get().content().length(), reply.get().state(), conversationId);
@@ -1615,6 +1660,11 @@ public class ConversationAgentService {
             Map<String, Object> metadata = (Map<String, Object>) toolResult.get("metadata");
             if (metadata != null) {
                 if (metadata.get("iconSlug") != null) entry.put("iconSlug", metadata.get("iconSlug"));
+                // Kept beside iconSlug: a card that read nothing (Connect Gmail) must not tag the
+                // message it is stored in RESTRICTED (MessageService.toolCallsMentionRestricted).
+                if (Boolean.TRUE.equals(metadata.get(com.apimarketplace.common.classification.RestrictedDataPolicy.CREDENTIAL_NEEDED_KEY))) {
+                    entry.put(com.apimarketplace.common.classification.RestrictedDataPolicy.CREDENTIAL_NEEDED_KEY, true);
+                }
                 if (metadata.get("toolName") != null) entry.put("displayToolName", metadata.get("toolName"));
                 if (metadata.get("label") != null) entry.put("label", metadata.get("label"));
                 if (metadata.get("visualization") != null) entry.put("visualization", metadata.get("visualization"));

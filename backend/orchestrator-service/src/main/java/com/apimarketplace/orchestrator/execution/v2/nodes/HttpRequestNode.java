@@ -13,8 +13,8 @@ import org.springframework.http.*;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
-import com.apimarketplace.common.web.NoRedirectSimpleClientHttpRequestFactory;
 import com.apimarketplace.common.web.UrlSafetyValidator;
+import com.apimarketplace.orchestrator.services.http.PinnedRestTemplateFactory;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -505,12 +505,18 @@ public class HttpRequestNode extends BaseNode {
 
     /**
      * Returns a RestTemplate with per-node timeout if configured,
-     * otherwise returns the shared RestTemplate.
+     * otherwise returns the shared (pinned) RestTemplate.
      *
      * <p>Configured templates are cached per timeout value via
      * {@link #TIMEOUT_TEMPLATE_CACHE} so a node executed in a loop or split
      * doesn't allocate a fresh RestTemplate + factory per call. Same timeout
      * value across nodes shares the same template.
+     *
+     * <p>Both branches are pinned against DNS rebinding (LC-002 / LC-006, CASA readiness round 3):
+     * {@link PinnedRestTemplateFactory#build} runs on Reactor Netty with the same strict,
+     * no-private-address predicate {@link #execute} already checked the URL against, so the
+     * address the socket connects to is the address that was vetted, not a second, independent
+     * DNS answer.
      */
     /** The timeout (ms) of this call: configured, or the plan's template resolved to a whole number. */
     private Integer effectiveTimeout(ExecutionContext context) {
@@ -536,14 +542,7 @@ public class HttpRequestNode extends BaseNode {
         }
         // Clamp connect timeout to the same ceiling as before (300s).
         int clamped = Math.min(timeout, 300000);
-        return TIMEOUT_TEMPLATE_CACHE.computeIfAbsent(clamped, t -> {
-            RestTemplate template = new RestTemplate();
-            NoRedirectSimpleClientHttpRequestFactory factory = new NoRedirectSimpleClientHttpRequestFactory();
-            factory.setConnectTimeout(t);
-            factory.setReadTimeout(t);
-            template.setRequestFactory(factory);
-            return template;
-        });
+        return TIMEOUT_TEMPLATE_CACHE.computeIfAbsent(clamped, t -> PinnedRestTemplateFactory.build(t, t));
     }
 
     private HttpHeaders prepareHeaders(ExecutionContext context, Map<String, String> resolvedAuthNames) {

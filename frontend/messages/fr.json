@@ -1,7 +1,7 @@
 {
   "partnerDashboard": {
     "title": "Programme partenaire",
-    "subtitle": "Touchez une part de chaque facture payée par vos clients, et affichez le badge de partenaire officiel.",
+    "subtitle": "Recommandez LiveContext aux entreprises pour qui vous construisez, et affichez le badge de partenaire officiel sur votre profil et vos templates.",
     "learnMore": "Comment fonctionne le programme",
     "error": "Impossible de charger votre programme partenaire. Réessayez dans un instant.",
     "selfHosted": {
@@ -32,12 +32,22 @@
     "pending": {
       "title": "Candidature reçue",
       "body": "Nous étudions la candidature de {company}. Vous recevrez un e-mail dès qu’elle sera traitée, et cette page deviendra votre tableau de bord partenaire.",
-      "submittedOn": "Envoyée le {date}"
+      "submittedOn": "Envoyée le {date}",
+      "steps": {
+        "sent": "Candidature envoyée",
+        "review": "En cours d'examen",
+        "reply": "Réponse par e-mail"
+      }
     },
     "rejected": {
       "title": "Votre précédente candidature n'a pas été retenue",
       "note": "Notre remarque : {note}",
-      "again": "Vous pouvez postuler de nouveau ci-dessous."
+      "again": "Vous pouvez postuler de nouveau quand vous le souhaitez : dites-nous ce qui a changé depuis."
+    },
+    "join": {
+      "title": "Gagnez jusqu'à <rate>{percent} %</rate> de chaque facture payée par vos clients",
+      "apply": "Postuler",
+      "reapply": "Postuler à nouveau"
     },
     "errors": {
       "already_pending": "Vous avez déjà une candidature en cours d’examen.",
@@ -52,13 +62,21 @@
       "not_partner": "Seuls les partenaires et les candidats ont des conditions à accepter."
     },
     "toasts": {
-      "applied": "Candidature envoyée",
-      "appliedBody": "Nous vous répondrons par e-mail.",
       "copied": "Copié",
       "copyFailed": "Copie impossible"
     },
     "dashboard": {
       "inactive": "Votre code partenaire est inactif : les nouvelles inscriptions ne vous sont pas attribuées. Contactez-nous si ce n'est pas normal.",
+      "hero": {
+        "thisMonth": "Gagné ce mois-ci",
+        "payable": "À verser : {amount}"
+      },
+      "earnings": {
+        "title": "Vos 12 derniers mois",
+        "total": "{amount} sur 12 mois",
+        "chartLabel": "Votre commission chaque mois, de {from} à {to}",
+        "empty": "Votre courbe démarre avec votre premier client payant."
+      },
       "linkTitle": "Votre lien partenaire",
       "linkHint": "Partagez ce lien. Les nouveaux comptes créés avec lui reçoivent {credits} crédits offerts et vous sont attribués.",
       "copyLink": "Copier le lien",
@@ -70,6 +88,70 @@
       "badgeTitle": "Partenaire officiel",
       "badgeBody": "Votre badge doré s'affiche à côté de votre nom, sur votre profil et sur les templates que vous publiez.",
       "badgeInactive": "Votre badge réapparaîtra dès que votre code partenaire sera actif.",
+      "conditions": {
+        "title": "Vos conditions"
+      },
+      "builder": {
+        "title": "Créer un lien pour un client",
+        "intro": "Recommandez un plan : votre client reçoit une page à lui, avec ce plan en avant, son prix, et votre code inclus.",
+        "plan": "Plan",
+        "from": "Dès {price} par mois",
+        "credits": "Crédits par mois",
+        "creditsOption": "{credits} crédits",
+        "cycle": "Facturation",
+        "monthly": "Mensuelle",
+        "yearly": "Annuelle",
+        "clientSees": "Ce que votre client verra",
+        "planLine": "{plan} avec {credits} crédits par mois",
+        "price": "{price} par mois",
+        "priceYearly": "{price} par mois, facturé à l'année",
+        "offer": "En plus, {credits} crédits offerts avec votre code {code}",
+        "forYou": "Pour vous",
+        "commission": "Environ {amount} de commission par mois sur ce client",
+        "commissionYearly": "Environ {amount} de commission sur une facture annuelle",
+        "commissionDetail": "{percent} % de chaque facture payée, pendant {months} mois",
+        "copy": "Copier le lien",
+        "labelField": "Client (facultatif)",
+        "labelPlaceholder": "Par exemple : Acme",
+        "create": "Créer le lien",
+        "creating": "Création...",
+        "created": "Lien prêt :",
+        "offersTitle": "Vos liens clients",
+        "offersEmpty": "Aucun lien pour le moment : créez-en un ci-dessus.",
+        "unnamed": "Client sans nom",
+        "offerLine": "{plan}, {credits} crédits par mois, {cycle, select, yearly {annuel} other {mensuel}}",
+        "deactivate": "Désactiver",
+        "errors": {
+          "not_partner": "Seul un partenaire peut créer un lien.",
+          "code_inactive": "Votre code partenaire est inactif : le lien ne mènerait nulle part.",
+          "too_many_offers": "Vous avez trop de liens actifs : désactivez-en quelques-uns d'abord.",
+          "too_long": "Le nom du client est trop long.",
+          "generic": "Le lien n'a pas pu être créé. Réessayez.",
+          "invalid_apps": "Une des applications choisies ne peut plus être offerte (rendue privée, retirée ou qui n'est pas à vous). Vérifiez la liste et réessayez.",
+          "too_many_apps": "10 applications au plus par lien.",
+          "apps_unavailable": "Vos applications n'ont pas pu être vérifiées pour le moment. Réessayez dans un instant.",
+          "apps_need_higher_plan": "Une des applications choisies utilise la recherche vectorielle, que ce plan n'inclut pas. Recommandez un plan supérieur ou retirez cette application.",
+          "apps_exceed_plan": "Ces applications demandent plus d'interfaces ou d'emplacements d'applications que ce plan n'en inclut. Recommandez un plan supérieur ou choisissez moins d'applications."
+        },
+        "offersLoading": "Chargement de vos liens...",
+        "offersError": "Vos liens n'ont pas pu être chargés. Rechargez la page pour réessayer.",
+        "deactivateConfirm": "Désactiver ce lien ? Votre client ne pourra plus l'ouvrir.",
+        "deactivateYes": "Oui, désactiver",
+        "cancel": "Annuler",
+        "deactivateError": "Le lien n'a pas pu être désactivé. Réessayez.",
+        "apps": {
+          "title": "Applications incluses",
+          "hint": "Votre client les retrouve installées dans son espace dès son paiement. Seules vos applications publiques ou non répertoriées peuvent être offertes.",
+          "count": "{count}/{max}",
+          "loading": "Chargement de vos applications...",
+          "error": "Vos applications n'ont pas pu être chargées. Le lien peut tout de même être créé sans elles.",
+          "empty": "Vous n'avez encore publié aucune application. Publiez-en une depuis vos workflows pour l'offrir ici.",
+          "private": "Privée : rendez-la non répertoriée pour l'offrir",
+          "full": "{max} applications au plus par lien."
+        },
+        "appsLine": "{count, plural, one {# application installée dans son espace après le paiement} other {# applications installées dans son espace après le paiement}}",
+        "appsCount": "{count, plural, one {# application} other {# applications}}"
+      },
       "stats": {
         "signups": "Inscriptions",
         "paying": "Clients payants",
@@ -101,8 +183,13 @@
         },
         "founder": "Partenaire fondateur",
         "rate": "{percent} % sur chaque facture payée",
+        "rateShort": "{percent} %",
         "progressLabel": "Progression vers {tier}",
         "progress": "{revenue} sur {threshold} pour atteindre {tier}",
+        "start": "Dès le départ",
+        "from": "Dès {amount} de chiffre d'affaires clients",
+        "fromShort": "Dès {amount}",
+        "here": "Vous êtes ici",
         "top": "Vous êtes au niveau le plus haut.",
         "topFounder": "Partenaire fondateur : Platinum pendant toute votre participation, selon les conditions du programme partenaires (article 7.5).",
         "hint": "Une facture compte pour votre niveau une fois âgée de {days} jours et non remboursée. Votre volume ne fait jamais baisser votre niveau.",
@@ -119,10 +206,119 @@
       "accepted": "Vous avez accepté les <link>conditions du programme partenaires</link> (version {version}) le {date}."
     }
   },
+  "partnerOffer": {
+    "eyebrow": "Offre partenaire",
+    "officialPartner": "Partenaire officiel LiveContext",
+    "title": "{partner} vous recommande <gold>{plan}</gold>",
+    "titleGeneric": "Votre partenaire vous recommande <gold>{plan}</gold>",
+    "lead": "La formule choisie pour vous : {credits} crédits par mois{cycle, select, yearly {, facturée à l'année} other {}}.",
+    "gift": "En plus, {credits} crédits offerts avec le code {code}",
+    "cycleLabel": "Facturation",
+    "creditsLabel": "Crédits par mois",
+    "creditsOption": "{credits} crédits",
+    "reset": "Revenir au choix de {partner}",
+    "resetGeneric": "Revenir au choix de votre partenaire",
+    "badge": "Recommandé par {partner}",
+    "badgeGeneric": "Recommandé par votre partenaire",
+    "starterCap": "Starter va jusqu'à {credits} crédits par mois",
+    "choose": "Choisir {plan}",
+    "summaryTitle": "Votre choix",
+    "summaryPlan": "{plan} avec {credits} crédits par mois",
+    "pricePeriod": "par mois{cycle, select, yearly {, facturé à l'année} other {}}",
+    "continue": "Continuer avec {plan}",
+    "opening": "Ouverture du paiement...",
+    "checkoutError": "La page de paiement n'a pas pu s'ouvrir. Réessayez.",
+    "alreadySubscribed": "Vous avez déjà un abonnement : modifiez-le depuis votre page de prix.",
+    "alreadySubscribedLink": "Ouvrir ma page de prix",
+    "allPlans": "Voir toutes les formules",
+    "unavailableTitle": "Cette offre n'est plus disponible",
+    "unavailableBody": "Votre partenaire a peut-être remplacé ce lien. Nos formules restent à un clic.",
+    "unavailableCta": "Voir les formules",
+    "accountError": "Votre compte n'a pas pu être lu, le paiement ne peut donc pas encore s'ouvrir.",
+    "retry": "Réessayer",
+    "metaTitle": "{partner} vous recommande {plan}",
+    "metaTitleGeneric": "Votre partenaire vous recommande {plan}",
+    "metaDescription": "Une formule LiveContext choisie pour vous, avec son prix et les crédits offerts par le code partenaire.",
+    "loadErrorTitle": "Cette offre n'a pas pu être chargée",
+    "loadErrorBody": "Le lien est sans doute bon : nos serveurs n'ont pas répondu à temps. Réessayez dans un instant.",
+    "appsTitle": "Les applications que {partner} vous offre",
+    "appsTitleGeneric": "Les applications incluses dans cette offre",
+    "appsIncluded": "{count, plural, one {+ # application incluse} other {+ # applications incluses}}",
+    "appsNeedPlan": "Les applications de cette offre demandent {plan} ou plus.",
+    "planTooLow": "Les applications de cette offre demandent une formule supérieure. Choisissez une autre formule pour continuer.",
+    "appsNotForSubscribers": "Ces applications viennent avec un premier abonnement pris par ce lien. Votre compte a déjà un abonnement : elles ne sont donc pas incluses.",
+    "welcome": {
+      "title": "Bienvenue sur {plan}",
+      "activating": "Activation de votre abonnement...",
+      "activatingHint": "Votre paiement est passé. Cela prend quelques secondes.",
+      "planActive": "Votre abonnement est actif et vos crédits sont prêts.",
+      "slowPayment": "Votre paiement est encore en cours de confirmation. Vous pouvez fermer cette fenêtre : votre abonnement et vos applications arrivent dès qu'il est confirmé.",
+      "appsTitle": "Vos applications offertes par {partner}",
+      "appsTitleGeneric": "Vos applications offertes par votre partenaire",
+      "appFallback": "Application",
+      "installing": "Installation...",
+      "open": "Ouvrir",
+      "failed": "Installation impossible",
+      "arrivingLater": "Vos applications sont encore en route : vous les retrouverez dans Applications d'ici quelques minutes.",
+      "unreadable": "Cette fenêtre n'a pas pu tout charger. Votre achat n'est pas affecté : les applications de votre offre s'installent en arrière-plan après le paiement et apparaissent dans Applications dès qu'elles sont prêtes.",
+      "partnerLine": "{partner} est votre partenaire : posez-lui toutes vos questions sur vos applications.",
+      "partnerLineGeneric": "Votre partenaire est là pour vous aider avec vos applications.",
+      "write": "Écrire à {partner}",
+      "writeGeneric": "Écrire à votre partenaire",
+      "writeError": "La conversation n'a pas pu s'ouvrir. Réessayez depuis Messages.",
+      "start": "Commencer"
+    }
+  },
+  "personalOfferPage": {
+    "metaTitle": "Votre offre personnelle",
+    "loading": "Chargement de votre offre...",
+    "eyebrow": "Offre personnelle",
+    "signInTitle": "Votre offre personnelle vous attend",
+    "signInLead": "Connectez-vous pour voir votre prix, les crédits offerts et le temps restant.",
+    "signIn": "Se connecter",
+    "signInError": "La page de connexion n'a pas pu s'ouvrir. Réessayez.",
+    "seePlans": "Voir les formules",
+    "backToApp": "Revenir à LiveContext",
+    "retry": "Réessayer",
+    "noOffer": "Ce compte n'a pas d'offre personnelle en cours.",
+    "title": "Votre premier abonnement, avec <accent>{credits} crédits</accent> offerts",
+    "titleNoBonus": "Votre offre personnelle",
+    "titleUpTo": "Jusqu'à <accent>{credits} crédits</accent> offerts avec votre premier abonnement",
+    "tiersTitle": "Votre bonus grandit avec les crédits choisis",
+    "tierFrom": "Dès {credits} crédits par mois",
+    "tierBonus": "+{credits} crédits",
+    "lead": "Les crédits offerts sont ajoutés dès que votre premier paiement est confirmé. Le prix de la formule ne change pas.",
+    "until": "Offre valable jusqu'au {date}",
+    "summaryTitle": "Votre choix",
+    "summaryPlan": "{plan} avec {credits} crédits par mois",
+    "pricePeriod": "par mois{cycle, select, yearly {, facturé à l'année} other {}}",
+    "bonus": "+{credits} crédits offerts (valeur {value})",
+    "continue": "Continuer avec {plan}",
+    "opening": "Ouverture du paiement...",
+    "afterPayment": "Paiement sécurisé par Stripe. Le bonus est ajouté après le premier paiement.",
+    "allPlans": "Voir toutes les formules",
+    "cycleLabel": "Facturation",
+    "creditsLabel": "Crédits par mois",
+    "creditsOption": "{credits} crédits",
+    "cardBonus": "+{credits} crédits offerts",
+    "cardNoBonus": "Pas de bonus avec ce pack",
+    "starterCap": "Starter va jusqu'à {credits} crédits par mois",
+    "choose": "Choisir {plan}",
+    "checkoutError": "La page de paiement n'a pas pu s'ouvrir. Réessayez.",
+    "countdown": {
+      "endsIn": "Se termine dans",
+      "days": "jours",
+      "hours": "heures",
+      "minutes": "min",
+      "seconds": "s",
+      "ended": "Cette offre est terminée."
+    }
+  },
   "partnersLanding": {
     "metadata": {
       "title": "Programme partenaire pour agences et consultants",
-      "description": "Amenez vos clients sur LiveContext et touchez une part récurrente de chaque facture qu’ils paient, qui augmente avec votre niveau de partenaire. Un badge de partenaire officiel et le droit d’héberger LiveContext pour vos clients."
+      "description": "Amenez vos clients sur LiveContext et touchez une part récurrente de chaque facture, qui augmente avec votre niveau. Gratuit, badge officiel.",
+      "descriptionRate": "Touchez jusqu’à {rate} % de chaque facture que vos clients paient sur LiveContext. Programme gratuit pour agences et consultants, badge officiel."
     },
     "hero": {
       "eyebrow": "Programme partenaire",
@@ -272,7 +468,14 @@
       "search": "Rechercher des apps, workflows, agents",
       "profile": "Votre profil",
       "profileApps": "{count, plural, one {# application publiée} other {# applications publiées}}",
-      "profileRating": "{rating} ({count} avis)"
+      "profileRating": "{rating} ({count} avis)",
+      "screen": {
+        "running": "Actif",
+        "processed": "Factures ce mois-ci",
+        "booked": "Comptabilisé dans QuickBooks",
+        "statusBooked": "Comptabilisée",
+        "statusReview": "À vérifier"
+      }
     },
     "how": {
       "eyebrow": "Comment ça marche",
@@ -305,7 +508,7 @@
       },
       "hosting": {
         "title": "Hébergez-le pour vos clients",
-        "body": "La licence LiveContext vous permet de l’installer et de l’exploiter pour chaque client, sur ses serveurs ou les vôtres, et de facturer ce travail."
+        "body": "La licence LiveContext vous permet de l’installer et de l’exploiter pour chaque client, sur ses serveurs ou les vôtres, dans le cadre de vos prestations, et de facturer ce travail."
       },
       "apps": {
         "title": "Livrez des applications, pas seulement des workflows",
@@ -360,7 +563,7 @@
       },
       "hosting": {
         "question": "Puis-je installer LiveContext chez mes clients ?",
-        "answer": "Oui. La licence LiveContext permet à un prestataire de l’installer, l’héberger et le maintenir pour chaque client, un déploiement par client. L’exploiter comme votre propre plateforme multi-clients demande une licence commerciale : écrivez-nous."
+        "answer": "Oui. La licence LiveContext permet à un prestataire de l’installer, l’héberger et le maintenir pour ses clients, chaque déploiement servant un seul client, dans le cadre de ses prestations. Vendre l’hébergement de LiveContext comme un produit, ou l’exploiter comme votre propre plateforme multi-clients, demande une licence commerciale : écrivez-nous."
       },
       "credits": {
         "question": "Que reçoivent mes clients ?",
@@ -516,9 +719,9 @@
       "changeCode": "Modifier le code",
       "checking": "Vérification de votre offre personnelle...",
       "signIn": "Connectez-vous pour voir votre offre personnelle.",
-      "bonus": "+{credits} crédits PAYG offerts une fois après paiement (valeur PAYG : {value}).",
-      "annualTotal": "Total annuel facturé : {amount}, hors taxes.",
-      "noBonus": "Bonus de ce pack : 0 crédit.",
+      "bonus": "+{credits} crédits PAYG offerts une fois après paiement (valeur PAYG : {value}).",
+      "annualTotal": "Total annuel facturé : {amount}, hors taxes.",
+      "noBonus": "Bonus de ce pack : 0 crédit.",
       "nextEligible": "Bonus disponible dès {credits} crédits par mois.",
       "firstPurchaseUsed": "Votre première souscription payante utilise ce droit unique, même si ce pack ne donne aucun bonus.",
       "planUnavailable": "Aucun bonus disponible pour ce plan et ce pack.",
@@ -596,9 +799,10 @@
         "notRedeemable": "Ce code n'est pas disponible pour le moment.",
         "alreadyRedeemed": "Vous avez déjà utilisé un code.",
         "exhausted": "Ce code a atteint sa limite d'utilisation.",
-        "selfReferral": "Vous ne pouvez pas utiliser votre propre code de parrainage.",
+        "selfReferral": "Vous ne pouvez pas utiliser votre propre code.",
         "alreadyPaid": "Ce code est réservé aux nouveaux abonnements.",
         "alreadyAttributed": "Votre compte utilise déjà un code partenaire.",
+        "partnerAccount": "Un partenaire ne peut pas utiliser le code d'un autre partenaire.",
         "emailNotVerified": "Vérifiez votre adresse e-mail pour utiliser ce code.",
         "notNewAccount": "Ce code est réservé aux nouveaux comptes.",
         "nothingToGrant": "Votre compte a déjà ce plan ou un plan supérieur.",
@@ -705,6 +909,7 @@
     "acceptError": "Impossible d'accepter l'invitation. Le lien est peut-être expiré ou déjà utilisé.",
     "emailNotVerified": "Vérifiez votre adresse e-mail avant d'accepter ou de refuser une invitation.",
     "declineError": "Impossible de refuser l'invitation. Elle est peut-être expirée ou déjà utilisée.",
+    "requiresLink": "Cette invitation a été envoyée avant la création de votre compte. Ouvrez-la depuis le lien de l'e-mail d'invitation, ou demandez à un administrateur de vous inviter à nouveau.",
     "signInRequired": "Connectez-vous pour voir vos invitations en attente.",
     "emptyState": "Vous n'avez aucune invitation en attente.",
     "invitedToJoin": "{inviter} vous a invité",
@@ -745,7 +950,7 @@
     "lastName": "Nom",
     "password": "Mot de passe",
     "confirmPassword": "Confirmer le mot de passe",
-    "passwordTooShort": "Le mot de passe doit comporter au moins 8 caractères",
+    "passwordTooShort": "Le mot de passe doit comporter au moins 12 caractères",
     "passwordMismatch": "Les mots de passe ne correspondent pas",
     "invalidTitle": "Invitation indisponible",
     "invalidBody": "Ce lien d'invitation est invalide, expiré ou a déjà été utilisé.",
@@ -942,6 +1147,17 @@
     "file": "Fichier",
     "noOptions": "Aucune option",
     "selectPlaceholder": "Sélectionner...",
+    "noTags": "Aucune étiquette",
+    "saveErrorTitle": "Erreur d'enregistrement",
+    "saveErrorMessage": "Impossible d'enregistrer les modifications",
+    "rowAddedTitle": "Ligne ajoutée",
+    "rowAddedMessage": "Nouvelle ligne ajoutée avec la priorité {priority}",
+    "addRowErrorTitle": "Erreur lors de l'ajout de la ligne",
+    "addRowErrorMessage": "Impossible d'ajouter la ligne",
+    "rowsDeletedTitle": "Lignes supprimées",
+    "rowsDeletedMessage": "{count} ligne(s) supprimée(s)",
+    "deleteRowsErrorTitle": "Erreur lors de la suppression des lignes",
+    "deleteRowsErrorMessage": "Impossible de supprimer les lignes sélectionnées",
     "nameLabel": "Nom *",
     "descriptionLabel": "Description",
     "rowsPerPage": "Lignes par page :",
@@ -1006,14 +1222,14 @@
       "email": "Email",
       "emailPlaceholder": "vous@exemple.com",
       "password": "Mot de passe",
-      "passwordPlaceholder": "Au moins 8 caractères",
+      "passwordPlaceholder": "Au moins 12 caractères",
       "confirmPassword": "Confirmer le mot de passe",
       "confirmPasswordPlaceholder": "Ressaisissez votre mot de passe",
       "submit": "Créer le compte",
       "hasAccount": "Vous avez déjà un compte ?",
       "signIn": "Se connecter",
       "passwordMismatch": "Les mots de passe ne correspondent pas",
-      "passwordTooShort": "Le mot de passe doit contenir au moins 8 caractères",
+      "passwordTooShort": "Le mot de passe doit contenir au moins 12 caractères",
       "error": "Échec de l'inscription"
     },
     "forgotPassword": {
@@ -1194,6 +1410,7 @@
     "signIn": "Connexion",
     "scheduledAgent": "Agent planifié",
     "webhookAgent": "Agent webhook",
+    "taskConversation": "Conversation de tâche",
     "more": {
       "title": "Plus",
       "back": "Retour"
@@ -1404,6 +1621,7 @@
           "ORG_INVITATION_PENDING": "{count, plural, one {# invitation d'organisation} other {# invitations d'organisation}}",
           "BADGE_UNLOCKED": "{count, plural, one {# nouveau trophée} other {# nouveaux trophées}}",
           "CREATOR_PUBLISHED": "{count, plural, one {Nouvelle app d'un créateur que vous suivez} other {# nouvelles apps de créateurs que vous suivez}}",
+          "CREATOR_FOLLOWED": "{count, plural, one {Nouvel abonné} other {# nouveaux abonnés}}",
           "BUDGET_REACHED": "{count, plural, one {# workflow arrêté sur son plafond de dépense} other {# workflows arrêtés sur leur plafond de dépense}}",
           "CREDIT_LOW": "{count, plural, one {Crédits bientôt épuisés} other {Crédits bientôt épuisés (#)}}",
           "CREDIT_EXHAUSTED": "{count, plural, one {Crédits épuisés} other {Crédits épuisés (#)}}",
@@ -2099,6 +2317,7 @@
   },
   "errors": {
     "retry": "Réessayer",
+    "signInUnreachable": "Impossible de joindre le service de connexion. Vérifiez votre connexion et réessayez.",
     "dismiss": "Fermer",
     "debugInfo": "Infos de debug",
     "pleaseWait": "Veuillez patienter {seconds} secondes avant de réessayer.",
@@ -2108,7 +2327,8 @@
     "notFound": "Non trouvé",
     "server": "Erreur serveur",
     "maintenance": "Maintenance",
-    "unknown": "Erreur"
+    "unknown": "Erreur",
+    "restrictedDataProvider": "Cette conversation ou ce workflow contient des données de Gmail ou Google Drive, qui ne peuvent être traitées que par des fournisseurs d'IA approuvés. Passez à un modèle Anthropic ou OpenAI et réessayez."
   },
   "runs": {
     "never": "Jamais",
@@ -2500,6 +2720,7 @@
     "open": "Ouvrir",
     "noLandingPreview": "Aucun aperçu disponible",
     "previewUnavailable": "Aperçu non disponible",
+    "previewWithheldRestrictedData": "Pas d'aperçu : l'exécution d'exemple de cette application contient des données Gmail ou Google Drive, qui ne sont jamais affichées publiquement.",
     "skillInstructionsLabel": "Instructions",
     "skillNoInstructions": "Aucune instruction fournie.",
     "workflows": {
@@ -2781,6 +3002,10 @@
       "gotIt": "Compris",
       "technicalDetails": "Détails techniques",
       "kinds": {
+        "restrictedData": {
+          "title": "Ces données ne peuvent pas être envoyées à ce fournisseur d'IA",
+          "description": "Cette conversation ou ce workflow contient des données de Gmail ou Google Drive, qui ne peuvent être traitées que par des fournisseurs d'IA approuvés. Passez à un modèle Anthropic ou OpenAI et réessayez."
+        },
         "interrupted": {
           "title": "La réponse a été interrompue",
           "description": "Le service a redémarré pendant que l'assistant répondait. La réponse partielle a été enregistrée. Renvoyez votre message pour continuer."
@@ -4577,10 +4802,10 @@
       "stateOff": "Inactifs",
       "stateUnlisted": "Non listé",
       "listing": {
-        "unlist": "Ne plus lister : le modèle reste disponible mais n'est plus proposé dans les sélecteurs",
+        "unlist": "Ne plus lister : le modèle reste disponible, les sélecteurs ne l'affichent que dans Modèles masqués",
         "list": "Le lister à nouveau",
-        "unlistFromOff": "Le rendre à nouveau disponible, sans le lister : ce qui l'utilise tourne dessus, les sélecteurs ne le proposent pas",
-        "unlistedTooltip": "Non listé : toujours disponible, donc les agents, workflows et conversations qui l'utilisent continuent de tourner dessus. Il n'est plus proposé dans les sélecteurs (le composeur de messages l'affiche dans les modèles masqués) et n'est jamais le modèle par défaut. Son remplaçant est en pause."
+        "unlistFromOff": "Le rendre à nouveau disponible, sans le lister : ce qui l'utilise tourne dessus, et les sélecteurs ne l'affichent que dans Modèles masqués",
+        "unlistedTooltip": "Non listé : toujours disponible, donc les agents, workflows et conversations qui l'utilisent continuent de tourner dessus. Les sélecteurs de modèle et le composeur de messages ne l'affichent que dans Modèles masqués, et il n'est jamais le modèle par défaut. Son remplaçant est en pause."
       },
       "replacementPaused": "(en pause)",
       "replacementPausedTooltip": "Non appliqué tant que le modèle est non listé : ce qui l'utilise continue de tourner dessus. Il s'applique de nouveau si vous désactivez le modèle.",
@@ -4628,6 +4853,10 @@
         "browser_agent": {
           "label": "Browser Agent",
           "hint": "Modèles disponibles pour le Browser Agent. Le rang définit l'ordre par défaut ; désactiver retire le modèle des exécutions du Browser Agent."
+        },
+        "free_tier": {
+          "label": "Forfait gratuit",
+          "hint": "Modèles ouverts au forfait gratuit, dans l'ordre où un compte Free les voit. Le premier est le modèle sur lequel un compte Free démarre. Ce classement est distinct de celui de Chat / Agent."
         }
       },
       "freeTierNoneOpen": "Aucun modèle de cet onglet n'est ouvert au forfait gratuit : les crédits mensuels annoncés sur la page des tarifs pour le chat et les agents ne peuvent donc pas financer ce type d'échange, et un compte Gratuit est refusé. Ouvrez au moins un modèle avec la puce Gratuit ci-dessus."
@@ -5565,6 +5794,8 @@
       "scopedAccess": "Accès limité",
       "scopedAccessHint": "Uniquement les outils que vous choisissez",
       "createdAt": "Créée le {date}",
+      "expiresAt": "Expire le {date}",
+      "expired": "Expirée le {date}",
       "revoke": "Révoquer",
       "revokeConfirm": "Révoquer la clé",
       "revokedTitle": "Clé révoquée",
@@ -6489,6 +6720,12 @@
         "foundingUntilKept": "Prix fondateur garanti jusqu’au <b>{date}</b>, puis conservé aussi longtemps que vous restez abonné",
         "foundingUntil": "Prix fondateur garanti jusqu’au <b>{date}</b>"
       }
+    },
+    "partnerRecommendation": {
+      "title": "Recommandé par votre partenaire",
+      "body": "{plan} avec {credits} crédits par mois{cycle, select, yearly {, facturé à l'année} other {}} : le plan que votre partenaire a choisi pour vous.",
+      "offer": "Avec le code {code}, votre nouveau compte reçoit {credits} crédits offerts.",
+      "badge": "Recommandé par votre partenaire"
     }
   },
   "storage": {
@@ -7198,7 +7435,7 @@
       "updatePassword": "Mettre à jour le mot de passe",
       "changing": "Mise à jour...",
       "passwordMismatch": "Les nouveaux mots de passe ne correspondent pas.",
-      "passwordTooShort": "Votre nouveau mot de passe doit comporter au moins 8 caractères.",
+      "passwordTooShort": "Votre nouveau mot de passe doit comporter au moins 12 caractères.",
       "currentPasswordIncorrect": "Votre mot de passe actuel est incorrect.",
       "passwordChangeSuccess": "Mot de passe mis à jour. Veuillez vous reconnecter avec votre nouveau mot de passe.",
       "passwordChangeError": "Impossible de mettre à jour votre mot de passe. Veuillez réessayer.",
@@ -7297,6 +7534,14 @@
         "tasks": {
           "title": "Tâches",
           "description": "Une tâche vous a été assignée, vous mentionne ou attend votre relecture. Envoyé dans le résumé quotidien."
+        },
+        "following": {
+          "title": "Créateurs suivis",
+          "description": "Un créateur auquel vous êtes abonné a publié une nouvelle app. Envoyé dans le résumé quotidien."
+        },
+        "audience": {
+          "title": "Nouveaux abonnés",
+          "description": "Quelqu'un s'est abonné à vous. Envoyé dans le résumé quotidien."
         }
       },
       "delivery": {
@@ -7309,7 +7554,8 @@
     "advanced": {
       "deleteTitle": "Supprimer le compte",
       "deleteWarning": "Votre compte est désactivé immédiatement, puis définitivement supprimé après un délai de grâce. À ce moment-là, vos données, abonnements et configurations sont perdus.",
-      "deleteButton": "Supprimer mon compte"
+      "deleteButton": "Supprimer mon compte",
+      "description": "Actions sur le compte lui-même, dont certaines sont irréversibles."
     },
     "deleteDialog": {
       "title": "Supprimer le compte ?",
@@ -9175,7 +9421,11 @@
       "note": {
         "text": "Texte de la note",
         "placeholder": "Entrez le texte de votre note...",
-        "color": "Couleur"
+        "color": "Couleur",
+        "attachedTo": "Attachée à",
+        "attachedToNone": "Aucun nœud (note libre)",
+        "attachedToHint": "La note se place à côté de ce nœud, s'affiche quand il est mis en avant et est supprimée avec lui.",
+        "emptyText": "Double-cliquez pour modifier..."
       },
       "choices": {
         "title": "Choix",
@@ -10017,7 +10267,28 @@
     "mailboxSendSubtitle": "L’agent veut envoyer un message depuis la boîte connectée. Il arrive aussitôt chez le destinataire et ne peut plus être rappelé.",
     "mailboxDeleteTitle": "Supprimer ce message ?",
     "mailboxDeleteSubtitle": "L’agent veut supprimer un message de la boîte connectée. Seul le fournisseur de messagerie le détient encore.",
-    "runSubtitle": "L'agent souhaite exécuter une action sensible",
+    "runSubtitle": "L'agent veut utiliser un outil qui peut consommer des crédits ou modifier des choses hors de ce chat : il attend votre accord.",
+    "detailsToggle": "Voir les détails",
+    "workflowExecuteTitle": "Exécuter ce workflow ?",
+    "workflowExecuteTitleNamed": "Exécuter « {name} » ?",
+    "workflowExecuteSubtitle": "Ses étapes s'exécutent maintenant : cela consomme des crédits et peut agir sur vos comptes connectés (envoyer des messages, écrire des données).",
+    "restartFromNodeTitle": "Relancer une partie de cette exécution ?",
+    "restartFromNodeSubtitle": "Une étape et toutes les suivantes s'exécutent à nouveau, avec les mêmes crédits et effets qu'une nouvelle exécution.",
+    "restartFromNodeSubtitleNamed": "« {node} » et toutes les étapes suivantes s'exécutent à nouveau, avec les mêmes crédits et effets qu'une nouvelle exécution.",
+    "runNodeTitle": "Exécuter cette étape maintenant ?",
+    "runNodeSubtitle": "Une étape seule s'exécute tout de suite avec vos comptes connectés, hors de tout workflow.",
+    "runNodeSubtitleNamed": "Une étape « {nodeType} » s'exécute tout de suite avec vos comptes connectés, hors de tout workflow.",
+    "applicationExecuteTitle": "Exécuter cette application ?",
+    "applicationExecuteSubtitle": "Elle s'exécute maintenant : cela consomme des crédits et peut agir sur vos comptes connectés.",
+    "agentExecuteTitle": "Lancer un autre agent ?",
+    "agentExecuteTitleNamed": "Lancer « {name} » ?",
+    "agentExecuteSubtitle": "L'agent veut confier une tâche à cet agent. Il consomme des crédits IA pendant son travail et peut utiliser ses propres outils.",
+    "catalogExecuteTitle": "Appeler un service externe ?",
+    "catalogExecuteSubtitle": "L'agent veut appeler une API tierce avec votre compte connecté. L'appel peut modifier des données sur ce service.",
+    "disarmTitle": "Laisser cet agent agir sans vous demander ?",
+    "disarmTitleNamed": "Laisser « {name} » agir sans vous demander ?",
+    "disarmSubtitle": "L'agent veut désactiver cette demande d'autorisation pour cet agent. Il exécuterait alors des actions payantes ou externes sans vous demander.",
+    "mailboxSendSubtitleTo": "L’agent veut envoyer un message à {to} depuis la boîte connectée. Il arrive aussitôt chez le destinataire et ne peut plus être rappelé.",
     "resolveApprovalTitle": "Résoudre cette approbation ?",
     "resolveApprovalSubtitle": "L'agent souhaite approuver ou rejeter une exécution en attente",
     "continueInterfaceTitle": "Continuer cette interface ?",
@@ -11647,7 +11918,8 @@
     "otherConversations": "Autres conversations",
     "deleteConversation": "Supprimer la conversation",
     "deleteConversationMessage": "Supprimer la conversation avec {name} ? Elle ne disparaît que de VOTRE boîte - un nouveau message la fera réapparaître.",
-    "searchPlaceholder": "Rechercher une conversation"
+    "searchPlaceholder": "Rechercher une conversation",
+    "yourPartner": "Votre partenaire"
   },
   "version": {
     "title": "Version",
@@ -11680,9 +11952,15 @@
     "dismiss": "J'ai compris",
     "learnMore": "Voir toutes les mises à jour",
     "latest": {
-      "title": "Parcourez un run époque par époque, dans votre fuseau horaire",
-      "body": "Sur le canevas, la pastille du run déplie désormais une frise de toutes les époques : passez de l'une à l'autre, sautez au prochain échec, et le canevas, l'onglet Analyse et les Logs suivent tous l'époque choisie. L'Analyse compare deux époques côte à côte. Le fuseau horaire et la langue définis dans les paramètres de votre compte s'appliquent maintenant à toutes les dates de l'application et à tous les e-mails que vous recevez, pages de connexion comprises. Et la baguette de mise en page équilibre désormais les branches de part et d'autre d'un embranchement.",
-      "mediaAlt": "Deux icônes côte à côte : une rangée de barres de hauteurs différentes, légendée parcourir un run époque par époque sur le canevas, l'Analyse et les Logs, et une horloge, légendée votre fuseau horaire et votre langue appliqués partout"
+      "title": "Des notes posées par vos agents, et des pages qui résistent au rechargement",
+      "body": "Les agents attachent désormais des notes au nœud qu'elles expliquent : le canevas place chaque note à côté de son nœud et la met en évidence quand vous sélectionnez ce nœud, dans l'éditeur comme sur un run. Recherches, filtres, tris, onglets et numéros de page restent dans l'adresse : un rechargement ou un lien partagé rouvre la page telle que vous l'avez laissée.\n\nAussi au programme :\n• Survoler une époque dans la frise du run ou dans les graphiques de l'Analyse ouvre sa fiche, avec le résultat, les dates et la durée. Les libellés de nœuds d'une comparaison d'époques sont cliquables.\n• Avant une action sensible, la carte du chat indique ce qui va s'exécuter et pourquoi elle demande votre accord.\n• Le sélecteur de modèles propose aussi les modèles masqués par un administrateur, en fin de liste sous leur propre titre.\n• Dans les tables, les cellules de progression affichent leur légende, et une modification refusée remet la valeur enregistrée.\n• Mettre en pause un workflow en échec met fin à ses rappels « toujours en échec ».",
+      "mediaAlt": "Deux icônes côte à côte : une note autocollante, légendée les notes que les agents attachent à côté du nœud qu'elles expliquent, et un lien, légendé recherches, filtres, onglets et pages conservés dans l'adresse"
+    },
+    "latestCloud": {
+      "title": "Le programme partenaire LiveContext est ouvert",
+      "body": "Agences, consultants et freelances qui automatisent pour leurs clients peuvent désormais devenir partenaires LiveContext. Vous touchez une part des factures de chaque client pendant 12 mois : 30 % dès votre validation, puis 40 % au niveau Gold et 50 % au niveau Platinum. Le badge partenaire doré s'affiche à côté de votre nom sur votre profil marketplace, sur chaque application que vous publiez et dans la recherche, et votre espace partenaire, dans les Paramètres, crée un lien pour chaque client avec l'offre que vous recommandez.\n\nAussi au programme :\n• Les agents attachent des notes au nœud qu'elles expliquent : le canevas place chaque note à côté de son nœud et la met en évidence quand vous sélectionnez ce nœud.\n• Recherches, filtres, tris, onglets et numéros de page restent dans l'adresse : un rechargement ou un lien partagé rouvre la page telle que vous l'avez laissée.\n• Survoler une époque dans la frise du run ou dans les graphiques de l'Analyse ouvre sa fiche, avec le résultat, les dates et la durée.\n• Avant une action sensible, la carte du chat indique ce qui va s'exécuter et ce que cela coûte.\n• Les créateurs sont prévenus par e-mail de leurs nouveaux abonnés, et les abonnés des nouvelles applications des créateurs qu'ils suivent.\n• Mettre en pause un workflow en échec met fin à ses rappels « toujours en échec ».",
+      "mediaAlt": "À gauche, le profil marketplace d'un partenaire avec le badge partenaire doré à côté du nom et une pastille Platinum, légendé le badge partenaire sur votre profil marketplace. À droite, trois barres croissantes en argent, or et platine marquées 30 %, 40 % et 50 %, légendées jusqu'à 50 % pendant 12 mois par client",
+      "action": "Devenir partenaire"
     }
   },
   "optionalComponents": {
@@ -12868,6 +13146,8 @@
     "selfHosted": "Auto-hébergé",
     "signIn": "Se connecter",
     "getStarted": "Commencer",
+    "openApp": "Ouvrir l'app",
+    "account": "Votre compte",
     "docs": "Docs",
     "product": "Produit",
     "models": "Modèles",
@@ -16428,5 +16708,34 @@
     "dismiss": "Masquer",
     "unavailable": "Les mises à jour en direct n'arrivent pas sur cette page.",
     "unavailableHint": "Les pages fonctionnent, mais les changements faits ailleurs n'apparaissent qu'après un rechargement. Si cela persiste, un proxy ou un pare-feu bloque peut-être la connexion en direct."
+  },
+  "securityDisclosure": {
+    "metadata": {
+      "title": "Divulgation des vulnérabilités de sécurité",
+      "description": "Comment signaler une vulnérabilité de sécurité dans LiveContext, nos engagements et les règles de la recherche de bonne foi."
+    },
+    "title": "Divulgation des vulnérabilités de sécurité",
+    "intro": "Nous accueillons volontiers les signalements des chercheurs en sécurité et des utilisateurs. Si vous pensez avoir trouvé une vulnérabilité de sécurité dans LiveContext, signalez-la-nous en privé afin que nous puissions la corriger avant que quiconque ne l'exploite.",
+    "reportTitle": "Comment signaler",
+    "reportBody": "Écrivez à <email>security@livecontext.ai</email> ou utilisez la catégorie sécurité du <contact>formulaire de contact</contact>. Indiquez une description du problème, les étapes pour le reproduire, l'URL ou le composant concerné et l'impact constaté. N'ouvrez pas de ticket public. Vous pouvez écrire en anglais ou en français.",
+    "commitTitle": "Nos engagements",
+    "commitAck": "Nous accusons réception de votre signalement sous 5 jours ouvrés.",
+    "commitUpdates": "Nous vous tenons informé pendant l'analyse et la correction, et vous prévenons lorsque le problème est résolu.",
+    "commitCredit": "Si vous le souhaitez, nous vous citons dans les notes de version une fois le correctif publié.",
+    "rulesTitle": "Règles de la recherche de bonne foi",
+    "rules": {
+      "ownAccount": "Testez uniquement sur des comptes et des données qui vous appartiennent ou que vous êtes explicitement autorisé à utiliser.",
+      "noData": "N'accédez pas aux données d'autres utilisateurs, ne les modifiez pas et ne les supprimez pas. Si vous atteignez par accident les données d'une autre personne, arrêtez-vous et mentionnez-le dans votre signalement.",
+      "noDisruption": "N'effectuez pas de tests de déni de service, n'envoyez pas de spam et ne lancez pas d'analyses dont le volume dégrade le service pour les autres utilisateurs.",
+      "noSocial": "N'utilisez pas d'ingénierie sociale, d'hameçonnage ni d'attaques physiques contre notre équipe, nos utilisateurs ou nos locaux.",
+      "disclosure": "Laissez-nous un délai raisonnable pour corriger le problème avant toute divulgation publique, et convenez du calendrier avec nous."
+    },
+    "safeHarborTitle": "Recherche de bonne foi",
+    "safeHarbor": "Si vous respectez ces règles et agissez de bonne foi, nous considérons votre recherche comme autorisée et n'engagerons aucune action en justice contre vous à ce titre.",
+    "scopeTitle": "Périmètre",
+    "scopeIn": "Inclus : livecontext.ai et ses sous-domaines, ainsi que le code source de LiveContext Community Edition.",
+    "scopeOut": "Exclus : les vulnérabilités des services tiers que nous utilisons (signalez-les à leur éditeur), et les constats sans impact de sécurité démontré, comme l'absence isolée d'un en-tête de bonne pratique.",
+    "bountyNote": "Nous n'avons pas de programme de bug bounty rémunéré pour le moment.",
+    "machineReadable": "Cette politique est aussi référencée par notre fichier lisible par machine <file>security.txt</file>."
   }
 }

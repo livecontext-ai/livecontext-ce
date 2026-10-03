@@ -160,6 +160,25 @@ class TokenAtRestTest {
         }
 
         @Test
+        @DisplayName("LC-070: after the HMAC moves to its HKDF sub-key (write-version 2), a row hashed with the old password-keyed HMAC still resolves")
+        void rowHashedBeforeTheKeySeparationStillResolves() {
+            String legacyHash = TokenAtRest.hash("wh_1");   // SERVICE writes version 1 = password-keyed
+            TokenAtRest.install(new CredentialEncryptionService("test-password-123", "0123456789abcdef",
+                    "", "", false, false, "2", "allow", ""));
+            try {
+                assertThat(TokenAtRest.hash("wh_1")).isNotEqualTo(legacyHash);
+                List<String> queried = new ArrayList<>();
+                Optional<String> r = TokenAtRest.lookup("wh_1",
+                        h -> { queried.add(h); return legacyHash.equals(h) ? Optional.of("old-row") : Optional.empty(); },
+                        t -> Optional.empty());
+                assertThat(r).contains("old-row");
+                assertThat(queried.get(0)).isEqualTo(TokenAtRest.hash("wh_1"));
+            } finally {
+                TokenAtRest.install(SERVICE);
+            }
+        }
+
+        @Test
         @DisplayName("null or blank plaintext never touches the repository")
         void blankShortCircuits() {
             AtomicInteger calls = new AtomicInteger();

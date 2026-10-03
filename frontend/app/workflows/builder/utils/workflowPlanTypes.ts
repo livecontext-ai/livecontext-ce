@@ -429,6 +429,8 @@ export interface WorkflowPlan {
     width: number;
     height: number;
     position?: { x: number; y: number };
+    /** Plan key of the node the note explains (e.g. "core:check_seen"); absent for a free note. */
+    attachedTo?: string;
   }>;
   interfaces?: Array<{
     id: string;

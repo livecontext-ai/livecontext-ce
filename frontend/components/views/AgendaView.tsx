@@ -19,7 +19,14 @@ import { useToast } from '@/components/Toast';
 import ToastContainer from '@/components/ToastContainer';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
-import { useAgendaPreferences } from '@/hooks/useAgendaPreferences';
+import {
+  useAgendaPreferences,
+  type AgendaPreferences,
+  type AgendaViewMode,
+} from '@/hooks/useAgendaPreferences';
+import {
+  urlEnum, urlList, urlNullable, urlString, useUrlSearchState, useUrlState,
+} from '@/hooks/useUrlState';
 import { useRefreshHomeStatus } from '@/hooks/useHomeStatus';
 import {
   agendaService,
@@ -44,6 +51,7 @@ import {
   startOfDay,
   weekGridDays,
   zonedParts,
+  zonedTimeToInstant,
 } from '@/lib/utils/agendaTime';
 import { AgendaHeader } from '@/components/agenda/AgendaHeader';
 import { AgendaListView } from '@/components/agenda/AgendaListView';
@@ -104,12 +112,29 @@ const CreateAgentModal = dynamic(
  * writes. The views below it are presentational - they receive occurrences already
  * bucketed per day and hand back user intent.
  */
-/** A `?date` deep link, or null when it is absent or not a date. */
-function parseLinkedDate(value: string | null): Date | null {
+/**
+ * The instant a `?date` names, or null when it is absent or not a date.
+ *
+ * Two spellings reach here. The calendar writes the day it is on as `yyyy-mm-dd`, which names a
+ * DAY and is therefore read in the agenda's zone: parsed as an instant it would be UTC midnight,
+ * the previous day anywhere west of Greenwich. The notification bell links a full instant (the
+ * next fire), which is taken as is.
+ */
+function parseLinkedDate(value: string | null, timeZone: string): Date | null {
   if (!value) return null;
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (day) {
+    const [year, month, date] = [Number(day[1]), Number(day[2]), Number(day[3])];
+    // Month 13 or day 32 would silently roll over into another period.
+    if (month < 1 || month > 12 || date < 1 || date > 31) return null;
+    return zonedTimeToInstant(timeZone, year, month, date);
+  }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
+
+/** The views `?view=` may name. Anything else falls back to the stored preference. */
+const AGENDA_VIEW_MODES: readonly AgendaViewMode[] = ['month', 'week', 'day', 'list'];
 
 interface AgendaViewProps {
   /** Render inside the app side panel, whose shell already owns authentication and padding. */
@@ -121,7 +146,33 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
   const router = useRouter();
   const { toasts, addToast, removeToast } = useToast();
   const canMutate = useCanMutateInCurrentOrg();
-  const { preferences, update, reset, toggleResourceType, hydrated } = useAgendaPreferences();
+  const {
+    preferences: storedPreferences, update: updateStored, reset: resetStored, toggleResourceType, hydrated,
+  } = useAgendaPreferences();
+  // The side-panel copy sits on another page and must not own its address.
+  const urlState = !embedded;
+
+  // The view mode lives in the address, which wins; the stored preference is what an address
+  // that does not say opens on. A pick writes both, so the next plain visit opens on it too.
+  const [urlView, setUrlView] = useUrlState<AgendaViewMode | null>('view', null, {
+    codec: urlNullable(urlEnum(AGENDA_VIEW_MODES)),
+    enabled: urlState,
+  });
+  const preferences = useMemo<AgendaPreferences>(
+    () => (urlView && urlView !== storedPreferences.view
+      ? { ...storedPreferences, view: urlView }
+      : storedPreferences),
+    [storedPreferences, urlView],
+  );
+  const update = useCallback((patch: Partial<AgendaPreferences>) => {
+    if (patch.view) setUrlView(patch.view);
+    updateStored(patch);
+  }, [setUrlView, updateStored]);
+  const reset = useCallback(() => {
+    // Otherwise the address would go on overriding the view the reset just restored.
+    setUrlView(null);
+    resetStored();
+  }, [setUrlView, resetStored]);
 
   // The clocks live in the surfaces that draw time (`useNow` in the bar and the hour grid,
   // `useDayKey` in the month grid and the list), NOT here. Held at this level, a minute
@@ -135,39 +186,63 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
   const [recenterSignal, setRecenterSignal] = useState(0);
 
   // Deep link from the notification bell: `?date` decides which period opens and `?focus`
-  // rings that schedule's occurrences. The two need OPPOSITE treatment, which is why both
-  // used to be seeded once and only one of them was right to be.
+  // rings that schedule's occurrences.
   const searchParams = useSearchParams();
-  const linkedDate = searchParams?.get('date') ?? null;
 
   // `?focus` is only a highlight, so it is read live. Seeding it at mount meant a link
   // INTO the agenda from a page that already IS the agenda - the bell's "open in agenda"
   // while the agenda is open - changed the URL and did nothing at all.
   const focusScheduleId = searchParams?.get('focus') ?? null;
 
-  const [anchor, setAnchor] = useState<Date>(() => parseLinkedDate(linkedDate) ?? new Date());
-
-  // `?date` moves the whole view, so it must NOT be read live: paging forward would be
-  // undone on the next render, pinning the user to the linked period. It re-anchors only
-  // when the link itself changes, which is the one case the mount-time seed missed.
-  const appliedLinkedDate = useRef(linkedDate);
-  useEffect(() => {
-    if (linkedDate === appliedLinkedDate.current) return;
-    appliedLinkedDate.current = linkedDate;
-    const parsed = parseLinkedDate(linkedDate);
-    if (parsed) setAnchor(parsed);
-  }, [linkedDate]);
+  // `?date` is the period on screen, and it is two-way: paging WRITES it, so the address and
+  // the calendar always name the same period. That is what makes it safe to follow the address.
+  // While paging did not write it, a `?date` read live pinned the user to the linked period:
+  // every step forward was undone on the next render by a parameter that had not moved.
+  // Absent means today, so a calendar nobody paged keeps a clean address and still opens on
+  // the present tomorrow.
+  const [linkedDate, setLinkedDate] = useUrlState<string | null>('date', null, {
+    codec: urlNullable(urlString),
+    enabled: urlState,
+  });
+  const [today, setToday] = useState<Date>(() => new Date());
+  // Derived, and in the agenda's zone: a day named in the address is the same calendar day
+  // before and after the preferences hydrate, and after a change of zone.
+  const anchor = useMemo(
+    () => parseLinkedDate(linkedDate, storedPreferences.timezone) ?? today,
+    [linkedDate, storedPreferences.timezone, today],
+  );
+  const setAnchor = useCallback((next: Date) => {
+    const zone = storedPreferences.timezone;
+    const now = new Date();
+    if (dayKey(next, zone) === dayKey(now, zone)) {
+      setToday(now);
+      setLinkedDate(null);
+    } else {
+      setLinkedDate(dayKey(next, zone));
+    }
+  }, [setLinkedDate, storedPreferences.timezone]);
   const [agenda, setAgenda] = useState<Agenda | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [search, setSearch] = useState('');
-  const [selectedTriggerKey, setSelectedTriggerKey] = useState<string | null>(null);
+  const [search, setSearch] = useUrlSearchState('q', urlState);
+  // A key that matches no trigger any more (deleted, filtered out) selects nothing.
+  const [selectedTriggerKey, setSelectedTriggerKey] = useUrlState<string | null>('trigger', null, {
+    codec: urlNullable(urlString),
+    enabled: urlState,
+  });
   // Every kind on by default, agent launch kinds included: the calendar's job is to show
   // what the workspace did, and a filter that starts partly off hides work without saying
   // so. AGENDA_KIND_ORDER, not TRIGGER_KIND_ORDER: seeding from the eight workflow kinds
   // would make every agent run invisible from the first paint. Its LENGTH is separately
   // what selectAgendaEmptyState compares against to decide whether anything is filtered.
-  const [triggerTypes, setTriggerTypes] = useState<AgendaKind[]>([...AGENDA_KIND_ORDER]);
+  //
+  // In the address under `kinds`, where absence means every kind. The list is kept in
+  // AGENDA_KIND_ORDER so that switching a kind off and on again is the default once more,
+  // rather than the same set in another order spelled out in full.
+  const [triggerTypes, setTriggerTypes] = useUrlState<AgendaKind[]>('kinds', [...AGENDA_KIND_ORDER], {
+    codec: urlList(AGENDA_KIND_ORDER),
+    enabled: urlState,
+  });
   const [reloadKey, setReloadKey] = useState(0);
 
   // Menu + dialog state.
@@ -304,13 +379,11 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
 
   const step = useCallback(
     (direction: -1 | 1) => {
-      setAnchor((current) => {
-        if (view === 'month') return addMonths(current, direction, timezone);
-        if (view === 'day') return addDays(current, direction, timezone);
-        return addDays(current, direction * 7, timezone);
-      });
+      if (view === 'month') setAnchor(addMonths(anchor, direction, timezone));
+      else if (view === 'day') setAnchor(addDays(anchor, direction, timezone));
+      else setAnchor(addDays(anchor, direction * 7, timezone));
     },
-    [view, timezone],
+    [view, timezone, anchor, setAnchor],
   );
 
   const title = useMemo(() => {
@@ -725,7 +798,7 @@ export function AgendaView({ embedded = false }: AgendaViewProps = {}) {
           onSelectTrigger={setSelectedTriggerKey}
           onToggleTriggerType={(type) => setTriggerTypes((current) => current.includes(type)
             ? current.filter((candidate) => candidate !== type)
-            : [...current, type])}
+            : AGENDA_KIND_ORDER.filter((candidate) => candidate === type || current.includes(candidate)))}
           onToggleResourcePause={(trigger) => void toggleResourcePause(trigger)}
           onOpenTrigger={(trigger) => router.push(occurrenceHref(trigger))}
           onPrevious={() => step(-1)}

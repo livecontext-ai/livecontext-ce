@@ -60,6 +60,13 @@ public interface AgentTaskRepository extends JpaRepository<AgentTaskEntity, UUID
     Optional<AgentTaskEntity> findByIdAndOrganizationIdStrict(
             @Param("id") UUID id, @Param("orgId") String orgId);
 
+    /**
+     * CASA LC-066: which of these tasks are RESTRICTED. Ids only, no content: used by
+     * orchestrator's scrub of task notifications stored before task titles were withheld.
+     */
+    @Query("SELECT t.id FROM AgentTaskEntity t WHERE t.id IN :ids AND t.dataSensitivity = 'RESTRICTED'")
+    List<UUID> findRestrictedIdsAmong(@Param("ids") Collection<UUID> ids);
+
     @Query("SELECT t FROM AgentTaskEntity t "
          + "WHERE t.organizationId = :orgId AND t.assignedToAgentId = :agentId "
          + "AND t.status IN :statuses ORDER BY t.createdAt DESC")
@@ -253,6 +260,20 @@ public interface AgentTaskRepository extends JpaRepository<AgentTaskEntity, UUID
             @Param("orgId") String orgId,
             @Param("agentId") UUID agentId,
             Pageable pageable);
+
+    /**
+     * CASA LC-066: ratchets a task to RESTRICTED (content from an execution holding Gmail / Drive
+     * data). A targeted UPDATE so it never overwrites a concurrent status change. The caller
+     * checks scope first.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        UPDATE AgentTaskEntity t
+           SET t.dataSensitivity = 'RESTRICTED'
+         WHERE t.id = :taskId
+           AND t.dataSensitivity <> 'RESTRICTED'
+    """)
+    int markRestricted(@Param("taskId") UUID taskId);
 
     // ------------------------------------------------------------------
     // Optimistic state transitions

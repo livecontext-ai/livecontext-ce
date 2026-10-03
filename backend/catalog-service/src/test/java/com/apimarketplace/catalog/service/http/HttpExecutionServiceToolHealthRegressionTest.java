@@ -483,6 +483,22 @@ class HttpExecutionServiceToolHealthRegressionTest {
 
         @Mock private RestTemplate restTemplate;
 
+        /** The SSRF check resolves the final host; these hosts are fictional, so DNS is stubbed. */
+        private org.mockito.MockedStatic<com.apimarketplace.common.web.UrlSafetyValidator> dns;
+
+        @org.junit.jupiter.api.BeforeEach
+        void stubDns() {
+            dns = org.mockito.Mockito.mockStatic(com.apimarketplace.common.web.UrlSafetyValidator.class,
+                    org.mockito.Mockito.CALLS_REAL_METHODS);
+            dns.when(() -> com.apimarketplace.common.web.UrlSafetyValidator.validateEgressUrl(anyString()))
+                    .thenAnswer(i -> null);
+        }
+
+        @org.junit.jupiter.api.AfterEach
+        void releaseDns() {
+            dns.close();
+        }
+
         private URI sentUri(ApiEntity api, ApiToolEntity tool, String cred) {
             lenient().when(restTemplate.exchange(any(URI.class), any(HttpMethod.class), any(HttpEntity.class), eq(Object.class)))
                     .thenReturn(ResponseEntity.ok(Map.of("ok", true)));
@@ -658,22 +674,24 @@ class HttpExecutionServiceToolHealthRegressionTest {
         }
 
         @Test
-        @DisplayName("the 401 refresh-retry path (String URL) sends the same fitted URL")
+        @DisplayName("the 401 refresh-retry path sends the same fitted URL")
         void refreshRetryUsesFittedUrl() {
             givenCredential("ghost", Map.of("admin_domain", "https://company-bible.ghost.io/", "admin_api_key", "id:secret"));
+            // Both sends go through the validated URI: the first answers 401, the re-send after the
+            // token refresh succeeds.
             when(restTemplate.exchange(any(URI.class), any(HttpMethod.class), any(HttpEntity.class), eq(Object.class)))
                     .thenThrow(HttpClientErrorException.create(HttpStatus.UNAUTHORIZED, "Unauthorized",
-                            new HttpHeaders(), new byte[0], StandardCharsets.UTF_8));
-            when(userCredentialService.forceRefreshAndGetToken("user1", "ghost")).thenReturn(Optional.of("fresh"));
-            when(restTemplate.exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(Object.class)))
+                            new HttpHeaders(), new byte[0], StandardCharsets.UTF_8))
                     .thenReturn(ResponseEntity.ok(Map.of("ok", true)));
+            when(userCredentialService.forceRefreshAndGetToken("user1", "ghost")).thenReturn(Optional.of("fresh"));
 
             Map<String, Object> result = service(restTemplate).executeHttpCallWithCredentials(
                     api("https://{admin_domain}/ghost/api"), tool("GET", "/admin/site/"), params(Map.of()),
                     null, "user1", "ghost");
 
             assertThat(result.get("success")).as(String.valueOf(result.get("error"))).isEqualTo(true);
-            verify(restTemplate).exchange(eq("https://company-bible.ghost.io/ghost/api/admin/site/"),
+            verify(restTemplate, org.mockito.Mockito.times(2)).exchange(
+                    eq(URI.create("https://company-bible.ghost.io/ghost/api/admin/site/")),
                     eq(HttpMethod.GET), any(HttpEntity.class), eq(Object.class));
         }
     }

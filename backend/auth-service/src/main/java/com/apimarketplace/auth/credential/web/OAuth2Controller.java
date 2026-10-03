@@ -3,6 +3,8 @@ package com.apimarketplace.auth.credential.web;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.auth.credential.domain.OAuth2Models.*;
 import com.apimarketplace.auth.credential.service.GooglePickerAppId;
+import com.apimarketplace.auth.credential.service.OAuth2BrowserBinding;
+import com.apimarketplace.auth.credential.service.OAuth2StateRef;
 import com.apimarketplace.auth.credential.service.InternalCredentialService;
 import com.apimarketplace.auth.credential.service.OAuth2Service;
 import jakarta.servlet.http.HttpServletRequest;
@@ -48,6 +50,125 @@ public class OAuth2Controller {
     @org.springframework.beans.factory.annotation.Value("${oauth2.frontend-url:http://localhost:3000}")
     private String frontendUrl;
 
+    @org.springframework.beans.factory.annotation.Value("${oauth2.callback-url:http://localhost:8083/api/credentials/oauth2/callback}")
+    private String callbackUrl;
+
+    /** True for a Picker-enabled Google Workspace integration, tolerant of slug separators. */
+    static boolean isPickerIntegration(String integration) {
+        if (integration == null || integration.isBlank()) {
+            return false;
+        }
+        String normalized = integration.replaceAll("[^a-zA-Z0-9]", "").toLowerCase(java.util.Locale.ROOT);
+        return PICKER_INTEGRATIONS.stream()
+                .map(allowed -> allowed.replaceAll("[^a-zA-Z0-9]", ""))
+                .anyMatch(normalized::equals);
+    }
+
+    /** Google scope families a Picker credential may hold; identity scopes are harmless. */
+    private static final java.util.List<String> PICKER_SCOPE_PREFIXES = java.util.List.of(
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/documents",
+            "https://www.googleapis.com/auth/presentations");
+    private static final java.util.Set<String> IDENTITY_SCOPES = java.util.Set.of(
+            "openid", "email", "profile",
+            "https://www.googleapis.com/auth/userinfo.email",
+            "https://www.googleapis.com/auth/userinfo.profile");
+
+    /** True when every granted scope belongs to the Picker's families (LC-028 / LC-072). */
+    static boolean isPickerSafeScopeSet(java.util.List<String> scopes) {
+        // Unknown grant = refuse: a credential whose scopes were never recorded may hold anything.
+        if (scopes == null || scopes.isEmpty()) {
+            return false;
+        }
+        for (String scope : scopes) {
+            if (scope == null || scope.isBlank() || IDENTITY_SCOPES.contains(scope)) {
+                continue;
+            }
+            boolean inFamily = PICKER_SCOPE_PREFIXES.stream().anyMatch(prefix ->
+                    scope.equals(prefix) || scope.startsWith(prefix + "."));
+            if (!inFamily) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Provider-supplied text for a log line: control characters replaced, 200 chars max. */
+    static String logSafe(String value) {
+        if (value == null) {
+            return null;
+        }
+        String cleaned = value.replaceAll("\\p{Cntrl}", "_");
+        return cleaned.length() > 200 ? cleaned.substring(0, 200) + "..." : cleaned;
+    }
+
+    /** Credential-lifecycle audit (LC-058). Optional so hand-built controllers in tests work. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.credential.service.CredentialAuditRecorder auditRecorder;
+
+    private boolean secureBindingCookie() {
+        return OAuth2BrowserBinding.secureDeployment(frontendUrl, callbackUrl);
+    }
+
+    /**
+     * Hand the initiating browser the flow's binding cookie (LC-005) and return the hash to store
+     * in the state. The client_credentials grant has no browser leg (its "state" is a constant),
+     * so it gets no cookie.
+     */
+    private OAuth2InitiateResponse bindToBrowser(HttpServletResponse httpResponse, String binding,
+                                                 OAuth2InitiateResponse response) {
+        if (response != null && response.state() != null && !"client_credentials".equals(response.state())) {
+            httpResponse.addHeader("Set-Cookie",
+                    OAuth2BrowserBinding.setCookieHeader(response.state(), binding, secureBindingCookie()));
+        }
+        return response;
+    }
+
+    /**
+     * True when the app (where the initiate response set the binding cookie) and the OAuth
+     * callback are served on different hosts. Decided from configuration rather than from the
+     * request's Host header, which behind the gateway names the upstream service, not the host
+     * the browser used. Ports are ignored: cookies are not port-scoped.
+     */
+    boolean isSplitHost() {
+        String appHost = hostOf(frontendUrl);
+        String callbackHost = hostOf(callbackUrl);
+        return appHost != null && callbackHost != null && !appHost.equalsIgnoreCase(callbackHost);
+    }
+
+    /** This same callback, reached through the app host's API proxy ({@code /api/proxy/*}). */
+    String appProxyCallbackUrl(String code, String state) {
+        String base = frontendUrl.endsWith("/") ? frontendUrl.substring(0, frontendUrl.length() - 1) : frontendUrl;
+        return base + "/api/proxy/credentials/oauth2/callback"
+                + "?code=" + URLEncoder.encode(code, StandardCharsets.UTF_8)
+                + "&state=" + URLEncoder.encode(state, StandardCharsets.UTF_8)
+                + "&hop=1";
+    }
+
+    private static String hostOf(String url) {
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        try {
+            return java.net.URI.create(url.trim()).getHost();
+        } catch (IllegalArgumentException malformed) {
+            return null;
+        }
+    }
+
+    private static String readCookie(HttpServletRequest request, String name) {
+        if (request == null || request.getCookies() == null) {
+            return null;
+        }
+        for (jakarta.servlet.http.Cookie cookie : request.getCookies()) {
+            if (name.equals(cookie.getName())) {
+                return cookie.getValue();
+            }
+        }
+        return null;
+    }
+
     public OAuth2Controller(OAuth2Service oAuth2Service, TenantResolver tenantResolver,
                             InternalCredentialService internalCredentialService) {
         this.oAuth2Service = oAuth2Service;
@@ -61,6 +182,7 @@ public class OAuth2Controller {
     @PostMapping("/initiate")
     public ResponseEntity<OAuth2InitiateResponse> initiate(
             HttpServletRequest httpRequest,
+            HttpServletResponse httpResponse,
             @RequestParam(value = "locale", required = false) String locale,
             @RequestBody OAuth2InitiateRequest request) {
 
@@ -83,8 +205,10 @@ public class OAuth2Controller {
             throw new IllegalArgumentException("Credential template ID is required");
         }
 
-        OAuth2InitiateResponse response = oAuth2Service.initiate(request, userId, organizationId, uiLocale);
-        return ResponseEntity.ok(response);
+        String binding = OAuth2BrowserBinding.newValue();
+        OAuth2InitiateResponse response = oAuth2Service.initiate(
+                request, userId, organizationId, uiLocale, OAuth2BrowserBinding.hash(binding));
+        return ResponseEntity.ok(bindToBrowser(httpResponse, binding, response));
     }
 
     /**
@@ -93,6 +217,7 @@ public class OAuth2Controller {
     @PostMapping("/initiate-simple")
     public ResponseEntity<OAuth2InitiateResponse> initiateSimple(
             HttpServletRequest httpRequest,
+            HttpServletResponse httpResponse,
             @RequestParam(value = "locale", required = false) String locale,
             @RequestBody OAuth2SimpleInitiateRequest request) {
 
@@ -109,9 +234,10 @@ public class OAuth2Controller {
             throw new IllegalArgumentException("Credential template ID is required");
         }
 
-        OAuth2InitiateResponse response =
-                oAuth2Service.initiateSimple(request, userId, organizationId, uiLocale);
-        return ResponseEntity.ok(response);
+        String binding = OAuth2BrowserBinding.newValue();
+        OAuth2InitiateResponse response = oAuth2Service.initiateSimple(
+                request, userId, organizationId, uiLocale, OAuth2BrowserBinding.hash(binding));
+        return ResponseEntity.ok(bindToBrowser(httpResponse, binding, response));
     }
 
     /**
@@ -164,7 +290,7 @@ public class OAuth2Controller {
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
 
         String integration = request.integration() == null ? "" : request.integration().trim();
-        if (!PICKER_INTEGRATIONS.contains(integration.toLowerCase(java.util.Locale.ROOT))) {
+        if (!isPickerIntegration(integration)) {
             log.warn("picker-token refused for unsupported integration '{}' (user {})", integration, userId);
             return ResponseEntity.status(403).body(Map.of("error", "picker_not_supported"));
         }
@@ -172,12 +298,42 @@ public class OAuth2Controller {
         String credentialName = (request.credentialName() != null && !request.credentialName().isBlank())
                 ? request.credentialName().trim() : integration;
 
-        // OAuth2-only refresh: returns a fresh access token when a refresh_token exists, and never an
-        // API key (an api_key credential has no refresh_token -> empty). Owner-gated: resolves only
-        // this user's credential. The refresh token itself is never exposed.
-        return internalCredentialService.refreshAccessToken(userId, credentialName, organizationId)
-                .<ResponseEntity<?>>map(token -> ResponseEntity.ok(
-                        new PickerTokenResponse(token, resolvePickerAppId(userId, credentialName, organizationId))))
+        // LC-028: the allow-list above guards the REQUESTED integration, but the token is minted
+        // from whatever credentialName resolves to ({"integration":"google drive",
+        // "credential_name":"gmail"} used to hand a full Gmail token to browser JavaScript).
+        // Resolve the row first, check ITS integration, then mint from that exact row by id.
+        var resolved = internalCredentialService.findActiveCredential(userId, credentialName, organizationId);
+        if (resolved.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("error", "no_google_credential"));
+        }
+        var credential = resolved.get();
+        if (!isPickerIntegration(credential.integration())) {
+            log.warn("picker-token refused: credential {} of user {} is integration '{}', not a Picker "
+                    + "integration (requested '{}')", credential.id(), userId, credential.integration(), integration);
+            return ResponseEntity.status(403).body(Map.of("error", "picker_not_supported"));
+        }
+
+        // The token goes to browser JavaScript and carries EVERY scope granted on the credential.
+        // A credential granted anything beyond the Drive / Docs / Sheets / Slides families (a
+        // Gmail scope merged in by incremental auth, say) is refused rather than handed out: a
+        // Google access token cannot be down-scoped on refresh.
+        if (!isPickerSafeScopeSet(credential.scopes())) {
+            log.warn("picker-token refused: credential {} of user {} carries scopes beyond the Picker's families",
+                    credential.id(), userId);
+            return ResponseEntity.status(403).body(Map.of("error", "picker_scope_too_broad"));
+        }
+
+        // Stored token while it is valid, provider refresh otherwise; OAuth2 rows only, so never
+        // an API key. The refresh token itself is never exposed.
+        return internalCredentialService.getOrRefreshOAuth2AccessTokenById(userId, credential.id(), organizationId)
+                .<ResponseEntity<?>>map(token -> {
+                    // LC-058: an access token handed to browser JavaScript is a credential read.
+                    if (auditRecorder != null) {
+                        auditRecorder.recordSecretRead(userId, credential.id(), credential.integration(), "picker_token");
+                    }
+                    return ResponseEntity.ok(
+                        new PickerTokenResponse(token, resolvePickerAppId(userId, credential.id(), organizationId)));
+                })
                 .orElseGet(() -> ResponseEntity.status(404).body(Map.of("error", "no_google_credential")));
     }
 
@@ -189,10 +345,10 @@ public class OAuth2Controller {
      * unavailable: the Picker then behaves exactly as it did before, rather than being handed a
      * wrong App ID, which would break the Picker itself.
      */
-    private String resolvePickerAppId(String userId, String credentialName, String organizationId) {
+    private String resolvePickerAppId(String userId, Long credentialId, String organizationId) {
         try {
             Map<String, String> data =
-                    internalCredentialService.getCredentialDataMap(userId, credentialName, organizationId);
+                    internalCredentialService.getCredentialDataMapById(userId, credentialId, organizationId);
             if (data == null || data.isEmpty()) {
                 return null;
             }
@@ -203,8 +359,8 @@ public class OAuth2Controller {
             return GooglePickerAppId.fromClientId(clientId).orElse(null);
         } catch (RuntimeException e) {
             // Never fail the token mint over the App ID: the caller degrades to the old behaviour.
-            log.warn("picker-token: could not resolve the Picker App ID for '{}' ({})",
-                    credentialName, e.toString());
+            log.warn("picker-token: could not resolve the Picker App ID for credential {} ({})",
+                    credentialId, e.toString());
             return null;
         }
     }
@@ -228,12 +384,14 @@ public class OAuth2Controller {
      */
     @GetMapping("/callback")
     public void callback(
+            HttpServletRequest httpRequest,
             HttpServletResponse response,
             @RequestParam(value = "code", required = false) String code,
             @RequestParam(value = "auth_code", required = false) String authCode,
             @RequestParam(value = "state", required = false) String state,
             @RequestParam(value = "error", required = false) String error,
-            @RequestParam(value = "error_description", required = false) String errorDescription) throws IOException {
+            @RequestParam(value = "error_description", required = false) String errorDescription,
+            @RequestParam(value = "hop", required = false) String hop) throws IOException {
 
         // Most providers return the authorization code as `code` (RFC 6749). TikTok for Business
         // returns it as `auth_code`; fall back to that so the callback works for both. The token
@@ -242,12 +400,20 @@ public class OAuth2Controller {
             code = authCode;
         }
 
-        log.info("OAuth2 callback received - code: {}, state: {}, error: {}",
-                code != null ? "present" : "null", state, error);
+        // LC-089: never the raw state (it is the Redis key of the flow), only a one-way reference.
+        log.info("OAuth2 callback received - code: {}, flow: {}, error: {}",
+                code != null ? "present" : "null", OAuth2StateRef.of(state), error);
+
+        boolean secureCookie = secureBindingCookie();
 
         if (error != null) {
-            log.error("OAuth2 provider error: {} - {}", error, errorDescription);
-            String redirectUrl = frontendUrl + "/dashboard/credentials?error=" + error;
+            // Both values come from the query string of a public endpoint: no CR/LF (forged log
+            // lines), bounded length.
+            log.error("OAuth2 provider error: {} - {}", logSafe(error), logSafe(errorDescription));
+            // Encoded like error_description below: a raw provider-supplied value in a Location
+            // header could inject extra query parameters (LC-023 family).
+            String redirectUrl = frontendUrl + "/dashboard/credentials?error="
+                    + URLEncoder.encode(error, StandardCharsets.UTF_8);
             if (errorDescription != null) {
                 redirectUrl += "&error_description=" + URLEncoder.encode(errorDescription, StandardCharsets.UTF_8);
             }
@@ -276,8 +442,24 @@ public class OAuth2Controller {
             return;
         }
 
+        // LC-005: the cookie proves this is the browser that started the flow.
+        String binding = readCookie(httpRequest, OAuth2BrowserBinding.cookieName(state, secureCookie));
+
+        // Split-host installs (app on app.example.com, API on api.example.com): the cookie was
+        // set on the APP host by the initiate call, so it can never arrive here. Send the browser
+        // once through the app's own API proxy, which forwards the app-host cookie to this same
+        // endpoint. The state is NOT consumed before the hop; hop=1 stops a second bounce, so a
+        // browser that really lacks the cookie is refused on the next pass as on a single host.
+        if ((binding == null || binding.isBlank()) && !"1".equals(hop) && isSplitHost()) {
+            response.sendRedirect(appProxyCallbackUrl(code, state));
+            return;
+        }
+
+        // The flow's binding cookie is single-use like the state: drop it on every outcome.
+        response.addHeader("Set-Cookie", OAuth2BrowserBinding.clearCookieHeader(state, secureCookie));
+
         try {
-            String redirectUrl = oAuth2Service.handleCallback(code, state);
+            String redirectUrl = oAuth2Service.handleCallback(code, state, binding);
             response.sendRedirect(redirectUrl);
         } catch (Exception e) {
             log.error("Failed to handle OAuth2 callback: {}", e.getMessage(), e);

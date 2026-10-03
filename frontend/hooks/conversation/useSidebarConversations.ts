@@ -143,11 +143,12 @@ export function useSidebarConversations({
           userId: '',
           model: '',
           provider: '',
-          createdAt: (conv as any).createdAt ?? new Date().toISOString(),
-          updatedAt: (conv as any).updatedAt ?? new Date().toISOString(),
+          createdAt: conv.createdAt ?? new Date().toISOString(),
+          updatedAt: conv.updatedAt ?? new Date().toISOString(),
           messageCount: 0,
-          workflowId: (conv as any).workflowId,
-          agentId: (conv as any).agentId,
+          workflowId: conv.workflowId,
+          agentId: conv.agentId,
+          taskId: conv.taskId,
         } as Conversation);
       } else {
         seen.set(conv.id, conv as Conversation);

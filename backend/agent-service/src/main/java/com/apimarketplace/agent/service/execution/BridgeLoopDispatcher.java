@@ -96,7 +96,7 @@ public class BridgeLoopDispatcher {
             return null;
         }
         gateSelection(request.tenantId(), userRoles, request.provider(), viaExecutionLink);
-        return bridgeClient.execute(request);
+        return bridgeClient.execute(request, userRoles);
     }
 
     /**
@@ -172,7 +172,7 @@ public class BridgeLoopDispatcher {
         // routed one through (classify/guardrail path).
         gateSelection(context.tenantId(), context.userRoles(), context.provider(), viaExecutionLink);
 
-        AgentExecutionResponseDto response = bridgeClient.execute(dto);
+        AgentExecutionResponseDto response = bridgeClient.execute(dto, context.userRoles());
 
         if (response == null) {
             long duration = System.currentTimeMillis() - start;

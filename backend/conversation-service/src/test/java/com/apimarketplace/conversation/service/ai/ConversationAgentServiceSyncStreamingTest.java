@@ -105,7 +105,7 @@ class ConversationAgentServiceSyncStreamingTest {
     @DisplayName("eligible bridge run holds the stream:hb heartbeat across the dispatch (StreamTTL reap regression) and releases it at finalize")
     void bridgeScheduleHoldsHeartbeatAcrossDispatch() throws Exception {
         stubBridgeContext("claude-code", "claude-opus-4-8");
-        when(bridgeClient.executeViaBridge(any())).thenReturn(successResponse("hello world"));
+        when(bridgeClient.executeViaBridge(any(), any())).thenReturn(successResponse("hello world"));
 
         service.executeSync(scheduleRequest("conv-hb"), "conv-hb");
 
@@ -114,7 +114,7 @@ class ConversationAgentServiceSyncStreamingTest {
         // exists), release at the finalize funnel AFTER the run.
         InOrder order = inOrder(heartbeat, bridgeClient);
         order.verify(heartbeat).register(anyString());
-        order.verify(bridgeClient).executeViaBridge(any());
+        order.verify(bridgeClient).executeViaBridge(any(), any());
         order.verify(heartbeat).unregister(anyString());
     }
 
@@ -122,7 +122,7 @@ class ConversationAgentServiceSyncStreamingTest {
     @DisplayName("bridge failure path still releases the heartbeat (finalize funnel covers every terminal)")
     void bridgeFailureReleasesHeartbeat() throws Exception {
         stubBridgeContext("claude-code", "claude-opus-4-8");
-        when(bridgeClient.executeViaBridge(any())).thenReturn(failureResponse("model exploded"));
+        when(bridgeClient.executeViaBridge(any(), any())).thenReturn(failureResponse("model exploded"));
 
         service.executeSync(scheduleRequest("conv-hb-fail"), "conv-hb-fail");
 
@@ -134,7 +134,7 @@ class ConversationAgentServiceSyncStreamingTest {
     @DisplayName("WIDGET source registers no stream row - so no heartbeat either (nothing reapable to shield)")
     void widgetBridgeDoesNotHeartbeat() throws Exception {
         stubBridgeContext("claude-code", "claude-opus-4-8");
-        when(bridgeClient.executeViaBridge(any())).thenReturn(successResponse("widget reply"));
+        when(bridgeClient.executeViaBridge(any(), any())).thenReturn(successResponse("widget reply"));
 
         service.executeSync(widgetRequest("conv-widget-hb"), "conv-widget-hb");
 
@@ -145,7 +145,7 @@ class ConversationAgentServiceSyncStreamingTest {
     @DisplayName("eligible bridge run (SCHEDULE) registers a real stream + emits stream_started BEFORE dispatch, then done + completes state")
     void bridgeScheduleEmulatesConversationStream() throws Exception {
         stubBridgeContext("claude-code", "claude-opus-4-8");
-        when(bridgeClient.executeViaBridge(any())).thenReturn(successResponse("hello world"));
+        when(bridgeClient.executeViaBridge(any(), any())).thenReturn(successResponse("hello world"));
 
         Map<String, Object> result = service.executeSync(scheduleRequest("conv-sched"), "conv-sched");
 
@@ -154,7 +154,7 @@ class ConversationAgentServiceSyncStreamingTest {
         // Register MUST happen before dispatch so a reconnect mid-run resolves the stream.
         InOrder order = inOrder(stateService, bridgeClient);
         order.verify(stateService).registerExternalStream(anyString(), eq("conv-sched"), eq("claude-opus-4-8"), eq("claude-code"), any());
-        order.verify(bridgeClient).executeViaBridge(any());
+        order.verify(bridgeClient).executeViaBridge(any(), any());
         // Completion state advanced so a post-run reconnect sees a terminal event, not a stuck stream.
         verify(stateService).complete(anyString());
         verify(stateService, never()).error(anyString(), any());
@@ -162,7 +162,7 @@ class ConversationAgentServiceSyncStreamingTest {
         // The bridge receives a REAL (UUID) stream id, not the legacy "sync-" placeholder, so its
         // content/tool buffering lands under a registered, reconnectable stream.
         ArgumentCaptor<AgentExecutionRequestDto> dtoCap = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-        verify(bridgeClient).executeViaBridge(dtoCap.capture());
+        verify(bridgeClient).executeViaBridge(dtoCap.capture(), any());
         String bridgeStreamId = dtoCap.getValue().streamChannelId();
         assertThat(bridgeStreamId).doesNotStartWith("sync-");
         assertThat(bridgeStreamId).hasSize(36); // UUID
@@ -187,7 +187,7 @@ class ConversationAgentServiceSyncStreamingTest {
     @DisplayName("WIDGET source is NOT a browsable conversation - no stream registration, no events, legacy sync- id")
     void widgetBridgeDoesNotEmulateStream() throws Exception {
         stubBridgeContext("claude-code", "claude-opus-4-8");
-        when(bridgeClient.executeViaBridge(any())).thenReturn(successResponse("widget reply"));
+        when(bridgeClient.executeViaBridge(any(), any())).thenReturn(successResponse("widget reply"));
 
         service.executeSync(widgetRequest("conv-widget"), "conv-widget");
 
@@ -196,7 +196,7 @@ class ConversationAgentServiceSyncStreamingTest {
         assertThat(capturedConversationEvents("conv-widget")).isEmpty();
 
         ArgumentCaptor<AgentExecutionRequestDto> dtoCap = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-        verify(bridgeClient).executeViaBridge(dtoCap.capture());
+        verify(bridgeClient).executeViaBridge(dtoCap.capture(), any());
         assertThat(dtoCap.getValue().streamChannelId()).isEqualTo("sync-conv-widget");
     }
 
@@ -214,14 +214,14 @@ class ConversationAgentServiceSyncStreamingTest {
         verify(stateService, never()).complete(anyString());
         assertThat(capturedConversationEvents("conv-remote")).isEmpty();
         verify(agentClient).executeAgent(any());
-        verify(bridgeClient, never()).executeViaBridge(any());
+        verify(bridgeClient, never()).executeViaBridge(any(), any());
     }
 
     @Test
     @DisplayName("bridge run that fails (success=false) emits a stream error + errors the state, not done")
     void bridgeFailureEmitsErrorEvent() throws Exception {
         stubBridgeContext("claude-code", "claude-opus-4-8");
-        when(bridgeClient.executeViaBridge(any())).thenReturn(failureResponse("model exploded"));
+        when(bridgeClient.executeViaBridge(any(), any())).thenReturn(failureResponse("model exploded"));
 
         service.executeSync(scheduleRequest("conv-fail"), "conv-fail");
 
@@ -245,7 +245,7 @@ class ConversationAgentServiceSyncStreamingTest {
         // unreachable/erroring bridge produces, and the stream must still be finalized as error so
         // the live bubble is never left stuck "streaming".
         stubBridgeContext("claude-code", "claude-opus-4-8");
-        when(bridgeClient.executeViaBridge(any())).thenReturn(null);
+        when(bridgeClient.executeViaBridge(any(), any())).thenReturn(null);
 
         Map<String, Object> result = service.executeSync(scheduleRequest("conv-null"), "conv-null");
 
@@ -264,7 +264,7 @@ class ConversationAgentServiceSyncStreamingTest {
         // throw to prove the outer catch's defensive finalize: a started stream is never left stuck if
         // any collaborator after registration fails unexpectedly.
         stubBridgeContext("claude-code", "claude-opus-4-8");
-        when(bridgeClient.executeViaBridge(any())).thenThrow(new RuntimeException("unexpected post-registration failure"));
+        when(bridgeClient.executeViaBridge(any(), any())).thenThrow(new RuntimeException("unexpected post-registration failure"));
 
         Map<String, Object> result = service.executeSync(scheduleRequest("conv-throw"), "conv-throw");
 
@@ -281,7 +281,7 @@ class ConversationAgentServiceSyncStreamingTest {
     @DisplayName("every eligible sync source (case-insensitive) emulates the conversation stream")
     void allEligibleSourcesEmulate(String source) throws Exception {
         stubBridgeContext("claude-code", "claude-opus-4-8");
-        when(bridgeClient.executeViaBridge(any())).thenReturn(successResponse("ok"));
+        when(bridgeClient.executeViaBridge(any(), any())).thenReturn(successResponse("ok"));
         String conv = "conv-" + source.toLowerCase(java.util.Locale.ROOT);
         ChatRequest request = scheduleRequest(conv);
         request.setSource(source); // mixed/lower case exercises the toUpperCase normalization

@@ -404,7 +404,7 @@ class GenerationGrantExecutionSurfaceExposureTest {
 
             SubAgentBridgeClient bridgeClient = mock(SubAgentBridgeClient.class);
             org.springframework.test.util.ReflectionTestUtils.setField(handler, "bridgeClient", bridgeClient);
-            when(bridgeClient.execute(any(AgentExecutionRequestDto.class))).thenReturn(
+            when(bridgeClient.execute(any(AgentExecutionRequestDto.class), any())).thenReturn(
                     new com.apimarketplace.agent.client.dto.execution.AgentExecutionResponseDto(
                             true, "ok", "ok", List.of(), 1, Map.of(), null, 10L,
                             "claude-code", "claude-sonnet-4-6", List.of(), "COMPLETED",
@@ -420,7 +420,7 @@ class GenerationGrantExecutionSurfaceExposureTest {
 
             ArgumentCaptor<AgentExecutionRequestDto> captor =
                     ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
-            verify(bridgeClient).execute(captor.capture());
+            verify(bridgeClient).execute(captor.capture(), any());
             // The bridge ignores the resolved tool list and rebuilds its own MCP tool set from
             // enabledModules, so a null here re-granted both credit-spending tools on the CLI path
             // even though the direct path (correctly) withheld them.

@@ -9,7 +9,8 @@ export const metadata = {
   alternates: { canonical: '/about' },
   ...socialCard({ title: 'About', description: 'Learn about LiveContext, contact the team, and find answers to common questions.', path: '/about' }),
   // Self-hosted deployments must never index marketing pages.
-  robots: IS_CE ? { index: false, follow: false } : undefined,
+  // Only on CE: on the cloud an explicit 'robots: undefined' wiped the root layout's directives.
+  ...(IS_CE ? { robots: { index: false, follow: false } } : {}),
 };
 
 export default function AboutPage() {

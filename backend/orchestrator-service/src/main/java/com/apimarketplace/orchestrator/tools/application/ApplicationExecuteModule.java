@@ -235,7 +235,8 @@ public class ApplicationExecuteModule implements ToolModule {
             conversationEventPublisher.publishVisualizationReady(
                 streamId, convId, "application", applicationId, appName, run.getRunIdPublic());
 
-            TriggerExecutionResult triggerResult = agentWorkflowFireService.fire(run, trigger, dataInputs);
+            TriggerExecutionResult triggerResult = agentWorkflowFireService.fire(run, trigger, dataInputs,
+                com.apimarketplace.common.classification.DataSensitivity.fromCredentials(context.credentials()).isRestricted());
 
             // 5. Build result + enrich
             Map<String, Object> result = agentWorkflowFireService.buildResult(

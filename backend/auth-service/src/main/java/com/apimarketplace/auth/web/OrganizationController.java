@@ -16,8 +16,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import com.apimarketplace.common.storage.domain.StorageEntity;
+import com.apimarketplace.common.web.SafeFileServeHeaders;
 import com.apimarketplace.auth.util.InitialsAvatarGenerator;
 import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -515,7 +517,9 @@ public class OrganizationController {
         if (entityOpt.isPresent() && entityOpt.get().getDataBinary() != null) {
             StorageEntity entity = entityOpt.get();
             String mimeType = entity.getMimeType() != null ? entity.getMimeType() : "image/jpeg";
-            return ResponseEntity.ok()
+            // Uploaded markup on the app origin, public GET: nosniff + sandboxed CSP (LC-020).
+            return SafeFileServeHeaders.applyTo(ResponseEntity.ok(), mimeType)
+                    .header(HttpHeaders.CONTENT_DISPOSITION, SafeFileServeHeaders.dispositionType(mimeType, true))
                     .contentType(MediaType.parseMediaType(mimeType))
                     // Mutable resource on a stable URL (re-upload / workspace rename flips
                     // the bytes). A bare max-age pinned a stale avatar for a day; no-cache
@@ -887,7 +891,7 @@ public class OrganizationController {
                     "error", e.getMessage(),
                     "code", com.apimarketplace.auth.service.AdminInviteRequiresOwnerException.CODE));
         } catch (SecurityException e) {
-            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+            return invitationForbidden(e);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -1053,7 +1057,7 @@ public class OrganizationController {
             memberService.cancelInvitation(orgId, invId, userId);
             return ResponseEntity.noContent().build();
         } catch (SecurityException e) {
-            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+            return invitationForbidden(e);
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -1120,6 +1124,11 @@ public class OrganizationController {
                     "error", e.getMessage(),
                     "code", InvitationEmailNotVerifiedException.CODE));
         }
+        if (e instanceof com.apimarketplace.auth.service.InvitationRequiresLinkException) {
+            return ResponseEntity.status(403).body(Map.of(
+                    "error", "This invitation must be opened from its invitation link.",
+                    "code", com.apimarketplace.auth.service.InvitationRequiresLinkException.CODE));
+        }
         return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
     }
 
@@ -1141,7 +1150,7 @@ public class OrganizationController {
             memberService.removeMember(orgId, targetUserId, userId);
             return ResponseEntity.noContent().build();
         } catch (SecurityException e) {
-            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+            return invitationForbidden(e);
         } catch (IllegalStateException | IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -1182,7 +1191,7 @@ public class OrganizationController {
             }
             return ResponseEntity.ok(new OrganizationDto.MemberDto(updated, displayName));
         } catch (SecurityException e) {
-            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+            return invitationForbidden(e);
         } catch (IllegalStateException | IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }

@@ -17,6 +17,7 @@ import { resolve, join } from 'path';
 import { homedir } from 'os';
 import { applyResultMapping } from '../lib/stopReasonMapper.js';
 import { recordCallUsage, handleCodexStyleItemEvent, handleClaudeStyleAssistantMessage, handleFlatCliMessage, buildStdinPayload, incrementTurn } from '../lib/adapterHelpers.mjs';
+import { buildBaseChildEnv } from '../lib/childEnv.mjs';
 
 // ─── Configuration ────────────────────────────────────────────────────────
 
@@ -195,7 +196,8 @@ export class GeminiAdapter {
    * Copies auth credentials from the real config directory if they exist.
    */
   buildChildEnv(tmpDir) {
-    const env = { ...process.env };
+    // Platform secrets are stripped centrally - see lib/childEnv.mjs (LC-053).
+    const env = buildBaseChildEnv();
     if (tmpDir) {
       // Copy auth files from real Gemini home to temp dir
       const realHome = env.GEMINI_HOME || join(homedir(), '.gemini');

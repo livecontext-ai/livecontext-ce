@@ -3,11 +3,13 @@ package com.apimarketplace.orchestrator.services.notification.delivery;
 import com.apimarketplace.orchestrator.services.notification.delivery.NotificationDeliveryLog.Kind;
 import com.apimarketplace.orchestrator.services.notification.delivery.NotificationDeliveryLog.Medium;
 import com.apimarketplace.orchestrator.services.notification.delivery.NotificationMessageComposer.DigestItem;
+import com.apimarketplace.orchestrator.repository.WorkflowRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -29,7 +31,8 @@ import java.util.UUID;
  * <ul>
  *   <li><b>Reminders</b>, hourly: an incident last reported 24 hours ago that has
  *       failed again since gets ONE "still failing" message, then waits another
- *       24 hours. Also closes, silently, incidents with no failure for a week.</li>
+ *       24 hours. Also closes, silently, incidents with no failure for a week, and
+ *       a due one whose workflow was deleted or unpinned instead of reminding it.</li>
  *   <li><b>The daily summary</b>: everything in a digest topic since the person's
  *       last summary, plus whatever the daily cap deferred, as ONE message per
  *       medium.</li>
@@ -116,7 +119,39 @@ public class NotificationDigestScheduler {
         }
     }
 
+    /**
+     * Optional, so the tests that build this scheduler by hand keep working: without it every
+     * due incident is reminded, as before.
+     */
+    private WorkflowRepository workflowRepository;
+
+    @Autowired(required = false)
+    public void setWorkflowRepository(WorkflowRepository workflowRepository) {
+        this.workflowRepository = workflowRepository;
+    }
+
+    /**
+     * True when the workflow can no longer run in production: it was deleted, or unpinned.
+     * This is the filter {@code NotificationEmitter} applies to every failure and success, asked
+     * once more at reminder time so that a stop site nobody hooked still ends the reminders.
+     * Fails OPEN: an unreadable workflow is reminded as before.
+     */
+    private boolean noLongerInProduction(UUID workflowId) {
+        if (workflowRepository == null || workflowId == null) return false;
+        try {
+            return workflowRepository.findById(workflowId)
+                    .map(w -> w.getPinnedVersion() == null)
+                    .orElse(true);
+        } catch (RuntimeException ex) {
+            return false;
+        }
+    }
+
     void remind(NotificationIncidentStore.Incident incident, Instant now) {
+        if (noLongerInProduction(incident.workflowId())) {
+            deliveryService.onWorkflowStopped(incident.workflowId());
+            return;
+        }
         DeliveryMode mode = preferences.resolve(incident.tenantId(), incident.organizationId(), NotificationTopic.FAILURES);
         if (mode == DeliveryMode.OFF) return;
         List<Medium> mediums = deliveryService.openMediums(incident.tenantId(), mode);

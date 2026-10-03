@@ -1,8 +1,10 @@
 package com.apimarketplace.orchestrator.execution.v2.services;
 
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.common.storage.service.StorageService;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity;
+import com.apimarketplace.orchestrator.domain.execution.DagState;
 import com.apimarketplace.orchestrator.domain.execution.EpochState;
 import com.apimarketplace.orchestrator.domain.execution.SignalConfig;
 import com.apimarketplace.orchestrator.domain.execution.SignalResolution;
@@ -26,6 +28,7 @@ import com.apimarketplace.orchestrator.execution.v2.split.SplitContextManager;
 import com.apimarketplace.orchestrator.persistence.WorkflowStepDataRepository;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import com.apimarketplace.orchestrator.services.epoch.WorkflowEpochService;
+import com.apimarketplace.orchestrator.services.persistence.StepPayloadService;
 import com.apimarketplace.orchestrator.services.resume.WorkflowResumeService;
 import com.apimarketplace.orchestrator.services.resume.WorkflowRunState;
 import com.apimarketplace.orchestrator.services.context.ReadinessContextCache;
@@ -172,6 +175,18 @@ public class SignalResumeService {
 
     @Autowired(required = false)
     private ErrorTriggerDispatchService errorTriggerDispatchService;
+
+    /**
+     * LC-066/LC-011 re-audit item 3: classify-and-tag for the signal resolution output before it
+     * is persisted (see {@link StepPayloadService#classifySensitivityForRun}) - a resumed
+     * WAIT_TIMER/USER_APPROVAL/WEBHOOK_WAIT/INTERFACE_SIGNAL node in a run that already holds
+     * Gmail/Drive content is tagged RESTRICTED the same way every other payload of that run is.
+     * {@code required=false} so narrow Spring tests and any manual {@code new
+     * SignalResumeService(...)} construction keep booting; a missing bean degrades to "not
+     * restricted" (the pre-fix behaviour), never a startup failure.
+     */
+    @Autowired(required = false)
+    private StepPayloadService stepPayloadService;
 
     /**
      * Per-item continuation walks/seal for split-context approvals with
@@ -995,6 +1010,12 @@ public class SignalResumeService {
 
             // Persist to storage with the node's step key so RunContextService can find it
             String workflowId = run.getWorkflow() != null ? run.getWorkflow().getId().toString() : null;
+            // LC-066/LC-011 re-audit item 3: classify-and-tag rather than always writing NORMAL
+            // with expiresAt=null - see StepPayloadService.classifySensitivityForRun. A RESTRICTED
+            // tag forces a bounded retention expiry inside saveJsonWithContext itself.
+            DataSensitivity sensitivity = stepPayloadService != null
+                    ? stepPayloadService.classifySensitivityForRun(runId, output)
+                    : DataSensitivity.NORMAL;
             UUID storageId = storageService.saveJsonWithContext(
                 tenantId,
                 output,
@@ -1005,8 +1026,10 @@ public class SignalResumeService {
                 nodeId,  // stepKey - use the nodeId directly (e.g., "core:gate")
                 itemIndex,
                 epoch,
+                0,       // spawn
                 workflowId,
-                "SIGNAL"
+                "SIGNAL",
+                sensitivity
             );
 
             // NOTE: Do NOT call stateSnapshotService.markNodeCompleted() here.
@@ -1637,8 +1660,12 @@ public class SignalResumeService {
                                      String excludeInFlightCorrelationId) {
         try {
             WorkflowRunEntity run = runRepository.findByRunIdPublic(runId).orElse(null);
-            if (run == null || run.getStatus() == RunStatus.WAITING_TRIGGER) {
-                // Already reset by another thread, or run not found
+            if (run == null) {
+                return;
+            }
+            if (run.getStatus() == RunStatus.WAITING_TRIGGER) {
+                // Already reset by another thread
+                warnIfEpochLeftActive(runId, dagTriggerId, epoch);
                 return;
             }
 
@@ -1705,6 +1732,29 @@ public class SignalResumeService {
             logger.info("[SignalResume] Deferred reset completed: runId={}, dagTriggerId={}", runId, dagTriggerId);
         } catch (Exception e) {
             logger.error("[SignalResume] Error performing deferred reset: runId={}, error={}", runId, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * The skip above is right when another thread closed THIS epoch. It is wrong when the run
+     * was re-armed while this epoch was still open: no cycle will close the epoch any more, and
+     * the next fire of the run ends RUNNING with "otherEpochsActive=true". That happens when a
+     * rerun's reopen and another trigger's cycle close interleave, which the per-run advisory
+     * lock prevents; this says so loudly if it ever happens anyway (lock disabled or failing).
+     */
+    private void warnIfEpochLeftActive(String runId, String dagTriggerId, int epoch) {
+        try {
+            DagState dag = stateSnapshotService.getSnapshot(runId).getDags().get(dagTriggerId);
+            if (dag != null && dag.getActiveEpochs().contains(epoch)) {
+                logger.warn("[SignalResume] Deferred reset skipped: run {} is already WAITING_TRIGGER but epoch {} "
+                        + "of {} is still active and no cycle will close it; the run will stay RUNNING after "
+                        + "its next fire (activeEpochs={}). Likely a cycle close that raced a rerun reopening "
+                        + "this epoch: check that the per-run advisory lock is enabled.",
+                        runId, epoch, dagTriggerId, dag.getActiveEpochs());
+            }
+        } catch (Exception e) {
+            logger.debug("[SignalResume] Could not check epoch {} of {} after a skipped reset for runId={}",
+                    epoch, dagTriggerId, runId, e);
         }
     }
 

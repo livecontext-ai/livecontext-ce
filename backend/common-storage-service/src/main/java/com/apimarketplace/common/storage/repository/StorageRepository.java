@@ -134,8 +134,98 @@ public interface StorageRepository extends JpaRepository<StorageEntity, UUID> {
     /**
      * Trouve les storages expires
      */
-    @Query("SELECT s FROM StorageEntity s WHERE s.expiresAt < :now AND s.status = 'ACTIVE'")
+    @Query("SELECT s FROM StorageEntity s WHERE s.expiresAt < :now AND s.status = 'ACTIVE' "
+         + "AND s.dataSensitivity <> 'RESTRICTED'")
     List<StorageEntity> findExpiredStorages(@Param("now") Instant now);
+
+    /**
+     * Every expired ACTIVE row, RESTRICTED included. Used when the restricted-data sweep is OFF
+     * (self-hosted default): the generic cleanup must then keep covering those rows rather than
+     * leave them behind a sweeper that never runs.
+     */
+    @Query("SELECT s FROM StorageEntity s WHERE s.expiresAt < :now AND s.status = 'ACTIVE'")
+    List<StorageEntity> findExpiredStoragesIncludingRestricted(@Param("now") Instant now);
+
+    /**
+     * Tags rows RESTRICTED. RESTRICTED rows are excluded from {@link #findExpiredStorages}: their
+     * expiry is a HARD delete (object included) owned by storage-service's
+     * RestrictedStorageRetentionSweeper, not the soft delete of {@code cleanupExpired}.
+     */
+    @Modifying
+    @Query("UPDATE StorageEntity s SET s.dataSensitivity = 'RESTRICTED' "
+         + "WHERE s.tenantId = :tenantId AND s.id IN :ids")
+    int markRestricted(@Param("tenantId") String tenantId, @Param("ids") java.util.Collection<UUID> ids);
+
+    /** Backed by the partial index idx_storage_restricted_run (V536). */
+    boolean existsByRunIdAndDataSensitivity(String runId, String dataSensitivity);
+
+    /**
+     * LC-066: whether a RESTRICTED row of this run belongs to one of these epochs (the showcase of
+     * one chosen epoch). Same partial index (V536): the run's restricted rows, filtered by epoch.
+     */
+    boolean existsByRunIdAndDataSensitivityAndEpochIn(String runId, String dataSensitivity,
+                                                      java.util.Collection<Integer> epochs);
+
+    /**
+     * LC-066: when the run's first RESTRICTED payload was written (null when it has none). Same
+     * partial index (V536). A showcase captured before that moment holds none of it.
+     */
+    @Query("SELECT MIN(s.createdAt) FROM StorageEntity s "
+         + "WHERE s.runId = :runId AND s.dataSensitivity = 'RESTRICTED'")
+    Instant findFirstRestrictedCreatedAt(@Param("runId") String runId);
+
+    /**
+     * LC-066: the run's durable "restricted since" (V564), or null when none was recorded. Kept
+     * after the restricted-data purge deletes the run's oldest restricted rows, which would
+     * otherwise move {@link #findFirstRestrictedCreatedAt} later.
+     */
+    @Query(nativeQuery = true,
+           value = "SELECT restricted_since FROM storage.restricted_run_since WHERE run_id = :runId")
+    Object findRecordedRestrictedSince(@Param("runId") String runId);
+
+    /** {@code [runId, MIN(createdAt)]} of the rows among {@code ids} that belong to a run. */
+    @Query("SELECT s.runId, MIN(s.createdAt) FROM StorageEntity s WHERE s.tenantId = :tenantId "
+         + "AND s.id IN :ids AND s.runId IS NOT NULL GROUP BY s.runId")
+    List<Object[]> findFirstCreatedAtByRun(@Param("tenantId") String tenantId,
+                                           @Param("ids") java.util.Collection<UUID> ids);
+
+    /**
+     * LC-066: records when a run first held restricted data (V564). Set once: a run that already
+     * has a value keeps it (no row lock is taken on the existing row).
+     */
+    @Modifying
+    @Query(nativeQuery = true,
+           value = "INSERT INTO storage.restricted_run_since (run_id, restricted_since) "
+                 + "VALUES (:runId, :since) ON CONFLICT (run_id) DO NOTHING")
+    int recordRestrictedSince(@Param("runId") String runId, @Param("since") Instant since);
+
+    /**
+     * Moves the restricted-data retention deadline of these rows to {@code retentionExpiresAt}
+     * when it is unset or later (CASA LC-011). Never touches {@code expires_at}, the caller's TTL.
+     */
+    @Modifying
+    @Query("UPDATE StorageEntity s SET s.retentionExpiresAt = :retentionExpiresAt "
+         + "WHERE s.tenantId = :tenantId AND s.id IN :ids "
+         + "AND (s.retentionExpiresAt IS NULL OR s.retentionExpiresAt > :retentionExpiresAt)")
+    int boundRetentionExpiry(@Param("tenantId") String tenantId, @Param("ids") java.util.Collection<UUID> ids,
+                             @Param("retentionExpiresAt") Instant retentionExpiresAt);
+
+    /**
+     * {@code [id, createdAt]} of the rows among {@code ids} ALREADY tagged RESTRICTED with no
+     * retention deadline (written before V562, or by a pod of a previous release): the rows
+     * storage-service's retention catch-up stamps with {@code created_at + window} (CASA LC-011).
+     */
+    @Query("SELECT s.id, s.createdAt FROM StorageEntity s WHERE s.tenantId = :tenantId AND s.id IN :ids "
+         + "AND s.dataSensitivity = 'RESTRICTED' AND s.retentionExpiresAt IS NULL")
+    List<Object[]> findRestrictedWithoutRetentionDeadline(@Param("tenantId") String tenantId,
+                                                          @Param("ids") java.util.Collection<UUID> ids);
+
+    /** Moves the expiry of these rows to {@code expiresAt} when it is unset or later. */
+    @Modifying
+    @Query("UPDATE StorageEntity s SET s.expiresAt = :expiresAt "
+         + "WHERE s.tenantId = :tenantId AND s.id IN :ids AND (s.expiresAt IS NULL OR s.expiresAt > :expiresAt)")
+    int boundExpiry(@Param("tenantId") String tenantId, @Param("ids") java.util.Collection<UUID> ids,
+                    @Param("expiresAt") Instant expiresAt);
     
     /**
      * Trouve les storages non accedes depuis une date
@@ -590,6 +680,33 @@ public interface StorageRepository extends JpaRepository<StorageEntity, UUID> {
         @Param("jsonPath") String jsonPath,
         @Param("pageSize") int pageSize,
         @Param("offset") int offset);
+
+    /**
+     * CASA LC-037 (gap 2, sub-workflow lineage): true when there exists an ACTIVE
+     * {@code STEP_OUTPUT} row, written by a run of {@code parentWorkflowId}, whose payload
+     * records {@code subRunId == childRunId}.
+     *
+     * <p>{@code core:sub_workflow}'s node executor ({@code SubWorkflowNode.execute}) stamps its
+     * OWN step output - persisted under the PARENT run's {@code workflow_id}/{@code run_id} via
+     * {@code StepPayloadService.persistStepPayloadOutcome} - with {@code subWorkflowId} and
+     * {@code subRunId} (the fired child run's public id). A hit here therefore proves
+     * {@code childRunId} was genuinely invoked by a {@code core:sub_workflow} node belonging to
+     * SOME run of {@code parentWorkflowId}, not merely a same-tenant workflow id an attacker
+     * happened to guess - the exact fact
+     * {@code com.apimarketplace.common.web.ShareContextResourceBinding} needs to extend an
+     * APPLICATION share's file access to a sub-workflow-produced file.
+     *
+     * <p>Used only off the rare "direct workflow-id match failed" branch of a share-token file
+     * read (see {@code FileController}/{@code MonolithFileController}), so an unindexed scan
+     * bounded to one {@code workflow_id} is an acceptable cost; callers additionally cache the
+     * boolean result briefly.
+     */
+    @Query(value = "SELECT EXISTS(SELECT 1 FROM storage.storage s "
+            + "WHERE s.workflow_id = :parentWorkflowId AND s.source_type = 'STEP_OUTPUT' "
+            + "AND s.status = 'ACTIVE' AND s.data ->> 'subRunId' = :childRunId)",
+            nativeQuery = true)
+    boolean existsSubWorkflowInvocation(@Param("parentWorkflowId") String parentWorkflowId,
+                                         @Param("childRunId") String childRunId);
 
     /**
      * JSONPath matching a FileRef object ({@code "_type": "file"}) whose {@code id} is the

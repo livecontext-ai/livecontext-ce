@@ -1,11 +1,14 @@
 package com.apimarketplace.orchestrator.services.interfaces;
 
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.common.storage.repository.StorageRepository;
 import com.apimarketplace.common.storage.service.StorageService;
+import com.apimarketplace.orchestrator.services.persistence.StepPayloadService;
 import com.apimarketplace.orchestrator.utils.ExecutionConstants;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -39,12 +42,26 @@ public class InterfaceActionService {
     private final StorageRepository storageRepository;
     private final ObjectMapper objectMapper;
 
+    /**
+     * LC-066/LC-011 re-audit item 3: classify-and-tag before persisting (see
+     * {@link StepPayloadService#classifySensitivityForRun}). {@code required=false} so a narrow
+     * test construction of this service keeps booting without a StepPayloadService on hand; a
+     * missing bean degrades to "not restricted" (the pre-fix behaviour), never a startup failure.
+     */
+    @Autowired(required = false)
+    private StepPayloadService stepPayloadService;
+
     public InterfaceActionService(StorageService storageService,
                                   StorageRepository storageRepository,
                                   ObjectMapper objectMapper) {
         this.storageService = storageService;
         this.storageRepository = storageRepository;
         this.objectMapper = objectMapper;
+    }
+
+    /** Test/manual-wiring seam - production wiring uses the {@code @Autowired} field above. */
+    void setStepPayloadService(StepPayloadService stepPayloadService) {
+        this.stepPayloadService = stepPayloadService;
     }
 
     /**
@@ -88,10 +105,17 @@ public class InterfaceActionService {
         log.info("[InterfaceAction] Persisting action data: runId={}, nodeId={}, actionName={}, itemIndex={}, fields={}",
                 runId, nodeId, actionName, itemIndex, data.keySet());
 
+        // LC-066/LC-011 re-audit item 3: classify-and-tag rather than always writing NORMAL with
+        // expiresAt=null - a form field can echo Gmail/Drive content back (e.g. a "reply" form
+        // pre-filled from an earlier restricted step), and a run that already holds restricted
+        // data taints every later payload the same way every other payload path does.
+        DataSensitivity sensitivity = stepPayloadService != null
+                ? stepPayloadService.classifySensitivityForRun(runId, payload)
+                : DataSensitivity.NORMAL;
         storageService.saveJsonWithContext(
                 tenantId, payload, ExecutionConstants.CONTENT_TYPE_JSON,
-                null, null, runId, nodeId, itemIndex, epoch,
-                workflowId, "INTERFACE_ACTION");
+                null, null, runId, nodeId, itemIndex, epoch, 0,
+                workflowId, "INTERFACE_ACTION", sensitivity);
     }
 
     /**

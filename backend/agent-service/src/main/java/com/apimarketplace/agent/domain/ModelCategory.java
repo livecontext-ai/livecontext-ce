@@ -12,7 +12,8 @@ import java.util.regex.Pattern;
  * <p>Forward-extensibility examples (none of them implemented):
  * {@code file_processing}, {@code embedding}, {@code transcription}.
  *
- * <p><b>Only {@code chat} and {@code browser_agent} have an admin screen.</b>
+ * <p><b>Only {@code chat}, {@code browser_agent} and {@code free_tier} have an admin
+ * screen</b>, and the last is a ranking rather than a surface (see {@link #FREE_TIER}).
  * {@code classification} has none yet: it exists so the eligibility rule can keep decision
  * models out of the conversational surfaces and give the classify node's picker something
  * to ask for. The five
@@ -33,6 +34,15 @@ public enum ModelCategory {
     CHAT("chat"),
     BROWSER_AGENT("browser_agent"),
     CLASSIFICATION("classification"),
+    /**
+     * The free tier's OWN ranking of the models a cloud admin opened to it. Not a surface:
+     * it carries a rank and nothing else. Which models belong to it is the global
+     * {@code free_tier_enabled} flag, and whether a model is on is the global
+     * {@code enabled} flag, so a sidecar row's {@code enabled} is never read here
+     * (see {@link #ranksOnly(String)}). Read by the picker catalogue as
+     * {@code freeTierRank} and by the admin tab of the same name.
+     */
+    FREE_TIER("free_tier"),
     IMAGE_GENERATION("image_generation"),
     VIDEO_GENERATION("video_generation"),
     AUDIO_GENERATION("audio_generation"),
@@ -101,10 +111,24 @@ public enum ModelCategory {
         return key != null && key.length() <= 32 && SHAPE.matcher(key).matches();
     }
 
-    /** Stable iteration order for seeding. */
+    /**
+     * True for a category whose sidecar rows carry a rank only: its {@code enabled}
+     * column is not a switch, so the overlay must leave the global flag alone and the
+     * per-category toggle must refuse it. Today that is {@link #FREE_TIER}.
+     */
+    public static boolean ranksOnly(String category) {
+        return FREE_TIER.key.equals(category);
+    }
+
+    /**
+     * Stable iteration order for seeding. A ranks-only category is left out: a seeded row
+     * there would carry no rank, which is exactly what its absence already means.
+     */
     public static Set<String> defaultKeys() {
         Set<String> keys = new java.util.LinkedHashSet<>();
-        for (ModelCategory c : values()) keys.add(c.key);
+        for (ModelCategory c : values()) {
+            if (!ranksOnly(c.key)) keys.add(c.key);
+        }
         return java.util.Collections.unmodifiableSet(keys);
     }
 
@@ -155,7 +179,8 @@ public enum ModelCategory {
      */
     public static boolean acceptsMode(String category, String mode) {
         if (category == null) return true;
-        if (CHAT.key.equals(category) || BROWSER_AGENT.key.equals(category)) {
+        if (CHAT.key.equals(category) || BROWSER_AGENT.key.equals(category)
+                || FREE_TIER.key.equals(category)) {
             return mode == null || "chat".equals(mode);
         }
         if (CLASSIFICATION.key.equals(category)) {

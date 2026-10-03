@@ -26,6 +26,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
+import { ApiError } from '@/lib/api/api-client';
 
 const ROLE_ICONS: Record<OrganizationRole, React.ReactNode> = {
   OWNER: <Crown className="h-3.5 w-3.5 text-amber-500" />,
@@ -36,6 +37,13 @@ const ROLE_ICONS: Record<OrganizationRole, React.ReactNode> = {
 
 export default function InvitationsInboxPage() {
   const t = useTranslations('invitationsInbox');
+  // An invitation sent before this (CE) account existed must be opened from its link (CASA LC-084),
+  // and an unverified address must be verified first; anything else gets the generic message.
+  const inboxErrorMessage = (e: unknown, fallback: string): string => {
+    if (e instanceof ApiError && e.code === 'invitation_requires_link') return t('requiresLink');
+    if (isInvitationEmailNotVerifiedError(e)) return t('emailNotVerified');
+    return fallback;
+  };
   const router = useRouter();
   const params = useParams();
   const locale = (params?.locale as string) ?? 'en';
@@ -150,11 +158,7 @@ export default function InvitationsInboxPage() {
                       await organizationApi.declineInvitationById(inv.id);
                       await fetchInbox();
                     } catch (e) {
-                      setError(
-                        isInvitationEmailNotVerifiedError(e)
-                          ? t('emailNotVerified')
-                          : t('declineError')
-                      );
+                      setError(inboxErrorMessage(e, t('declineError')));
                     } finally {
                       setDecliningId(null);
                     }
@@ -176,11 +180,7 @@ export default function InvitationsInboxPage() {
                       await fetchInbox();
                       router.push(`/${locale}/app/settings/organization`);
                     } catch (e) {
-                      setError(
-                        isInvitationEmailNotVerifiedError(e)
-                          ? t('emailNotVerified')
-                          : t('acceptError')
-                      );
+                      setError(inboxErrorMessage(e, t('acceptError')));
                       setAcceptingId(null);
                     }
                   }}

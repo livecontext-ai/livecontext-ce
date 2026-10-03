@@ -58,12 +58,26 @@ public class PersonalOfferService {
     public record IssuedOffer(Long offerId, String code, Instant issuedAt, Instant expiresAt,
                               Long policyId, int policyVersion) {}
     public record PlanBonus(String planCode, int bonusCredits, double paygFaceValueUsd, String status) {}
+    /** One pack's preview, and the offer's bonus tiers ({@link PersonalOfferSteps}) for the page's ladder. */
     public record OfferPreview(String status, Long offerId, int offerVersion, Instant expiresAt,
                                int monthlyCredits, String billingCycle, List<PlanBonus> plans,
-                               Integer nextEligibleMonthlyCredits) {}
+                               Integer nextEligibleMonthlyCredits, List<PersonalOfferSteps.Step> steps) {}
+    /**
+     * Where the account's offer stands. While a checkout is open, {@code reserved*} name the
+     * plan, pack and cycle it holds: past the offer's own deadline that reservation is the only
+     * one that can still be paid, and the page opens on it.
+     */
     public record CurrentOffer(String status, Long offerId, Integer offerVersion, Instant expiresAt,
                                String code, Integer reservedBonusCredits, Integer grantedCredits,
-                               UUID offerAttemptId, Instant sessionExpiresAt) {}
+                               UUID offerAttemptId, Instant sessionExpiresAt,
+                               String reservedPlanCode, Integer reservedCreditTierIndex, String reservedBillingCycle) {
+        public CurrentOffer(String status, Long offerId, Integer offerVersion, Instant expiresAt,
+                            String code, Integer reservedBonusCredits, Integer grantedCredits,
+                            UUID offerAttemptId, Instant sessionExpiresAt) {
+            this(status, offerId, offerVersion, expiresAt, code, reservedBonusCredits, grantedCredits,
+                    offerAttemptId, sessionExpiresAt, null, null, null);
+        }
+    }
     public record PreparedCheckout(PersonalOfferCheckoutAttempt attempt, boolean reused) {}
     public record CheckoutIdentity(String customerId, String nonce) {}
 
@@ -233,6 +247,8 @@ public class PersonalOfferService {
             if (reservation == null) throw new OfferException("OFFER_EXPIRED");
         }
         if (hasFirstPaidPurchase(userId)) throw new OfferException("OFFER_ALREADY_USED");
+        // The same refusal the checkout makes, said before a bonus is shown that it would refuse.
+        if (!policy.isAllowConversionStack() && hasConversionReward(userId)) throw new OfferException("OFFER_CONFLICT");
         final PersonalOfferCheckoutAttempt reserved = reservation;
         List<PlanBonus> plans = List.of("STARTER", "PRO", "TEAM").stream().map(plan -> {
             if (reserved != null && !reserved.getPlanCode().equals(plan)) {
@@ -247,12 +263,13 @@ public class PersonalOfferService {
                             row.getBonusCredits() > 0 ? "ELIGIBLE" : "NO_BONUS"))
                     .orElseGet(() -> new PlanBonus(plan, 0, 0, "UNAVAILABLE"));
         }).toList();
-        Integer next = matrix.findByPolicyId(policy.getId()).stream()
+        List<PersonalOfferMatrix> cells = matrix.findByPolicyId(policy.getId());
+        Integer next = cells.stream()
                 .filter(row -> row.getBonusCredits() > 0 && row.getMonthlyCredits() > monthlyCredits)
                 .map(PersonalOfferMatrix::getMonthlyCredits).min(Integer::compareTo).orElse(null);
         return new OfferPreview(reservation == null ? "AVAILABLE" : "CHECKOUT_OPEN",
                 offer.getId(), policy.getVersion(), offer.getValidUntil(),
-                monthlyCredits, cadence, plans, next);
+                monthlyCredits, cadence, plans, next, PersonalOfferSteps.of(cells));
     }
 
     @Transactional(readOnly = true)
@@ -298,9 +315,11 @@ public class PersonalOfferService {
                     latest.getBonusCredits(), null, latest.getId(), latest.getSessionExpiresAt());
         if (latest != null && "OPEN".equals(latest.getStatus()) && latest.getSessionExpiresAt().isAfter(Instant.now()))
             return new CurrentOffer("CHECKOUT_OPEN", code.getId(), version, code.getValidUntil(), null,
-                    latest.getBonusCredits(), null, latest.getId(), latest.getSessionExpiresAt());
+                    latest.getBonusCredits(), null, latest.getId(), latest.getSessionExpiresAt(),
+                    latest.getPlanCode(), latest.getCreditTierIndex(), latest.getCadence());
         if (latest != null && "CREATING".equals(latest.getStatus()))
-            return new CurrentOffer("CONFLICT", code.getId(), version, code.getValidUntil(), null,
+            // A checkout being created, or whose creation is uncertain: settles within minutes.
+            return new CurrentOffer("CHECKOUT_CREATING", code.getId(), version, code.getValidUntil(), null,
                     latest.getBonusCredits(), null, latest.getId(), latest.getSessionExpiresAt());
         return new CurrentOffer(!code.isActive() ? "DISABLED" : code.getValidUntil().isBefore(Instant.now())
                 ? "EXPIRED" : "AVAILABLE", code.getId(), version, code.getValidUntil(),
@@ -354,6 +373,7 @@ public class PersonalOfferService {
             throw new OfferException("OFFER_REVIEW_REQUIRED");
         if (!policy.isAllowConversionStack() && hasConversionReward(userId)) throw new OfferException("OFFER_CONFLICT");
         Instant now = Instant.now();
+        boolean redeemable = code.isRedeemableAt(now);
         for (PersonalOfferCheckoutAttempt existing : attempts.findPayableForUpdate(userId)) {
             if ("COMPLETED".equals(existing.getStatus())) throw new OfferException("CHECKOUT_IN_PROGRESS");
             if ("OPEN".equals(existing.getStatus()) && existing.getSessionExpiresAt().isAfter(now)
@@ -368,6 +388,10 @@ public class PersonalOfferService {
                     return new PreparedCheckout(existing, true);
                 throw new OfferException("CHECKOUT_IN_PROGRESS");
             }
+            // Past the deadline only the reservation itself can still be paid: a different choice is
+            // refused BEFORE its Stripe session is expired. Expiring first, then refusing, rolled the
+            // attempt back to OPEN while Stripe had already killed its session for good.
+            if (!redeemable) throw new OfferException("OFFER_EXPIRED");
             if ("OPEN".equals(existing.getStatus()) && existing.getSessionExpiresAt().isAfter(now)
                     && existing.getStripeSessionId() != null) {
                 try {
@@ -391,7 +415,7 @@ public class PersonalOfferService {
             existing.setStatus("EXPIRED");
             attempts.save(existing);
         }
-        if (!code.isRedeemableAt(now)) throw new OfferException("OFFER_EXPIRED");
+        if (!redeemable) throw new OfferException("OFFER_EXPIRED");
         PersonalOfferCheckoutAttempt attempt = new PersonalOfferCheckoutAttempt();
         attempt.setId(UUID.randomUUID());
         attempt.setRewardCodeId(code.getId());

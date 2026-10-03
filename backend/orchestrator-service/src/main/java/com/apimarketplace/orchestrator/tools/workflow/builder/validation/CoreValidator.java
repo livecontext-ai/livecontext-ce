@@ -1,5 +1,7 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder.validation;
 
+import com.apimarketplace.orchestrator.execution.v2.nodes.CodeNode;
+import com.apimarketplace.orchestrator.execution.v2.split.SplitNodeExecutor;
 import com.apimarketplace.orchestrator.services.channel.ChatChannelConnectorRegistry;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderSession;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderValidator.ValidationResult;
@@ -18,11 +20,12 @@ import java.util.Set;
  * - Decision nodes must have at least one condition
  * - Loop/While nodes must have a loop condition
  * - Split nodes must have a list expression
+ * - Split nodes must not declare a maxItems above the server fan-out ceiling
  * - Data processing nodes (filter, sort, limit, remove_duplicates, summarize) must have input
  * - XML, Compression, ConvertToFile, ExtractFromFile must have value/input
  * - CompareDatasets must have inputA and inputB
  * - RSS must have url
- * - Code must have code content
+ * - Code must have code content; a {{...}} expression in the body is a warning (spliced as data, see CodeNode)
  * - HttpRequest must have url
  * - DownloadFile must have url
  * - SendEmail must have toEmail and subject
@@ -99,6 +102,14 @@ public class CoreValidator implements WorkflowValidator {
                     result.addError("SPLIT_NO_LIST", nodeId,
                             "Split '" + label + "' must have a list expression.");
                 }
+                String ceilingError = splitMaxItemsAboveCeilingOrNull(cn, label);
+                if (ceilingError != null) {
+                    result.addError("SPLIT_MAX_ITEMS_ABOVE_CEILING", nodeId, "maxItems",
+                            ceilingError + " Fix: workflow(action='modify', node='" + label
+                                    + "', params={maxItems: " + SplitNodeExecutor.SPLIT_HARD_CEILING
+                                    + "}), or any value from 1 to "
+                                    + SplitNodeExecutor.SPLIT_HARD_CEILING + ".");
+                }
             }
 
             // Data processing nodes: input is required
@@ -161,11 +172,48 @@ public class CoreValidator implements WorkflowValidator {
                 }
             }
 
-            // Code: code required
+            // Code: code required, and the body must be code - never a template
             if ("code".equals(type)) {
                 if (!hasConfigField(cn, "code", "code")) {
                     result.addError("CODE_NO_CODE", nodeId,
                             "Code '" + label + "' requires code content.");
+                }
+                // Checked on both shapes the plan can carry (nested config map, or the flat
+                // string an exported plan uses), independently of the CODE_NO_CODE branch above
+                // which only recognises the nested one. Matched with the engine's own expression
+                // pattern rather than a bare "{{" so authoring and execution agree on what a
+                // placeholder is: a body that only carries a doubled brace the engine would never
+                // resolve (a nested JavaScript block, a Handlebars template being built as a
+                // string) is not refused for something the run treats as inert text.
+                // Two severities, keyed on WHERE the placeholder sits (LC-018). Outside any string
+                // literal the run can no longer turn the value into source (it is spliced as a
+                // complete literal), so the body does not do what it reads like. Inside a
+                // literal the run escapes the value and it still works, which is what saved
+                // workflows rely on, so it is only a warning steering the author to $input.
+                String codeBody = codeBodyOf(cn);
+                String unsafeExpression = CodeNode.firstPlaceholderOutsideStringLiteral(
+                        codeBody, codeLanguageOf(cn));
+                String inputAdvice = "Read upstream outputs from the input object instead - "
+                        + "$input.<predecessor label>.<field> in javascript and typescript, "
+                        + "_input['<predecessor label>']['<field>'] in python, INPUT (JSON) in bash - "
+                        + "it already carries every predecessor output, keeps real types (numbers, "
+                        + "objects, arrays) and needs no quoting. Fix: workflow(action='modify', node='"
+                        + label + "', params={code: '<the same code with every {{...}} replaced by an "
+                        + "$input read>'}).";
+                if (unsafeExpression != null) {
+                    result.addWarning("CODE_TEMPLATE_IN_BODY", nodeId,
+                            "Code '" + label + "' has the expression " + unsafeExpression + " outside any "
+                            + "string literal. Upstream values reach the code as DATA, not as source "
+                            + "text: at run time that value is spliced as a complete literal (an object, a "
+                            + "list or a text holding exactly one JSON object or array as a literal (JSON, or "
+                            + "True/False/None in python), a number or boolean as itself, anything else "
+                            + "as a quoted string), so it does not "
+                            + "produce the code it reads like. " + inputAdvice);
+                } else if (CodeNode.hasTemplateExpression(codeBody)) {
+                    result.addWarning("CODE_TEMPLATE_IN_BODY", nodeId,
+                            "Code '" + label + "' has a {{...}} expression inside a string literal. It "
+                            + "still works (the resolved value is escaped into that literal as text), but "
+                            + "it always arrives as a string. " + inputAdvice);
                 }
             }
 
@@ -426,6 +474,38 @@ public class CoreValidator implements WorkflowValidator {
         return cn.get("input") instanceof String s && !s.isBlank();
     }
 
+    /**
+     * The code body of a code node, or "" when it is absent. Reads both shapes a plan can carry:
+     * the nested config map written by the builder ({@code code: {code: "..."}}) and the flat
+     * string an exported plan can carry ({@code code: "..."}).
+     */
+    private static String codeBodyOf(Map<String, Object> cn) {
+        Object code = cn.get("code");
+        if (code instanceof String flat) {
+            return flat;
+        }
+        if (code instanceof Map<?, ?> config && config.get("code") instanceof String body) {
+            return body;
+        }
+        return "";
+    }
+
+    /**
+     * The declared language of a code node, defaulting to javascript exactly as
+     * {@code Core.CodeConfig} does, so the warning scans a body with the same literal
+     * rules the run will apply to it.
+     */
+    private static String codeLanguageOf(Map<String, Object> cn) {
+        Object code = cn.get("code");
+        if (code instanceof Map<?, ?> config && config.get("language") instanceof String lang && !lang.isBlank()) {
+            return lang;
+        }
+        if (cn.get("language") instanceof String flatLang && !flatLang.isBlank()) {
+            return flatLang;
+        }
+        return "javascript";
+    }
+
     @SuppressWarnings("unchecked")
     private boolean hasConfigField(Map<String, Object> cn, String configKey, String fieldName) {
         Object config = cn.get(configKey);
@@ -435,6 +515,37 @@ public class CoreValidator implements WorkflowValidator {
             return val != null;
         }
         return false;
+    }
+
+    /**
+     * The plan-authoring half of the split fan-out ceiling (LC-064).
+     *
+     * <p>A run refuses a split whose list exceeds
+     * {@link SplitNodeExecutor#SPLIT_HARD_CEILING} rather than truncating it, so a plan that
+     * declares a higher {@code maxItems} promises a limit the run cannot honour. Without this the
+     * author is told the plan is valid and only discovers the ceiling on the first oversized list,
+     * in a failure that reads like a data problem. The bound is NOT applied when the DAG is built
+     * from a saved plan: rewriting or refusing the number there would take down runs that never
+     * fan out anywhere near the ceiling, which is a bigger outage than the one being fixed. This
+     * fires while the plan is being written, where the author can still change it in one call.
+     *
+     * <p>Reads exactly what the plan parser reads: a {@code Number} under {@code maxItems}. Any
+     * other shape (a string, a snake_case key) is ignored at run time and the split falls back to
+     * its default of 100, so flagging it here would report an error for a value that changes
+     * nothing.
+     *
+     * <p>Shared with the other plan-writing surfaces so the ceiling has one wording; each caller
+     * appends the action it wants the agent to retry.
+     *
+     * @return the agent-facing message, or {@code null} when the declaration is within the ceiling
+     */
+    public static String splitMaxItemsAboveCeilingOrNull(Map<String, Object> coreNode, String label) {
+        Object declared = coreNode.get("maxItems");
+        if (!(declared instanceof Number n) || n.intValue() <= SplitNodeExecutor.SPLIT_HARD_CEILING) {
+            return null;
+        }
+        String named = (label == null || label.isBlank()) ? "This split: " : "Split '" + label + "': ";
+        return named + SplitNodeExecutor.maxItemsAboveCeilingReason(n.intValue());
     }
 
     private boolean hasNonBlankString(Map<String, Object> cn, String key) {

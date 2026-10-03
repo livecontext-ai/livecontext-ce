@@ -56,6 +56,10 @@ public class AccountPurgeService {
     /** REQUIRES_NEW, for the one call that must not share the purge's transaction (Stripe). */
     private final TransactionOperations stripeTx;
 
+    /** Provider revocation of the purged credentials, after the purge commits (LC-065). Optional for hand-built tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.credential.service.CredentialService credentialService;
+
     @PersistenceContext
     private EntityManager em;
 
@@ -136,6 +140,16 @@ public class AccountPurgeService {
     /** V553: applications a purged ADMIN decided keep their decision, without the reviewer. */
     public static final String UNLINK_PARTNER_APPLICATION_REVIEWER_SQL =
             "UPDATE auth.partner_application SET reviewed_by = NULL WHERE reviewed_by = ?";
+    /** V559: a purged partner's offers go with the account (their note may name a client). */
+    public static final String DELETE_PARTNER_OFFERS_SQL =
+            "DELETE FROM auth.partner_offer WHERE partner_user_id = ?";
+    /**
+     * V560: a purged client's app deliveries from partner offers go with the account (the apps
+     * installed in their workspace go with it elsewhere). A purged partner's offers take their
+     * deliveries with them (ON DELETE CASCADE).
+     */
+    public static final String DELETE_PARTNER_OFFER_DELIVERIES_SQL =
+            "DELETE FROM auth.partner_offer_delivery WHERE client_user_id = ?";
     /** V556: a purged partner's tier goes with the account. */
     public static final String DELETE_PARTNER_STANDING_SQL =
             "DELETE FROM auth.partner_standing WHERE user_id = ?";
@@ -204,6 +218,17 @@ public class AccountPurgeService {
 
         // The two tenant_id columns in this method are varchar (tenant id = the user id as text).
         String tenantId = userId.toString();
+        // LC-065: snapshot the credentials (and so the only copy of their refresh tokens) before
+        // the delete; the provider calls run AFTER this transaction commits, never while it holds
+        // the purge's locks, and not at all if it rolls back. Best-effort, never aborts the purge:
+        // the lookup is SQL on this connection, so it runs in its own savepoint (PurgeSavepoint).
+        if (credentialService != null) {
+            try {
+                PurgeSavepoint.run(em, () -> credentialService.revokeAllForAccountPurge(tenantId));
+            } catch (RuntimeException e) {
+                logger.warn("Account purge: provider revocation skipped for user {}: {}", userId, e.getClass().getSimpleName());
+            }
+        }
         exec(failures, "DELETE FROM auth.credentials WHERE tenant_id = ?", tenantId);
 
         // --- Auth schema cleanup (FK ordering: children before parents) ---
@@ -219,6 +244,8 @@ public class AccountPurgeService {
         exec(failures, DELETE_PARTNER_APPLICATIONS_SQL, userId);
         exec(failures, UNLINK_PARTNER_APPLICATION_REVIEWER_SQL, userId);
         exec(failures, DELETE_PARTNER_STANDING_SQL, userId);
+        exec(failures, DELETE_PARTNER_OFFER_DELIVERIES_SQL, userId);
+        exec(failures, DELETE_PARTNER_OFFERS_SQL, userId);
         exec(failures, UNLINK_PARTNER_STANDING_ADMIN_SQL, userId);
         exec(failures, DEACTIVATE_PERSONAL_REWARD_CODES_SQL, userId);
         // Personal offer state is account-bound. Remove children before attempts and the user;

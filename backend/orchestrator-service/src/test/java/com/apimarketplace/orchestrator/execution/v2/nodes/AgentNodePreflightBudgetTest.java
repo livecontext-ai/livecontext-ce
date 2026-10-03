@@ -153,19 +153,22 @@ class AgentNodePreflightBudgetTest {
     }
 
     @Test
-    @DisplayName("Estimated completion tokens defaults to 4096 when agentConfig.maxTokens is null")
+    @DisplayName("Per-turn completion tokens default to 4096 when maxTokens is null, for the one turn priced")
     void defaultsCompletionEstimateWhenMaxTokensNull() {
+        // One turn: the agent loop checks the balance before each of its own turns, so pricing
+        // the whole loop here only refused dispatches the tenant could pay (regression 2026-09-29).
         Agent agentCfg = agent("openai", "gpt-4o", null);
         AgentNode node = nodeWithServices(agentCfg);
+        int expectedCompletion = 4096;
 
         when(mockCreditBudgetService.preflightAgentBudget(
-                any(), any(), any(), anyInt(), eq(4096))).thenReturn(false);
+                any(), any(), any(), anyInt(), eq(expectedCompletion))).thenReturn(false);
 
         NodeExecutionResult result = node.execute(context);
 
         assertThat(result.isFailure()).isTrue();
         verify(mockCreditBudgetService).preflightAgentBudget(
-                eq("tenant-pf-1"), eq("openai"), eq("gpt-4o"), anyInt(), eq(4096));
+                eq("tenant-pf-1"), eq("openai"), eq("gpt-4o"), anyInt(), eq(expectedCompletion));
     }
 
     /**

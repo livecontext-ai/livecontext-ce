@@ -9,7 +9,7 @@
  */
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 const quotaApi = vi.hoisted(() => ({ getSummary: vi.fn(), getHistory: vi.fn() }));
@@ -211,6 +211,101 @@ describe('Quota page - usage history paging', () => {
     const grid = screen.getByTestId('usage-breakdown-grid');
     expect(grid.children).toHaveLength(4);
     expect(grid.className).toContain('lg:grid-cols-4');
+  });
+});
+
+/**
+ * In full screen a page is as long as the screen: the panel reports how many rows fit and the page
+ * requests pages of that size, keeping the reader on the rows they were looking at.
+ */
+describe('Quota page - full screen requests pages that fill the table', () => {
+  let tableHeight = 1229; // 30 rows of 40px and the 29 borders between them
+
+  beforeEach(() => {
+    tableHeight = 1229;
+    quotaApi.getSummary.mockReset().mockResolvedValue(summary);
+    quotaApi.getHistory.mockReset().mockImplementation((page: number, _size: number, type?: string) =>
+      Promise.resolve(historyPage(page, type ?? 'page')));
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.testid === 'usage-history-table' ? tableHeight : 0;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('regression - opening full screen on page 3 requests the page of the fitted size that holds its first row', async () => {
+    await renderLoaded();
+    fireEvent.click(nextButton());
+    await screen.findByText('row-page-1');
+    fireEvent.click(nextButton());
+    await screen.findByText('row-page-2');
+    expect(quotaApi.getHistory).toHaveBeenLastCalledWith(2, 15, undefined, 'org-1', false);
+
+    fireEvent.click(screen.getByTestId('usage-history-fullscreen-toggle'));
+
+    // Row 30 (the first of page 3 at 15 a page) is on page 2 at 30 a page.
+    await waitFor(() => expect(quotaApi.getHistory).toHaveBeenLastCalledWith(1, 30, undefined, 'org-1', false));
+    expect(await screen.findByText('row-page-1')).toBeInTheDocument();
+  });
+
+  it('regression - re-anchors on the size the page ON SCREEN was fetched at, not the one requested since', async () => {
+    const resizeCallbacks: Array<() => void> = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(cb: () => void) { resizeCallbacks.push(cb); }
+      observe() {}
+      disconnect() {}
+    });
+    // The history now says which size it was fetched at, as the backend does.
+    quotaApi.getHistory.mockImplementation((page: number, size: number, type?: string) =>
+      Promise.resolve({ ...historyPage(page, type ?? 'page'), size }));
+    await renderLoaded();
+    fireEvent.click(nextButton());
+    await screen.findByText('row-page-1');
+    fireEvent.click(nextButton());
+    await screen.findByText('row-page-2'); // rows 30..44 at 15 a page
+    // The first full-screen request stays in flight, so the rows on screen are still page 3 at 15.
+    quotaApi.getHistory.mockImplementationOnce(() => new Promise(() => {}));
+    fireEvent.click(screen.getByTestId('usage-history-fullscreen-toggle'));
+    await waitFor(() => expect(quotaApi.getHistory).toHaveBeenLastCalledWith(1, 30, undefined, 'org-1', false));
+
+    tableHeight = 819; // 20 rows
+    act(() => resizeCallbacks.forEach((cb) => cb()));
+
+    // Row 30 is on page 2 at 20 a page. Counting from the REQUESTED size (30) would say page 4.
+    await waitFor(() => expect(quotaApi.getHistory).toHaveBeenLastCalledWith(1, 20, undefined, 'org-1', false));
+    vi.unstubAllGlobals();
+  });
+
+  it('regression - a filter that fits one page in full screen does not leave the inline pager on the full-screen size', async () => {
+    quotaApi.getHistory.mockImplementation((page: number, _size: number, type?: string) =>
+      Promise.resolve(type
+        ? { ...historyPage(page, type), totalPages: 1, totalElements: 1 }
+        : historyPage(page)));
+    await renderLoaded();
+    fireEvent.click(screen.getByTestId('usage-history-fullscreen-toggle'));
+    await waitFor(() => expect(quotaApi.getHistory).toHaveBeenLastCalledWith(0, 30, undefined, 'org-1', false));
+
+    fireEvent.click(await screen.findByText('filter-agent'));
+    expect(await screen.findByText('row-AGENT_EXECUTION-0')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'history.exitFullscreen' }));
+
+    await waitFor(() => expect(quotaApi.getHistory).toHaveBeenLastCalledWith(0, 15, 'AGENT_EXECUTION', 'org-1', false));
+  });
+
+  it('closing full screen goes back to the inline size, still on the rows shown', async () => {
+    await renderLoaded();
+    fireEvent.click(screen.getByTestId('usage-history-fullscreen-toggle'));
+    await waitFor(() => expect(quotaApi.getHistory).toHaveBeenLastCalledWith(0, 30, undefined, 'org-1', false));
+    fireEvent.click(await screen.findByRole('button', { name: 'history.nextPage' }));
+    await waitFor(() => expect(quotaApi.getHistory).toHaveBeenLastCalledWith(1, 30, undefined, 'org-1', false));
+    await screen.findByText('row-page-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'history.exitFullscreen' }));
+
+    // Row 30 again: page 3 at 15 a page.
+    await waitFor(() => expect(quotaApi.getHistory).toHaveBeenLastCalledWith(2, 15, undefined, 'org-1', false));
   });
 });
 

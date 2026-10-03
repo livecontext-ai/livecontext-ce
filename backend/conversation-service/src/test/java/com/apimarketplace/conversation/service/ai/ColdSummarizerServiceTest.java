@@ -2,6 +2,7 @@ package com.apimarketplace.conversation.service.ai;
 
 import com.apimarketplace.agent.summary.ColdSummarizerPromptBuilder.Turn;
 import com.apimarketplace.agent.summary.ColdSummaryEnvelope;
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.conversation.repository.ConversationRepository;
 import com.apimarketplace.conversation.service.ai.ColdSummarizerService.LlmJsonInvoker;
 import com.apimarketplace.conversation.service.ai.ColdSummarizerService.SummarizeOutcome;
@@ -625,4 +626,85 @@ class ColdSummarizerServiceTest {
         return c == null ? 0.0 : c.count();
     }
 
+    // ---- LC-004 re-audit: sensitivity threaded to the invoker -----------------------------
+    //
+    // Pre-fix, the ONLY restricted-data check in this class looked at the BILLED provider
+    // (req.providerName()); a billed provider that IS on the allow-list (e.g. anthropic) but
+    // whose model execution link reroutes the call to a disallowed processor sailed through,
+    // because the downstream JsonCompletionService.RestrictedDataRouting check never saw the
+    // tag (HttpLlmJsonInvoker always built JsonCompletionRequestDto with dataSensitivity=null).
+    // These tests pin that the DataSensitivity computed here is always handed to the invoker's
+    // 5-arg overload, on the allowed-billed-provider path too, so the routing-aware check
+    // downstream is not a no-op.
+
+    @Test
+    @DisplayName("restricted conversation, billed provider allowed: invoker still receives DataSensitivity.RESTRICTED")
+    void restrictedConversationTagsTheInvokerCallEvenWhenBilledProviderIsAllowed() {
+        RestrictedDataTransferGuard guard = mock(RestrictedDataTransferGuard.class);
+        when(guard.conversationHoldsRestrictedData("conv-r")).thenReturn(true);
+        service.setRestrictedDataTransferGuard(guard);
+
+        LlmJsonInvoker invoker = mock(LlmJsonInvoker.class);
+        String llmResponse = "{\"decisions\":[],\"user_intents\":[]}";
+        when(invoker.invoke(eq("anthropic"), eq("claude-haiku-4-5"), anyString(), anyString(),
+                eq(DataSensitivity.RESTRICTED))).thenReturn(llmResponse);
+        when(repo.updateSummaryCold(eq("conv-r"), anyString(), anyInt())).thenReturn(1);
+
+        SummarizeRequest req = new SummarizeRequest(
+                "conv-r", 4000, 3000, 5, 5, false,
+                List.of(new Turn(1, "USER", "email me the gmail thread")), List.of(1),
+                "anthropic", "claude-haiku-4-5");
+
+        SummarizeOutcome out = service.summarize(req, invoker);
+
+        assertThat(out).isInstanceOf(SummarizeOutcome.Persisted.class);
+        // The regression proof: on pre-fix code this call never carried the tag (it always
+        // fell back to the 4-arg SAM, which the default method maps to a null sensitivity),
+        // so this stubbed invocation would never have matched and `out` would be Failed
+        // ("empty-response") instead of Persisted.
+        verify(invoker).invoke(eq("anthropic"), eq("claude-haiku-4-5"), anyString(), anyString(),
+                eq(DataSensitivity.RESTRICTED));
+    }
+
+    @Test
+    @DisplayName("non-restricted conversation: invoker receives DataSensitivity.NORMAL")
+    void normalConversationTagsTheInvokerCallAsNormal() {
+        RestrictedDataTransferGuard guard = mock(RestrictedDataTransferGuard.class);
+        when(guard.conversationHoldsRestrictedData("conv-n")).thenReturn(false);
+        service.setRestrictedDataTransferGuard(guard);
+
+        LlmJsonInvoker invoker = mock(LlmJsonInvoker.class);
+        String llmResponse = "{\"decisions\":[],\"user_intents\":[]}";
+        when(invoker.invoke(anyString(), anyString(), anyString(), anyString(),
+                eq(DataSensitivity.NORMAL))).thenReturn(llmResponse);
+        when(repo.updateSummaryCold(eq("conv-n"), anyString(), anyInt())).thenReturn(1);
+
+        SummarizeRequest req = new SummarizeRequest(
+                "conv-n", 4000, 3000, 5, 5, false,
+                List.of(new Turn(1, "USER", "hello")), List.of(1),
+                "anthropic", "claude-haiku-4-5");
+
+        assertThat(service.summarize(req, invoker)).isInstanceOf(SummarizeOutcome.Persisted.class);
+        verify(invoker).invoke(anyString(), anyString(), anyString(), anyString(),
+                eq(DataSensitivity.NORMAL));
+    }
+
+    @Test
+    @DisplayName("restricted conversation, billed provider NOT allowed: still refused pre-lock (unchanged fast path)")
+    void restrictedConversationDisallowedBilledProviderStillSkipsFast() {
+        RestrictedDataTransferGuard guard = mock(RestrictedDataTransferGuard.class);
+        when(guard.conversationHoldsRestrictedData("conv-x")).thenReturn(true);
+        service.setRestrictedDataTransferGuard(guard);
+
+        LlmJsonInvoker invoker = (p, m, s, u) -> {
+            throw new AssertionError("must not invoke the LLM for a disallowed billed provider");
+        };
+        SummarizeRequest req = new SummarizeRequest(
+                "conv-x", 4000, 3000, 5, 5, false,
+                List.of(new Turn(1, "USER", "gmail thread")), List.of(1),
+                "deepseek", "some-model");
+
+        assertThat(service.summarize(req, invoker)).isInstanceOf(SummarizeOutcome.SkippedGate.class);
+        verify(repo, never()).updateSummaryCold(anyString(), anyString(), anyInt());
+    }
 }

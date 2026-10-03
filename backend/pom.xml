@@ -12,7 +12,7 @@
 
     <licenses>
         <license>
-            <name>LiveContext Sustainable Use License 1.0</name>
+            <name>LiveContext Sustainable Use License 1.1</name>
             <url>https://github.com/livecontext-ai/livecontext-ce/blob/main/LICENSE</url>
             <distribution>repo</distribution>
         </license>
@@ -20,8 +20,16 @@
 
     <properties>
         <java.version>21</java.version>
-        <spring-boot.version>3.5.14</spring-boot.version>
-        <spring-cloud.version>2025.0.0</spring-cloud.version>
+        <!-- 3.5.16 (from 3.5.14) brings Spring Framework 6.2.19, Spring Security 6.5.11,
+             Spring Data 2025.0.13, Micrometer 1.15.12 and Logback 1.5.34, the fixed
+             versions of advisories the 3.5.14 set carried (spring-webmvc/webflux/expression
+             CVE-2026-41842/-41845/-41850, spring-data-commons CVE-2026-41695/-41716,
+             micrometer CVE-2026-40983/-40984). What 3.5.16 still gets wrong is pinned in
+             dependencyManagement below. -->
+        <spring-boot.version>3.5.16</spring-boot.version>
+        <!-- 2025.0.3 brings spring-cloud-gateway 4.3.5: 2025.0.0 shipped gateway 4.3.0
+             (CVE-2025-41243, fixed 4.3.1; CVE-2025-41253, fixed 4.3.2). -->
+        <spring-cloud.version>2025.0.3</spring-cloud.version>
         <maven.compiler.release>${java.version}</maven.compiler.release>
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
@@ -38,31 +46,99 @@
             <!-- Security pins - MUST stay BEFORE the spring-boot-dependencies import
                  (Maven dependencyManagement is first-declaration-wins; property overrides
                  like tomcat.version do NOT work with a BOM import, only with the starter
-                 parent). Boot 3.5.14 manages Tomcat 10.1.54 (CVE-2026-43512: Digest auth
-                 accepts password "null"; CVE-2026-43515) and Spring Security 6.5.9
-                 (CVE-2026-22753/-22754 servlet-path authorization bypass). Drop these
-                 pins when upgrading to a Boot version that manages these (or newer). -->
-            <dependency>
-                <groupId>org.springframework.security</groupId>
-                <artifactId>spring-security-bom</artifactId>
-                <version>6.5.10</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
+                 parent). Each pin names what the Boot version above still manages and the
+                 advisory it carries; drop a pin once Boot manages that version (or newer).
+                 Checked against OSV on 2026-10-01 for Boot 3.5.16.
+                 TOMCAT, NETTY AND JACKSON (the next three pins) exist ONLY for those CVEs and
+                 are NEWER than what Spring Boot 3.5.16 was tested with (a patch line ahead of
+                 its BOM). Remove all three at the next Boot bump: re-add one only if the new
+                 Boot still manages a version below the fix, never carry it forward by habit. -->
+            <!-- Boot 3.5.16 manages Tomcat 10.1.55 (CVE-2026-65182, CVE-2026-65905,
+                 CVE-2026-68525, all critical, fixed 10.1.58). -->
             <dependency>
                 <groupId>org.apache.tomcat.embed</groupId>
                 <artifactId>tomcat-embed-core</artifactId>
-                <version>10.1.55</version>
+                <version>10.1.60</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.tomcat.embed</groupId>
                 <artifactId>tomcat-embed-el</artifactId>
-                <version>10.1.55</version>
+                <version>10.1.60</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.tomcat.embed</groupId>
                 <artifactId>tomcat-embed-websocket</artifactId>
-                <version>10.1.55</version>
+                <version>10.1.60</version>
+            </dependency>
+            <!-- Boot 3.5.16 manages Netty 4.1.135.Final (CVE-2026-75595 critical in
+                 netty-handler, CVE-2026-55831/-55833/-56745/-56819/-59901 high in the
+                 codecs, fixed 4.1.136/4.1.137). Same 4.1 line, so reactor-netty and
+                 lettuce are unaffected. -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>4.1.138.Final</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Boot 3.5.16 manages Jackson 2.21.4 (CVE-2026-68497, CVE-2026-89407,
+                 CVE-2026-89425, CVE-2026-91776, CVE-2026-91777, high, fixed 2.21.6/2.21.7). -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>2.21.7</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Boot 3.5.16 manages the PostgreSQL driver 42.7.11 (CVE-2026-54291, high,
+                 fixed 42.7.12). -->
+            <dependency>
+                <groupId>org.postgresql</groupId>
+                <artifactId>postgresql</artifactId>
+                <version>42.7.13</version>
+            </dependency>
+            <!-- Boot 3.5.16 manages Log4j 2.24.3 (log4j-api reaches the classpath through
+                 the log4j-to-slf4j bridge; CVE-2026-49844, fixed 2.25.5). -->
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-bom</artifactId>
+                <version>2.25.5</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Boot 3.5.16 manages commons-lang3 3.17.0 (CVE-2025-48924, uncontrolled
+                 recursion in ClassUtils.getClass, fixed 3.18.0). -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>3.18.0</version>
+            </dependency>
+            <!-- testcontainers pulls commons-compress 1.24.0 (CVE-2024-25710, CVE-2024-26308,
+                 fixed 1.26.0). 1.27.1 is the version POI 5.4.0 is compiled against, already
+                 forced in orchestrator-service. -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-compress</artifactId>
+                <version>1.27.1</version>
+            </dependency>
+            <!-- commons-compress 1.27.1 (above) is built against commons-io 2.16.1 and calls
+                 API added there, but nothing managed commons-io: catalog-service resolved
+                 2.15.1 through swagger-parser 2.1.22, so compress could fail at runtime with
+                 NoSuchMethodError on the path that reads an archive. Boot does not manage it. -->
+            <dependency>
+                <groupId>commons-io</groupId>
+                <artifactId>commons-io</artifactId>
+                <version>2.18.0</version>
+            </dependency>
+            <!-- Boot does not manage nimbus-jose-jwt. 9.37.4 (the version Spring Security
+                 6.5.x's oauth2-jose declares) fixes CVE-2025-53864 (deeply nested JSON DoS)
+                 and keeps CVE-2023-52428 (PBES2 p2c DoS, fixed 9.37.3) closed. Managed here
+                 so the explicit dependency (auth-service, gateway) and every transitive pull
+                 agree. -->
+            <dependency>
+                <groupId>com.nimbusds</groupId>
+                <artifactId>nimbus-jose-jwt</artifactId>
+                <version>9.37.4</version>
             </dependency>
             <dependency>
                 <groupId>org.springframework.boot</groupId>
@@ -159,7 +235,7 @@
                 <plugin>
                     <groupId>io.github.git-commit-id</groupId>
                     <artifactId>git-commit-id-maven-plugin</artifactId>
-                    <version>9.0.1</version>
+                    <version>10.0.1</version>
                     <configuration>
                         <generateGitPropertiesFile>true</generateGitPropertiesFile>
                         <failOnNoGitDirectory>false</failOnNoGitDirectory>

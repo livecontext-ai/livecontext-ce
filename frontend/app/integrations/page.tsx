@@ -69,7 +69,8 @@ export const metadata: Metadata = {
   // landing page, /marketplace, /compare and /changelog). `follow: true` matches
   // the detail page beside it: robots.ts already disallows everything on CE, so
   // the two differing was an inconsistency with no upside.
-  robots: IS_CE ? { index: false, follow: true } : undefined,
+  // Only on CE: on the cloud an explicit 'robots: undefined' wiped the root layout's directives.
+  ...(IS_CE ? { robots: { index: false, follow: true } } : {}),
 };
 
 export default async function IntegrationsDirectoryPage() {

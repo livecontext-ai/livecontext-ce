@@ -37,6 +37,7 @@ const FRONTEND_CARVE_OUTS = [
   '/api/pricing-event',
   '/api/proxy',
   '/api/status',
+  '/api/csp-report',
 ];
 
 /**

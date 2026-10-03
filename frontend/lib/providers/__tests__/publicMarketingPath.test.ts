@@ -144,6 +144,12 @@ describe('isPublicMarketingPath', () => {
  */
 describe('publicMarketingPathCoverage', () => {
   const APP_DIR = path.resolve(__dirname, '../../../app');
+  /**
+   * A page renders the public chrome when it imports it (the whole shell, or its header and
+   * footer). Not any mention of the word: a page may read the shell's `LandingShell` message
+   * namespace for a label without drawing the marketing chrome (a partner offer page).
+   */
+  const USES_PUBLIC_CHROME = /from ['"]@\/components\/landing\/LandingShell['"]/;
 
   /** Every app-router page whose source mounts the public chrome. */
   function publicChromePages(dir: string, segments: string[] = []): string[] {
@@ -152,7 +158,7 @@ describe('publicMarketingPathCoverage', () => {
       const full = path.join(dir, entry);
       if (statSync(full).isDirectory()) {
         found.push(...publicChromePages(full, [...segments, entry]));
-      } else if (entry === 'page.tsx' && readFileSync(full, 'utf8').includes('LandingShell')) {
+      } else if (entry === 'page.tsx' && USES_PUBLIC_CHROME.test(readFileSync(full, 'utf8'))) {
         // `[locale]` is stripped by isPublicMarketingPath itself; any other dynamic
         // segment stands in for a real value, which is what a visitor requests.
         const route = segments
@@ -179,5 +185,15 @@ describe('publicMarketingPathCoverage', () => {
           + 'Add its prefix to PUBLIC_MARKETING_PREFIXES.',
       ).toBe(true);
     }
+  });
+});
+
+describe('publicMarketingPathCoverage: what counts as using the public chrome', () => {
+  it('reading the shell message namespace for a label is not drawing the marketing chrome', () => {
+    const page = readFileSync(path.resolve(__dirname, '../../../app/offer/[token]/page.tsx'), 'utf8');
+    expect(page).toContain("namespace: 'LandingShell'");
+    expect(page).not.toMatch(/from ['"]@\/components\/landing\/LandingShell['"]/);
+    // ...and that page keeps its auth gate: it is a page to pay from, not a marketing one.
+    expect(isPublicMarketingPath('/offer/Abc23XyZ9k')).toBe(false);
   });
 });

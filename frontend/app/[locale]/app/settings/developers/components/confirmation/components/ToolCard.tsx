@@ -325,7 +325,8 @@ interface ResponsePreviewProps {
   success: any;
 }
 
-function ResponsePreview({ type, success }: ResponsePreviewProps) {
+/** Exported for unit tests (the response example is authored data, see the html branch). */
+export function ResponsePreview({ type, success }: ResponsePreviewProps) {
   const t = useTranslations('developers');
   if (type === 'json') {
     return (
@@ -344,10 +345,15 @@ function ResponsePreview({ type, success }: ResponsePreviewProps) {
   }
 
   if (type === 'html') {
+    // LC-078: the declared response example is arbitrary text carried by a tool definition, so
+    // it is rendered ESCAPED like every sibling branch. Injecting it as HTML made a tool
+    // definition an XSS sink on the app origin for whoever opened the card.
     return (
       <div className="border border-gray-300 rounded p-2 bg-white text-black">
         <div className="text-xs text-gray-500 mb-2">{t('toolCard.htmlPreview')}:</div>
-        <div dangerouslySetInnerHTML={{ __html: typeof success === 'string' ? success : JSON.stringify(success, null, 2) }} />
+        <pre className="whitespace-pre-wrap break-words">
+          {typeof success === 'string' ? success : JSON.stringify(success, null, 2)}
+        </pre>
       </div>
     );
   }

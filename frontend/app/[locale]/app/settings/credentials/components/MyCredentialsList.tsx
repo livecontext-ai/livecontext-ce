@@ -42,6 +42,7 @@ import { useToast, type ToastData } from "@/components/Toast";
 import { formatDateTime } from "@/lib/utils/dateFormatters";
 import { invalidateCredentialCaches } from "@/lib/credentials/invalidateCredentialCaches";
 import { ScopeStatusIndicator } from "./ScopeStatusIndicator";
+import { urlEnum, urlInt, useUrlSearchState, useUrlState } from "@/hooks/useUrlState";
 
 const ITEMS_PER_PAGE = 10;
 
@@ -158,8 +159,10 @@ export function MyCredentialsList({
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [currentPage, setCurrentPage] = useState(1);
+  // The search, the page and the filter live in the address, so a reload reopens the list as
+  // it was. The page's tabs drop them when the user leaves this list.
+  const [searchTerm, setSearchTerm] = useUrlSearchState("q");
+  const [currentPage, setCurrentPage] = useUrlState("page", 1, { codec: urlInt(1, 100000) });
   const [paginationData, setPaginationData] =
     useState<PaginatedCredentialsResponse | null>(null);
   const [deleteCredential, setDeleteCredential] = useState<Credential | null>(
@@ -170,7 +173,9 @@ export function MyCredentialsList({
   const [renameValue, setRenameValue] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);
-  const [defaultFilter, setDefaultFilter] = useState<"all" | "default" | "non-default">("all");
+  const [defaultFilter, setDefaultFilter] = useUrlState<"all" | "default" | "non-default">("filter", "all", {
+    codec: urlEnum(["all", "default", "non-default"]),
+  });
   const [togglingDefaultId, setTogglingDefaultId] = useState<number | null>(null);
 
   // Check if a credential is the only one for its integration
@@ -268,7 +273,7 @@ export function MyCredentialsList({
       row.classList.remove('ring-2', 'ring-blue-500', 'rounded');
     }, 2000);
     return () => window.clearTimeout(timer);
-  }, [focusCredentialId, credentials]);
+  }, [focusCredentialId, credentials, setSearchTerm, setDefaultFilter]);
 
   // Client-side search and default filtering
   const filteredCredentials = useMemo(() => {
@@ -302,6 +307,11 @@ export function MyCredentialsList({
   }, [credentials, searchTerm, defaultFilter]);
 
   const totalPages = paginationData?.totalPages || 1;
+  // A page restored from the address can be past the end (credentials were deleted since):
+  // step back to the last one instead of showing an empty list.
+  useEffect(() => {
+    if (!loading && paginationData && currentPage > totalPages) setCurrentPage(totalPages);
+  }, [loading, paginationData, currentPage, totalPages, setCurrentPage]);
   const hasNext = paginationData?.hasNext || false;
   const hasPrevious = paginationData?.hasPrevious || false;
 

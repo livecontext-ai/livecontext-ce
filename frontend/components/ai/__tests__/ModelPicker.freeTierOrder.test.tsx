@@ -144,6 +144,22 @@ describe('ModelPicker - free-tier models lead on a Free plan', () => {
     expect(optionOrder()).toEqual(['haiku', 'haiku-mini', 'opus', 'sonnet']);
   });
 
+  it('orders the covered models by the free tier ranking when the admin set one', () => {
+    // haiku leads the catalogue, but the Free tier tab ranks haiku-mini first.
+    h.providers = [
+      provider('anthropic', [
+        model('anthropic', 'opus'),
+        { ...model('anthropic', 'haiku', true), freeTierRank: 2 },
+        model('anthropic', 'sonnet'),
+        { ...model('anthropic', 'haiku-mini', true), freeTierRank: 1 },
+      ]),
+    ];
+
+    renderPicker();
+
+    expect(optionOrder()).toEqual(['haiku-mini', 'haiku', 'opus', 'sonnet']);
+  });
+
   it('leaves the admin order untouched for an account that is not on the free tier', () => {
     h.prefersFreeTier = false;
     h.providers = [

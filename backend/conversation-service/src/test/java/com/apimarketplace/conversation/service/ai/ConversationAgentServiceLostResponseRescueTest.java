@@ -316,7 +316,7 @@ class ConversationAgentServiceLostResponseRescueTest {
         store.seed(STREAM_ID, CONV_ID, StreamState.STREAMING, "streamed by the CLI");
         ConversationAgentService onStore = serviceOn(store);
         stubContext("claude-code", "claude-opus-4-6");
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class))).thenReturn(null);
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any())).thenReturn(null);
 
         onStore.executeStreaming(chatRequest(), streamOutput, CONV_ID);
 
@@ -443,7 +443,7 @@ class ConversationAgentServiceLostResponseRescueTest {
     @DisplayName("regression: bridge restarted mid-reply (stream still STREAMING) - the partial is saved, the CLI gets the cancel key, and the turn ends interrupted, never `done`")
     void lostBridgeAnswerMidReplyEndsInterrupted() {
         stubContext("claude-code", "claude-opus-4-6");
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class))).thenReturn(null);
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any())).thenReturn(null);
         bufferedReply(StreamState.STREAMING, "streamed by the CLI");
 
         service.executeStreaming(chatRequest(), streamOutput, CONV_ID);
@@ -466,7 +466,7 @@ class ConversationAgentServiceLostResponseRescueTest {
     @DisplayName("bridge unreachable before anything streamed: the error is sent as before")
     void unreachableBridgeKeepsTheError() {
         stubContext("claude-code", "claude-opus-4-6");
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class))).thenReturn(null);
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any())).thenReturn(null);
         when(stateService.getMetadata(STREAM_ID)).thenReturn(Mono.empty());
         when(stateService.getFullContent(STREAM_ID)).thenReturn(Mono.empty());
 
@@ -481,7 +481,7 @@ class ConversationAgentServiceLostResponseRescueTest {
     @DisplayName("a concurrent drain / TTL rescue already holds the stream: nothing is saved twice, the error stays")
     void concurrentRescuerWinsAndNothingIsSavedTwice() {
         stubContext("claude-code", "claude-opus-4-6");
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class))).thenReturn(null);
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any())).thenReturn(null);
         bufferedReply(StreamState.STREAMING, "streamed by the CLI");
         when(claims.setIfAbsent(eq("stream:interrupt:claim:" + STREAM_ID), anyString(), any(Duration.class)))
             .thenReturn(false);

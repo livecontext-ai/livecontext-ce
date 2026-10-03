@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { urlEnum, urlNullable, urlString, useUrlSearchState, useUrlState } from '@/hooks/useUrlState';
 import { taskService } from '@/lib/api/orchestrator/task.service';
 import { agentService } from '@/lib/api/orchestrator/agent.service';
 import type { Task, TaskStats, TaskListParams, TaskPerson, TaskStatusConfig, TaskLabel } from '@/lib/api/orchestrator/task.types';
@@ -15,6 +15,8 @@ import {
 } from './useTaskBoardStream';
 
 export type TaskSortField = 'priority' | 'updated_at' | 'created_at' | 'due_by' | 'manual';
+
+const TASK_SORT_FIELDS = ['priority', 'updated_at', 'created_at', 'due_by', 'manual'] as const;
 
 interface UseTaskBoardReturn {
   // Data
@@ -45,15 +47,18 @@ interface UseTaskBoardReturn {
 }
 
 export function useTaskBoard(): UseTaskBoardReturn {
-  const searchParams = useSearchParams();
-
-  // URL-driven state
-  const initialAgent = searchParams.get('agent') || null;
-
-  const [agentFilter, setAgentFilterState] = useState<string | null>(initialAgent);
-  const [searchQuery, setSearchQueryRaw] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // The board's view lives in the address, so a reload reopens it as it was: the agent filter
+  // (`?agent=`, which links from elsewhere already used), the search, the sort and the open task.
+  // A task id that no longer exists opens the detail panel on its own "not found" state.
+  const [agentFilter, setAgentFilter] = useUrlState<string | null>('agent', null, {
+    codec: urlNullable(urlString),
+  });
+  const [searchQuery, setSearchQuery] = useUrlSearchState('q');
+  // Starts at the restored text, so the first request is already the filtered one.
+  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery);
+  const [selectedTaskId, setSelectedTaskId] = useUrlState<string | null>('task', null, {
+    codec: urlNullable(urlString),
+  });
 
   // Data
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -64,16 +69,10 @@ export function useTaskBoard(): UseTaskBoardReturn {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<TaskSortField>('priority');
+  const [sortBy, setSortBy] = useUrlState<TaskSortField>('sort', 'priority', {
+    codec: urlEnum(TASK_SORT_FIELDS),
+  });
   const [refreshKey, setRefreshKey] = useState(0);
-
-  const setSearchQuery = useCallback((q: string) => {
-    setSearchQueryRaw(q);
-  }, []);
-
-  const setAgentFilter = useCallback((agentId: string | null) => {
-    setAgentFilterState(agentId);
-  }, []);
 
   // Debounce search by 300ms
   useEffect(() => {

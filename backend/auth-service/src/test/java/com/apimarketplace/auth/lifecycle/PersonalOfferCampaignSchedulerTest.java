@@ -92,10 +92,40 @@ class PersonalOfferCampaignSchedulerTest {
         verify(email).submitPersonalOffer(eq(USER), eq(LifecycleEvents.PERSONAL_OFFER_REMINDER_DUE),
                 payload.capture(), any(), any(), any());
         assertThat(payload.getAllValues()).allSatisfy(factory -> {
-            assertThat(factory.apply("fr")).containsEntry("code", code).containsKeys("expires_at", "terms");
+            assertThat(factory.apply("fr")).containsEntry("code", code).containsKeys("expires_at", "terms", "headline");
             assertThat(factory.apply("en")).containsEntry("code", code);
         });
         verify(lifecycle, never()).suppressPending(anyLong(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("The email's subject line is read from the policy's own matrix: its top bonus step, in the contact's language")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void headlineComesFromThePolicyMatrix() {
+        issuedAt(NOW.plusSeconds(11 * 3600));
+        // The production matrix (V552): Starter up to 100,000 a month, every pack from 500,000 gives 80,000.
+        List<PersonalOfferMatrix> matrix = new java.util.ArrayList<>();
+        for (String plan : List.of("STARTER", "PRO", "TEAM")) {
+            for (int pack : new int[] {5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 5_000_000, 10_000_000}) {
+                if (plan.equals("STARTER") && pack > 100_000) continue;
+                PersonalOfferMatrix cell = new PersonalOfferMatrix();
+                cell.setPlanCode(plan);
+                cell.setMonthlyCredits(pack);
+                cell.setBonusCredits(pack >= 500_000 ? 80_000 : pack >= 250_000 ? 40_000 : pack >= 50_000 ? 8_000 : 0);
+                matrix.add(cell);
+            }
+        }
+        when(offers.matrixForPolicy(3L)).thenReturn(matrix);
+
+        scheduler.scan();
+
+        ArgumentCaptor<Function<String, Map<String, Object>>> payload = ArgumentCaptor.forClass(Function.class);
+        verify(email).submitPersonalOffer(eq(USER), eq(LifecycleEvents.PERSONAL_OFFER_INITIAL_DUE),
+                payload.capture(), any(), any(), any());
+        assertThat(payload.getValue().apply("en")).containsEntry("headline", "Up to 80,000 bonus credits with your first plan");
+        assertThat(payload.getValue().apply("fr")).containsEntry("headline", "Jusqu'à "
+                + java.text.NumberFormat.getIntegerInstance(java.util.Locale.FRENCH).format(80_000)
+                + " crédits offerts avec votre premier abonnement");
     }
 
     @ParameterizedTest

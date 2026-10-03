@@ -17,7 +17,7 @@ import type { VisualCellProps } from './types';
  * Handles both old 'select' and migrated 'badge' columns.
  * Supports per-option colors via options[].color or legacy palette.
  */
-export function SelectCell({ value, rowKey, field, displayConfig, onSaveAndExit }: VisualCellProps) {
+export function SelectCell({ value, rowKey, field, displayConfig, onSaveAndExit, readOnly }: VisualCellProps) {
   const t = useTranslations('dataTable');
   const options = getDisplayOptions(displayConfig);
   const palette = (displayConfig?.palette as Record<string, string>) || {};
@@ -27,7 +27,7 @@ export function SelectCell({ value, rowKey, field, displayConfig, onSaveAndExit 
     const color = palette[value as string] || '#0ea5e9';
     return (
       <span className="rounded-md px-3 py-1 text-xs font-semibold text-white" style={{ backgroundColor: color }}>
-        {value || '\u2014'}
+        {value || '-'}
       </span>
     );
   }
@@ -39,13 +39,26 @@ export function SelectCell({ value, rowKey, field, displayConfig, onSaveAndExit 
   const currentOption = options.find(o => o.value === value);
   const currentColor = currentOption?.color || palette[value as string];
 
+  // Read-only is the value alone, not a disabled dropdown: the shared trigger fades to half
+  // opacity when disabled, which would grey out every select column of a read-only table.
+  if (readOnly) {
+    const text = currentOption?.label || (value == null || value === '' ? '-' : String(value));
+    return currentColor ? (
+      <span className="rounded-md px-2 py-0.5 text-xs font-semibold text-white" style={{ backgroundColor: currentColor }}>
+        {text}
+      </span>
+    ) : (
+      <span className="text-xs text-theme-primary">{text}</span>
+    );
+  }
+
   return (
     <div onClick={(e) => e.stopPropagation()}>
       <Select value={value || ''} onValueChange={(v) => onSaveAndExit(v)}>
         <SelectTrigger className="h-7 min-h-0 w-full rounded-lg border-0 bg-transparent px-2 py-0.5 text-xs shadow-none focus:ring-0 focus:ring-offset-0 hover:bg-[var(--bg-secondary)] [&>svg]:opacity-0 [&:hover>svg]:opacity-50">
           {currentColor ? (
             <span className="rounded-md px-2 py-0.5 text-[11px] font-semibold text-white" style={{ backgroundColor: currentColor }}>
-              {currentOption?.label || value || '\u2014'}
+              {currentOption?.label || value || '-'}
             </span>
           ) : (
             <SelectValue placeholder={t('selectPlaceholder')} />

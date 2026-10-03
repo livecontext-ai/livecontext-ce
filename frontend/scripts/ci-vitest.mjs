@@ -4,14 +4,14 @@
 // A push to main, a manual run, and any pull request the selection is unsure of: the WHOLE suite,
 // exactly as before, `vitest run --shard=<i>/<n>` with no filter (vitest.config.ts `include` is
 // the selection, --shard splits it). That path never narrows. Those decisions (the event, the
-// diff, ci-vitest-select.mjs's rules, the size of the selection) come out the same in both shards,
-// so the two halves of vitest's own split still cover the suite.
+// diff, ci-vitest-select.mjs's rules, the size of the selection) come out the same in every shard,
+// so the parts of vitest's own split still cover the suite.
 // A pull request otherwise: the files vitest's own import graph relates to the changed files
 // (`related`), plus the always-run files (ci-vitest-select.mjs says which and why). This shard
 // runs every n-th of them, and fails unless each one it was given reported a result: a file that
 // did not run is not a file that passed. If the selection itself breaks in one shard (an error the
-// other shard may not meet), that shard runs the WHOLE suite unsharded: a half of vitest's split
-// beside the other shard's half of the selection would leave files in neither. The job summary
+// other shards may not meet), that shard runs the WHOLE suite unsharded: its part of vitest's split
+// beside the other shards' parts of the selection would leave files in none. The job summary
 // says what ran and why, or "FULL RUN because ...".
 //
 // Two processes, never one. Building the import graph transforms the whole suite's imports and
@@ -115,16 +115,16 @@ export function defaultDeps() {
 export async function run(deps) {
   const { log, summary } = deps;
 
-  /** The whole suite, this shard's half of it (or all of it when `shard` is null); its exit code. */
+  /** The whole suite, this shard's part of it (or all of it when `shard` is null); its exit code. */
   const fullRun = (shard, reason) => {
-    const scope = shard ? "this shard's half" : 'unsharded, the whole suite in this shard';
+    const scope = shard ? "this shard's part" : 'unsharded, the whole suite in this shard';
     summary(`### Frontend unit tests, shard ${shard ?? 'fallback'}\n\n**FULL RUN because ${reason}.** Every vitest file, ${scope}.\n`);
     return deps.spawnVitest(fullRunArgs(shard));
   };
 
   /**
    * The selection: this shard's files ({mine, ...} for the summary), or a string saying why the
-   * whole suite runs instead (a reason both shards reach alike). Throws when it breaks.
+   * whole suite runs instead (a reason every shard reaches alike). Throws when it breaks.
    */
   const select = (shard, index, total, related) => {
     const tests = deps.readSources(isTestFile);
@@ -154,7 +154,7 @@ export async function run(deps) {
   /** Runs `mine` in a fresh vitest, then checks every one of them reported; its exit code. */
   const runSelected = (shard, mine) => {
     if (mine.length === 0) {
-      log('Nothing for this shard: the other shard runs the whole selection.');
+      log('Nothing for this shard: the other shards run the whole selection.');
       return 0;
     }
     // Each path is a positional FILTER (a substring of the file path): it selects the file itself,

@@ -1668,6 +1668,30 @@ class AgentWorkflowFireServiceTest {
         }
 
         @Test
+        @DisplayName("LC-066: a fire from a restricted caller carries the restricted-data marker")
+        void lc066RestrictedCallerFireCarriesMarker() {
+            service.fire(run, formTrigger(field("topic", true, null, null)), Map.of("topic", "mail text"), true);
+
+            assertThat(firedPayload())
+                    .containsEntry("topic", "mail text")
+                    .containsEntry(ReusableTriggerService.RESTRICTED_DATA_MARKER, Boolean.TRUE);
+        }
+
+        @Test
+        @DisplayName("LC-066: an ordinary fire carries no marker, and a marker the agent wrote itself is stripped")
+        void lc066NormalFireCarriesNoMarker() {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("topic", "public text");
+            payload.put(ReusableTriggerService.RESTRICTED_DATA_MARKER, Boolean.TRUE);
+
+            service.fire(run, formTrigger(field("topic", true, null, null)), payload);
+
+            assertThat(firedPayload())
+                    .containsEntry("topic", "public text")
+                    .doesNotContainKey(ReusableTriggerService.RESTRICTED_DATA_MARKER);
+        }
+
+        @Test
         @DisplayName("A value the caller sent always wins over the default; a blank one does not")
         void callerValueWins_blankIsFilled() {
             Map<String, Object> payload = new HashMap<>();

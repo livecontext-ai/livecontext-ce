@@ -6,3 +6,5 @@ com.apimarketplace.common.event.EventBusAutoConfiguration
 com.apimarketplace.common.scaling.redis.RedisScalingConfiguration
 com.apimarketplace.common.scaling.ScalingAutoConfiguration
 com.apimarketplace.common.analytics.PostHogAutoConfiguration
+com.apimarketplace.common.logging.PayloadLoggingConfig
+com.apimarketplace.common.classification.RestrictedDataPolicyConfig

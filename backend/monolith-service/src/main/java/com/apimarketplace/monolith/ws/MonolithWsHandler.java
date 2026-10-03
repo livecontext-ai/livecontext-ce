@@ -335,12 +335,13 @@ public class MonolithWsHandler extends TextWebSocketHandler implements SubProtoc
         }
     }
 
+    /**
+     * The JWT, from the {@code lc.jwt.} subprotocol ONLY (LC-044, parity with the cloud gateway's
+     * WsHandshakeAuthInterceptor). There is no {@code ?token=} fallback: every shipped client
+     * sends the subprotocol, and a session credential in a URL reaches access logs and history.
+     */
     static String extractToken(WebSocketSession session) {
-        String protocolToken = extractProtocolValue(session, TOKEN_SUBPROTOCOL_PREFIX);
-        if (protocolToken != null) {
-            return protocolToken;
-        }
-        return extractQueryParam(session == null ? null : session.getUri(), "token");
+        return extractProtocolValue(session, TOKEN_SUBPROTOCOL_PREFIX);
     }
 
     static String extractActiveOrg(WebSocketSession session) {

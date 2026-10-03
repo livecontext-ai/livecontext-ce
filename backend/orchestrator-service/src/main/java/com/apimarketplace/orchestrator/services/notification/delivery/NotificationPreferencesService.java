@@ -53,7 +53,7 @@ public class NotificationPreferencesService {
         List<TopicView> topics = new ArrayList<>();
         for (NotificationTopic topic : NotificationTopic.values()) {
             topics.add(new TopicView(topic.name(), modes.get(topic).name(), topic.defaultDelivery().name(),
-                    topic == NotificationTopic.CREDITS || requiredPlan == null, topic.isPersonScoped()));
+                    topic.emailOnEveryPlan() || requiredPlan == null, topic.isPersonScoped()));
         }
         return new PreferencesView(topics, requiredPlan, channel(organizationId));
     }

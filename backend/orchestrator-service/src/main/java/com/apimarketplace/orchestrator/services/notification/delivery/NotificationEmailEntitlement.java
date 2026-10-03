@@ -38,7 +38,7 @@ public class NotificationEmailEntitlement {
     }
 
     public boolean allows(String tenantId, NotificationTopic topic) {
-        return topic == NotificationTopic.CREDITS || requiredPlan(tenantId) == null;
+        return topic.emailOnEveryPlan() || requiredPlan(tenantId) == null;
     }
 
     /** The plan this person needs for email alerts, or null when their plan already includes them. */

@@ -3,21 +3,25 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 import com.apimarketplace.orchestrator.services.template.ReportedParams;
 import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
+import com.apimarketplace.common.web.SafeAddressResolverGroup;
 import com.apimarketplace.common.web.UrlSafetyValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.web.reactive.function.client.WebClient;
 import org.w3c.dom.*;
 import org.xml.sax.InputSource;
+import reactor.core.publisher.Mono;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.StringReader;
+import java.net.InetAddress;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.*;
+import java.util.function.Predicate;
 
 /**
  * RSS node - Fetches and parses RSS/Atom feeds from URLs.
@@ -39,11 +43,67 @@ public class RssNode extends BaseNode {
     private static final Logger logger = LoggerFactory.getLogger(RssNode.class);
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(30);
 
+    /** Largest feed body read, in bytes: bounded, and far above what real feeds reach. */
+    static final int MAX_FEED_BYTES = 16 * 1024 * 1024;
+
+    /** Feeds are fetched through a pool of their own, with the limits java.net.http had (large headers). */
+    private static final reactor.netty.resources.ConnectionProvider POOL =
+        com.apimarketplace.common.web.OutboundHttpTransport.pool("rss-node");
+
+    /**
+     * Built once and shared by every production RssNode instance (LC-002 / LC-006, CASA
+     * readiness round 3: DNS rebinding). Pre-fix, {@code fetchFeedContent} built a fresh
+     * {@code java.net.http.HttpClient} per call, which validated the URL up-front with
+     * {@code UrlSafetyValidator.validateUrl} and then resolved the SAME name again, through the
+     * JDK's own DNS cache, when it connected - a name answering public to the check and private
+     * to the connect reached the target. This client runs on Reactor Netty with
+     * {@link SafeAddressResolverGroup#strict()}, the same strict predicate the URL check uses: the
+     * resolver and the channel hooks judge the exact address the socket dials, so no second,
+     * independent lookup happens between the check and the connect.
+     */
+    private static final WebClient PRODUCTION_WEB_CLIENT = buildWebClient(UrlSafetyValidator::isUnsafeAddress);
+
     private final Core.RssConfig rssConfig;
+    private final WebClient webClient;
 
     public RssNode(String nodeId, Core.RssConfig rssConfig) {
+        this(nodeId, rssConfig, PRODUCTION_WEB_CLIENT);
+    }
+
+    /**
+     * Test seam for the connect-time pin. A local test server IS loopback, so a test that needs
+     * to reach one builds an RssNode whose connect-time guard is off (mirrors
+     * {@code WebClientFileDownloader}'s test constructors, for the same reason: the refusal path
+     * itself is tested separately, against the real predicate, with no live network).
+     */
+    RssNode(String nodeId, Core.RssConfig rssConfig, WebClient webClient) {
         super(nodeId, NodeType.RSS);
         this.rssConfig = rssConfig;
+        this.webClient = webClient;
+    }
+
+    /** Package-private so tests can build a client whose connect-time guard is a no-op. */
+    static WebClient buildWebClient(Predicate<InetAddress> unsafeAddress) {
+        reactor.netty.http.client.HttpClient httpClient = com.apimarketplace.common.web.OutboundHttpTransport.client(POOL)
+            // followRedirect stays false: RssNode's own redirect handling below reports a clear
+            // "redirects are not followed" error rather than silently chasing a target the SSRF
+            // check never saw.
+            .followRedirect(false)
+            .resolver(new SafeAddressResolverGroup(unsafeAddress))
+            .responseTimeout(HTTP_TIMEOUT)
+            .option(io.netty.channel.ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) HTTP_TIMEOUT.toMillis())
+            .doOnChannelInit((observer, channel, remoteAddress) ->
+                SafeAddressResolverGroup.assertRemoteAddressSafe(remoteAddress, unsafeAddress))
+            .doOnConnected(connection ->
+                SafeAddressResolverGroup.assertRemoteAddressSafe(
+                    connection.channel().remoteAddress(), unsafeAddress));
+
+        return WebClient.builder()
+            .clientConnector(new ReactorClientHttpConnector(httpClient))
+            // WebClient buffers at most 256 KB by default, which refused ordinary feeds (a podcast
+            // or full-content blog feed runs to megabytes) that java.net.http read whole.
+            .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(MAX_FEED_BYTES))
+            .build();
     }
 
     @Override
@@ -114,33 +174,39 @@ public class RssNode extends BaseNode {
     }
 
     /**
-     * Fetch feed content from a URL using java.net.http.HttpClient.
+     * Fetch feed content from a URL. Runs on the pinned {@link #webClient} (see its javadoc for
+     * why); behaviour is otherwise unchanged from the {@code java.net.http.HttpClient} this
+     * replaced - same headers, same timeout, same no-redirect refusal, same error message shapes.
      */
     private String fetchFeedContent(String url) throws Exception {
-        HttpClient client = HttpClient.newBuilder()
-            .connectTimeout(HTTP_TIMEOUT)
-            .followRedirects(HttpClient.Redirect.NEVER)
-            .build();
-
-        HttpRequest request = HttpRequest.newBuilder()
-            .uri(URI.create(url))
-            .timeout(HTTP_TIMEOUT)
-            .header("Accept", "application/rss+xml, application/atom+xml, application/xml, text/xml")
-            .header("User-Agent", "LiveContext-RSSNode/1.0")
-            .GET()
-            .build();
-
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-        if (response.statusCode() >= 300 && response.statusCode() < 400) {
-            throw new RuntimeException("Redirects are not followed for RSS feeds: status=" + response.statusCode());
+        try {
+            return webClient.get()
+                .uri(URI.create(url))
+                .header("Accept", "application/rss+xml, application/atom+xml, application/xml, text/xml")
+                .header("User-Agent", "LiveContext-RSSNode/1.0")
+                .exchangeToMono(response -> {
+                    HttpStatusCode status = response.statusCode();
+                    if (status.is3xxRedirection()) {
+                        return response.releaseBody().then(Mono.error(
+                            new RuntimeException("Redirects are not followed for RSS feeds: status=" + status.value())));
+                    }
+                    if (status.isError()) {
+                        return response.releaseBody().then(Mono.error(
+                            new RuntimeException("HTTP error fetching feed: status=" + status.value())));
+                    }
+                    return response.bodyToMono(String.class).defaultIfEmpty("");
+                })
+                .timeout(HTTP_TIMEOUT)
+                .block();
+        } catch (RuntimeException e) {
+            // Reactor may wrap a downstream failure; unwrap so callers see the same plain
+            // RuntimeException (and message) the JDK client used to throw directly.
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtimeCause) {
+                throw runtimeCause;
+            }
+            throw e;
         }
-
-        if (response.statusCode() >= 400) {
-            throw new RuntimeException("HTTP error fetching feed: status=" + response.statusCode());
-        }
-
-        return response.body();
     }
 
     /**

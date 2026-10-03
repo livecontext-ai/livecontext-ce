@@ -127,3 +127,62 @@ describe('useStorageExplorer - folder navigation', () => {
     await waitFor(() => expect(lastParams()).toMatchObject({ parentFolderId: 'root' }));
   });
 });
+
+describe('useStorageExplorer - embedded copies do not own the address', () => {
+  // The inspector and the pickers run this hook inside someone else's page. Only the full-page
+  // Files browser passes `urlState`; without it nothing may be read from or written to the URL.
+  it('writes nothing to the address when the view changes', async () => {
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const pushState = vi.spyOn(window.history, 'pushState');
+    const { result } = renderHook(() => useStorageExplorer(undefined, undefined, undefined, FOLDER_AWARE));
+    await waitFor(() => expect(getExplorerEntries).toHaveBeenCalledTimes(1));
+
+    act(() => result.current.setPage(2));
+    act(() => result.current.setSort('name', 'asc'));
+    act(() => result.current.setFileType('pdf'));
+    act(() => result.current.setSourceTypeFilter('STEP_OUTPUT'));
+    act(() => result.current.setPageSize(100));
+
+    await waitFor(() => expect(lastParams()).toMatchObject({ sort: 'name', fileType: 'pdf', size: 100 }));
+    expect(replaceState).not.toHaveBeenCalled();
+    expect(pushState).not.toHaveBeenCalled();
+    replaceState.mockRestore();
+    pushState.mockRestore();
+  });
+
+  it('starts on the seeded page instead of resetting it on mount', async () => {
+    // `initialPage` exists so coming back from a file reopens the page the user left. The
+    // "filter changed, back to the first page" rule used to fire on mount too and wipe it.
+    getExplorerEntries.mockResolvedValue({ content: [], totalElements: 100, totalPages: 5 });
+    const { result } = renderHook(() => useStorageExplorer(undefined, undefined, undefined, {
+      ...FOLDER_AWARE, initialPage: 3,
+    }));
+
+    await waitFor(() => expect(getExplorerEntries).toHaveBeenCalled());
+    await act(async () => {});
+    expect(getExplorerEntries.mock.calls.every((c) => c[0].page === 3)).toBe(true);
+    expect(result.current.currentPage).toBe(3);
+  });
+
+  it('still goes back to the first page when a filter changes after mount', async () => {
+    getExplorerEntries.mockResolvedValue({ content: [], totalElements: 100, totalPages: 5 });
+    const { result } = renderHook(() => useStorageExplorer(undefined, undefined, undefined, {
+      ...FOLDER_AWARE, initialPage: 3,
+    }));
+    await waitFor(() => expect(getExplorerEntries).toHaveBeenCalled());
+
+    act(() => result.current.setSearch('report'));
+
+    await waitFor(() => expect(lastParams()).toMatchObject({ page: 0, search: 'report' }));
+  });
+
+  it('steps back to the last page when the one asked for no longer exists', async () => {
+    getExplorerEntries.mockResolvedValue({ content: [], totalElements: 40, totalPages: 2 });
+    const { result } = renderHook(() => useStorageExplorer(undefined, undefined, undefined, {
+      ...FOLDER_AWARE, initialPage: 7,
+    }));
+
+    await waitFor(() => expect(result.current.currentPage).toBe(1));
+    await waitFor(() => expect(lastParams()).toMatchObject({ page: 1 }));
+  });
+});

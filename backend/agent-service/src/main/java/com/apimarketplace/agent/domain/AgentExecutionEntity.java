@@ -227,6 +227,21 @@ public class AgentExecutionEntity implements Persistable<UUID>, OrgScopedEntity 
     @Column(name = "task_id")
     private UUID taskId;
 
+    /**
+     * NORMAL, RESTRICTED when the execution handled Google restricted-scope data (Gmail, Drive),
+     * REDACTED once RestrictedObservabilityContentPurger removed its content.
+     */
+    @Column(name = "data_sensitivity", nullable = false, length = 16)
+    private String dataSensitivity = "NORMAL";
+
+    public String getDataSensitivity() {
+        return dataSensitivity;
+    }
+
+    public void setDataSensitivity(String dataSensitivity) {
+        this.dataSensitivity = dataSensitivity == null ? "NORMAL" : dataSensitivity;
+    }
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

@@ -9,6 +9,7 @@ import com.apimarketplace.orchestrator.domain.workflow.WorkflowExecution;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan;
 import com.apimarketplace.orchestrator.repository.WorkflowRepository;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
+import com.apimarketplace.orchestrator.services.notification.delivery.NotificationDeliveryService;
 import com.apimarketplace.orchestrator.services.persistence.PinAwareTriggerSyncService;
 import com.apimarketplace.orchestrator.services.persistence.ScheduleSyncService;
 import com.apimarketplace.orchestrator.trigger.TriggerTypeDetector;
@@ -125,6 +126,14 @@ public class WorkflowPinService {
      */
     public static final String PROVISIONING_FAILED_REASON =
         "its production run could not be prepared";
+
+    /** Optional: without it an unpinned workflow's incident closes by itself after a week, as before. */
+    private NotificationDeliveryService notificationDelivery;
+
+    @Autowired(required = false)
+    public void setNotificationDelivery(NotificationDeliveryService notificationDelivery) {
+        this.notificationDelivery = notificationDelivery;
+    }
 
     /**
      * @param executionService  used to mint the production run when a pinned version has
@@ -313,6 +322,12 @@ public class WorkflowPinService {
                 log.warn("[WorkflowPinService] trigger sync failed for workflow {}: {}",
                         workflowId, e.getMessage());
             }
+        }
+
+        // Unpinned: nothing of this workflow runs in production any more, so nothing is "still
+        // failing". A re-pin is left alone: its next run closes or continues the incident.
+        if (version == null && notificationDelivery != null) {
+            notificationDelivery.onWorkflowStopped(workflowId);
         }
 
         return new PinResult.Success(version, newProductionRunIdPublic);

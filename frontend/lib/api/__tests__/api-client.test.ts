@@ -910,6 +910,26 @@ describe('ApiClient', () => {
       expect(tokenProvider).toHaveBeenCalledTimes(2);
     });
 
+    it('asks the provider for a FORCED refresh after a 401, never for the cached token (15-min tokens, LC-014)', async () => {
+      // A provider that caches: it only mints a new token when forced. Before the fix the 401
+      // path called it with no argument, got the refused token back and logged the user out.
+      const tokenProvider = vi.fn(async (options?: { forceRefresh?: boolean }) =>
+        (options?.forceRefresh ? 'fresh' : 'cached'));
+      client.setTokenProvider(tokenProvider);
+      const onAuthFailure = vi.fn();
+      client.setOnAuthFailure(onAuthFailure);
+
+      fetchMock
+        .mockResolvedValueOnce(errorJsonResponse(401, { message: 'token expired' }))
+        .mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+      await expect(client.get('/protected')).resolves.toEqual({ ok: true });
+
+      expect(tokenProvider).toHaveBeenNthCalledWith(2, { forceRefresh: true });
+      expect(fetchMock.mock.calls[1][1].headers['Authorization']).toBe('Bearer fresh');
+      expect(onAuthFailure).not.toHaveBeenCalled();
+    });
+
     it('does NOT retry and fires onAuthFailure once when the refresh yields the SAME token (dead session, no loop)', async () => {
       const tokenProvider = vi.fn().mockResolvedValue('same');
       client.setTokenProvider(tokenProvider);

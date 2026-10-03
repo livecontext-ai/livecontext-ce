@@ -2,6 +2,7 @@ package com.apimarketplace.conversation.service.ai;
 
 import com.apimarketplace.agent.client.dto.execution.JsonCompletionRequestDto;
 import com.apimarketplace.agent.client.dto.execution.JsonCompletionResponseDto;
+import com.apimarketplace.common.classification.DataSensitivity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -151,6 +152,73 @@ class HttpLlmJsonInvokerTest {
         assertThatThrownBy(() -> invoker.invoke("google", "m", "s", "u"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("empty body");
+    }
+
+    @Test
+    @DisplayName("LC-004: RESTRICTED sensitivity is threaded into JsonCompletionRequestDto.dataSensitivity")
+    void restrictedSensitivityRidesOnTheRequestBody() {
+        // Pre-fix, every production call reached agent-service through the legacy 5-arg
+        // JsonCompletionRequestDto constructor, which hardcodes dataSensitivity=null - making
+        // JsonCompletionService's RestrictedDataRouting check a no-op for every COLD summary.
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class),
+                eq(JsonCompletionResponseDto.class)))
+                .thenReturn(ResponseEntity.ok(new JsonCompletionResponseDto("{}")));
+
+        invoker.invoke("anthropic", "claude-haiku-4-5", "s", "u", "tenant-9", DataSensitivity.RESTRICTED);
+
+        ArgumentCaptor<HttpEntity<JsonCompletionRequestDto>> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        org.mockito.Mockito.verify(restTemplate).exchange(any(String.class), eq(HttpMethod.POST),
+                captor.capture(), eq(JsonCompletionResponseDto.class));
+        assertThat(captor.getValue().getBody().dataSensitivity()).isEqualTo("RESTRICTED");
+    }
+
+    @Test
+    @DisplayName("LC-004: explicit NORMAL sensitivity sends dataSensitivity=\"NORMAL\" (parses the same as null)")
+    void normalSensitivitySendsNormalTag() {
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class),
+                eq(JsonCompletionResponseDto.class)))
+                .thenReturn(ResponseEntity.ok(new JsonCompletionResponseDto("{}")));
+
+        invoker.invoke("anthropic", "claude-haiku-4-5", "s", "u", "tenant-9", DataSensitivity.NORMAL);
+
+        ArgumentCaptor<HttpEntity<JsonCompletionRequestDto>> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        org.mockito.Mockito.verify(restTemplate).exchange(any(String.class), eq(HttpMethod.POST),
+                captor.capture(), eq(JsonCompletionResponseDto.class));
+        assertThat(captor.getValue().getBody().dataSensitivity()).isEqualTo("NORMAL");
+    }
+
+    @Test
+    @DisplayName("LC-004: no sensitivity argument at all (the 5-arg tenant overload) still omits the tag")
+    void noSensitivityArgumentOmitsTheTag() {
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class),
+                eq(JsonCompletionResponseDto.class)))
+                .thenReturn(ResponseEntity.ok(new JsonCompletionResponseDto("{}")));
+
+        invoker.invoke("anthropic", "claude-haiku-4-5", "s", "u", "tenant-9");
+
+        ArgumentCaptor<HttpEntity<JsonCompletionRequestDto>> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        org.mockito.Mockito.verify(restTemplate).exchange(any(String.class), eq(HttpMethod.POST),
+                captor.capture(), eq(JsonCompletionResponseDto.class));
+        assertThat(captor.getValue().getBody().dataSensitivity()).isNull();
+    }
+
+    @Test
+    @DisplayName("LC-004: the 4-arg LlmJsonInvoker.invoke(sensitivity) default override forwards RESTRICTED too")
+    void fourArgOverrideWithSensitivityForwardsTheTag() {
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class),
+                eq(JsonCompletionResponseDto.class)))
+                .thenReturn(ResponseEntity.ok(new JsonCompletionResponseDto("{}")));
+
+        // Exercises the ColdSummarizerService.LlmJsonInvoker SAM's sensitivity-aware default
+        // method as HttpLlmJsonInvoker overrides it (tenantId=null path).
+        ColdSummarizerService.LlmJsonInvoker asInvoker = invoker;
+        asInvoker.invoke("anthropic", "claude-haiku-4-5", "s", "u", DataSensitivity.RESTRICTED);
+
+        ArgumentCaptor<HttpEntity<JsonCompletionRequestDto>> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        org.mockito.Mockito.verify(restTemplate).exchange(any(String.class), eq(HttpMethod.POST),
+                captor.capture(), eq(JsonCompletionResponseDto.class));
+        assertThat(captor.getValue().getBody().dataSensitivity()).isEqualTo("RESTRICTED");
+        assertThat(captor.getValue().getBody().tenantId()).isNull();
     }
 
     @Test

@@ -3,10 +3,12 @@ package com.apimarketplace.orchestrator.schedule;
 import com.apimarketplace.common.web.PlanLimits;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.repository.WorkflowRepository;
+import com.apimarketplace.orchestrator.services.notification.delivery.NotificationDeliveryService;
 import com.apimarketplace.orchestrator.trigger.queue.PlanPriorityMapper;
 import com.apimarketplace.trigger.client.TriggerClient;
 import com.apimarketplace.trigger.client.dto.ScheduledExecutionDto;
 import com.apimarketplace.trigger.client.dto.StandaloneScheduleRequest;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -38,6 +40,25 @@ public class ScheduleOverviewController {
         this.triggerClient = triggerClient;
         this.workflowRepository = workflowRepository;
         this.planLimitsEnabled = planLimitsEnabled;
+    }
+
+    /**
+     * Optional, so the tests that build this controller by hand keep working: without it a
+     * stopped schedule leaves its incident to close by itself after a week, as before.
+     */
+    private NotificationDeliveryService notificationDelivery;
+
+    @Autowired(required = false)
+    public void setNotificationDelivery(NotificationDeliveryService notificationDelivery) {
+        this.notificationDelivery = notificationDelivery;
+    }
+
+    /**
+     * The owner paused or deleted a schedule of this workflow: its failure incident closes and
+     * the "still failing" reminders stop. If another trigger keeps it failing, that is a new alert.
+     */
+    private void workflowStopped(UUID workflowId) {
+        if (notificationDelivery != null) notificationDelivery.onWorkflowStopped(workflowId);
     }
 
     /**
@@ -108,6 +129,7 @@ public class ScheduleOverviewController {
         if (result == null) {
             return ResponseEntity.notFound().build();
         }
+        if (!enabled && !result.isEnabled()) workflowStopped(result.getWorkflowId());
         return ResponseEntity.ok(Map.of("success", true, "enabled", enabled));
     }
 
@@ -208,10 +230,14 @@ public class ScheduleOverviewController {
             @PathVariable UUID scheduleId) {
         ResponseEntity<?> denied = refuseViewer(orgRole, organizationId, tenantId, "delete a schedule");
         if (denied != null) return denied;
+        // Read BEFORE the archive, which answers a boolean only. Used for nothing but the id of
+        // the workflow whose incident to close, and only once the scoped archive has succeeded.
+        ScheduledExecutionDto schedule = notificationDelivery != null ? triggerClient.getSchedule(scheduleId) : null;
         boolean archived = triggerClient.archiveScheduleById(scheduleId, "USER_DELETED", organizationId, tenantId);
         if (!archived) {
             return ResponseEntity.notFound().build();
         }
+        if (schedule != null) workflowStopped(schedule.getWorkflowId());
         return ResponseEntity.ok(Map.of("success", true));
     }
 

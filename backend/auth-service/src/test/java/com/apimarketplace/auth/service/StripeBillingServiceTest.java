@@ -281,6 +281,67 @@ class StripeBillingServiceTest {
         }
 
         @Test
+        @DisplayName("a partner-offer checkout carries the offer to Stripe (session and subscription), returns to the offer on cancel and to its welcome on success")
+        void partnerOfferCheckoutCarriesTheOffer() throws Exception {
+            ReflectionTestUtils.setField(stripeBillingService, "checkoutSuccessUrl", "https://livecontext.ai/app/settings/pricing?checkout=success");
+            ReflectionTestUtils.setField(stripeBillingService, "checkoutCancelUrl", "https://livecontext.ai/app/settings/pricing?checkout=cancelled");
+            User user = buildUser(USER_ID, "test@example.com");
+            BillingCustomer bc = buildBillingCustomer(1L, user, STRIPE_CUSTOMER_ID);
+            when(priceCacheService.getPriceId("TEAM", "yearly")).thenReturn(Optional.of("price_team_yearly"));
+            when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.empty());
+            when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.of(bc));
+            when(customerService.retrieve(STRIPE_CUSTOMER_ID)).thenReturn(mock(Customer.class));
+            when(nonceUtil.generateNonce(USER_ID)).thenReturn(NONCE_VALUE);
+            Session session = mock(Session.class);
+            when(session.getUrl()).thenReturn("https://checkout.stripe.com/partner");
+            when(session.getId()).thenReturn("cs_partner");
+            when(sessionService.create(any(SessionCreateParams.class))).thenReturn(session);
+
+            String url = stripeBillingService.createCheckoutSession(USER_ID, "TEAM", "yearly", 0, null, null, "Abc23XyZ9k");
+
+            assertThat(url).isEqualTo("https://checkout.stripe.com/partner");
+            var params = ArgumentCaptor.forClass(SessionCreateParams.class);
+            verify(sessionService).create(params.capture());
+            assertThat(params.getValue().getMetadata()).containsEntry(StripeBillingService.PARTNER_OFFER_METADATA, "Abc23XyZ9k");
+            // On the subscription: its first paid invoice leads the webhook back to the offer.
+            assertThat(params.getValue().getSubscriptionData().getMetadata())
+                    .containsEntry(StripeBillingService.PARTNER_OFFER_METADATA, "Abc23XyZ9k");
+            assertThat(params.getValue().getSuccessUrl())
+                    .isEqualTo("https://livecontext.ai/app/settings/pricing?checkout=success&session_id={CHECKOUT_SESSION_ID}&offer=Abc23XyZ9k");
+            assertThat(params.getValue().getCancelUrl())
+                    .isEqualTo("https://livecontext.ai/offer/Abc23XyZ9k?plan=team&tier=0&cycle=yearly");
+        }
+
+        @Test
+        @DisplayName("an ordinary checkout carries no offer and keeps its usual return pages")
+        void ordinaryCheckoutCarriesNoOffer() throws Exception {
+            ReflectionTestUtils.setField(stripeBillingService, "checkoutSuccessUrl", "https://livecontext.ai/app/settings/pricing?checkout=success");
+            ReflectionTestUtils.setField(stripeBillingService, "checkoutCancelUrl", "https://livecontext.ai/app/settings/pricing?checkout=cancelled");
+            User user = buildUser(USER_ID, "test@example.com");
+            BillingCustomer bc = buildBillingCustomer(1L, user, STRIPE_CUSTOMER_ID);
+            when(priceCacheService.getPriceId("STARTER", "monthly")).thenReturn(Optional.of(STRIPE_PRICE_ID_STARTER_MONTHLY));
+            when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.empty());
+            when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.of(bc));
+            when(customerService.retrieve(STRIPE_CUSTOMER_ID)).thenReturn(mock(Customer.class));
+            when(nonceUtil.generateNonce(USER_ID)).thenReturn(NONCE_VALUE);
+            Session session = mock(Session.class);
+            when(session.getUrl()).thenReturn("https://checkout.stripe.com/plain");
+            when(session.getId()).thenReturn("cs_plain");
+            when(sessionService.create(any(SessionCreateParams.class))).thenReturn(session);
+
+            stripeBillingService.createCheckoutSession(USER_ID, "STARTER", "monthly");
+
+            var params = ArgumentCaptor.forClass(SessionCreateParams.class);
+            verify(sessionService).create(params.capture());
+            assertThat(params.getValue().getMetadata()).doesNotContainKey(StripeBillingService.PARTNER_OFFER_METADATA);
+            assertThat(params.getValue().getSubscriptionData()).isNull();
+            assertThat(params.getValue().getCancelUrl()).isEqualTo("https://livecontext.ai/app/settings/pricing?checkout=cancelled");
+            assertThat(params.getValue().getSuccessUrl()).doesNotContain("offer=");
+        }
+
+        @Test
         void personalCheckoutPinsSessionSelectionAndStripeIdempotencyKey() throws Exception {
             ReflectionTestUtils.setField(stripeBillingService, "personalOffers", personalOffers);
             User user = buildUser(USER_ID, "test@example.com");
@@ -320,6 +381,8 @@ class StripeBillingServiceTest {
             var options = ArgumentCaptor.forClass(com.stripe.net.RequestOptions.class);
             verify(sessionService).create(params.capture(), options.capture());
             assertThat(params.getValue().getExpiresAt()).isEqualTo(attempt.getSessionExpiresAt().getEpochSecond());
+            // No cancel page configured: none is made up (the offer's return needs its origin).
+            assertThat(params.getValue().getCancelUrl()).isNull();
             assertThat(params.getValue().getLineItems()).extracting(SessionCreateParams.LineItem::getPrice)
                     .containsExactly("price_frozen", "price_pack_frozen");
             assertThat(params.getValue().getSubscriptionData().getMetadata())
@@ -328,6 +391,55 @@ class StripeBillingServiceTest {
                     .isEqualTo("personal-offer-checkout:" + attempt.getId());
             verify(personalOffers).attachSession(eq(attempt.getId()), eq("cs_offer"), anyString(), any());
             verify(personalOffers).markFirstInvoicePreview(attempt.getId(), 1000L);
+        }
+
+        @Test
+        @DisplayName("regression: a cancelled personal-offer checkout returns to the offer's page with the choice preselected, not to the plain price list")
+        void personalCheckoutCancelsBackToTheOffer() throws Exception {
+            ReflectionTestUtils.setField(stripeBillingService, "personalOffers", personalOffers);
+            ReflectionTestUtils.setField(stripeBillingService, "checkoutSuccessUrl", "https://livecontext.ai/app/settings/pricing?checkout=success");
+            ReflectionTestUtils.setField(stripeBillingService, "checkoutCancelUrl", "https://livecontext.ai/app/settings/pricing?checkout=cancelled");
+            User user = buildUser(USER_ID, "test@example.com");
+            BillingCustomer bc = buildBillingCustomer(1L, user, STRIPE_CUSTOMER_ID);
+            when(priceCacheService.getPriceId("PRO", "yearly")).thenReturn(Optional.of("price_current"));
+            when(priceCacheService.getCreditPriceId("PRO", "yearly")).thenReturn(Optional.of("price_pack_current"));
+            when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.empty());
+            when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.of(bc));
+            when(customerService.retrieve(STRIPE_CUSTOMER_ID)).thenReturn(mock(Customer.class));
+            when(nonceUtil.generateNonce(USER_ID)).thenReturn(NONCE_VALUE);
+            var attempt = new PersonalOfferCheckoutAttempt();
+            attempt.setId(java.util.UUID.randomUUID());
+            attempt.setRewardCodeId(50L);
+            attempt.setPlanPriceId("price_frozen");
+            attempt.setCreditPriceId("price_pack_frozen");
+            attempt.setSessionExpiresAt(java.time.Instant.now().plusSeconds(2100));
+            when(personalOffers.prepareCheckout(eq(USER_ID), eq(50L), eq(2), eq("PRO"), eq(3),
+                    eq("yearly"), eq("price_current"), eq("price_pack_current")))
+                    .thenReturn(new PersonalOfferService.PreparedCheckout(attempt, false));
+            when(personalOffers.bindCheckoutIdentity(eq(attempt.getId()), eq(STRIPE_CUSTOMER_ID), eq(NONCE_VALUE)))
+                    .thenReturn(new PersonalOfferService.CheckoutIdentity(STRIPE_CUSTOMER_ID, NONCE_VALUE));
+            var preview = new com.stripe.model.Invoice();
+            preview.setAmountDue(1000L);
+            when(invoiceService.createPreview(any(com.stripe.param.InvoiceCreatePreviewParams.class))).thenReturn(preview);
+            Session session = mock(Session.class);
+            when(session.getId()).thenReturn("cs_offer");
+            when(session.getUrl()).thenReturn("https://checkout.stripe.com/offer");
+            when(sessionService.create(any(SessionCreateParams.class), any(com.stripe.net.RequestOptions.class))).thenReturn(session);
+
+            // A partner-offer token sent alongside: the personal offer wins, nothing of the partner's is carried.
+            stripeBillingService.createCheckoutSession(USER_ID, "PRO", "yearly", 3, 50L, 2, "Abc23XyZ9k");
+
+            var params = ArgumentCaptor.forClass(SessionCreateParams.class);
+            verify(sessionService).create(params.capture(), any(com.stripe.net.RequestOptions.class));
+            assertThat(params.getValue().getCancelUrl())
+                    .isEqualTo("https://livecontext.ai/offer/personal?planCode=pro&creditTierIndex=3&billingCycle=yearly&checkout=cancelled");
+            assertThat(params.getValue().getMetadata()).doesNotContainKey(StripeBillingService.PARTNER_OFFER_METADATA);
+            assertThat(params.getValue().getSubscriptionData().getMetadata()).doesNotContainKey(StripeBillingService.PARTNER_OFFER_METADATA);
+            assertThat(params.getValue().getSuccessUrl()).doesNotContain("offer=");
+            // Success still lands on the pricing page, which shows the bonus being credited.
+            assertThat(params.getValue().getSuccessUrl())
+                    .isEqualTo("https://livecontext.ai/app/settings/pricing?checkout=success&session_id={CHECKOUT_SESSION_ID}");
         }
 
         @Test
@@ -1580,6 +1692,40 @@ class StripeBillingServiceTest {
             assertThat(params.getCustomerUpdate().getName())
                     .as("tax_id_collection with an existing customer requires customer_update.name=auto")
                     .isEqualTo(SessionCreateParams.CustomerUpdate.Name.AUTO);
+        }
+
+        @Test
+        @DisplayName("regression: a partner-offer checkout retried after no-such-customer still carries the offer (session, subscription, cancel return)")
+        void retryCheckoutKeepsThePartnerOffer() throws Exception {
+            ReflectionTestUtils.setField(stripeBillingService, "checkoutSuccessUrl", "https://livecontext.ai/app/settings/pricing?checkout=success");
+            ReflectionTestUtils.setField(stripeBillingService, "checkoutCancelUrl", "https://livecontext.ai/app/settings/pricing?checkout=cancelled");
+            User user = buildUser(USER_ID, "test@example.com");
+            BillingCustomer bc = buildBillingCustomer(1L, user, STRIPE_CUSTOMER_ID);
+            when(priceCacheService.getPriceId("TEAM", "yearly")).thenReturn(Optional.of("price_team_yearly"));
+            when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.empty());
+            when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.of(bc));
+            when(nonceUtil.generateNonce(USER_ID)).thenReturn(NONCE_VALUE);
+            when(customerService.retrieve(STRIPE_CUSTOMER_ID)).thenReturn(mock(Customer.class));
+            Customer recreated = mock(Customer.class);
+            when(recreated.getId()).thenReturn("cus_recreated");
+            when(customerService.create(any(CustomerCreateParams.class))).thenReturn(recreated);
+            when(billingCustomerRepository.save(any(BillingCustomer.class))).thenAnswer(inv -> inv.getArgument(0));
+            Session session = mock(Session.class);
+            when(session.getUrl()).thenReturn("https://checkout.stripe.com/retry");
+            when(session.getId()).thenReturn("cs_retry");
+            when(sessionService.create(any(SessionCreateParams.class)))
+                    .thenThrow(new InvalidRequestException("No such customer: " + STRIPE_CUSTOMER_ID, null, "resource_missing", null, 404, null))
+                    .thenReturn(session);
+
+            stripeBillingService.createCheckoutSession(USER_ID, "TEAM", "yearly", 0, null, null, "Abc23XyZ9k");
+
+            ArgumentCaptor<SessionCreateParams> captor = ArgumentCaptor.forClass(SessionCreateParams.class);
+            verify(sessionService, times(2)).create(captor.capture());
+            SessionCreateParams retry = captor.getAllValues().get(1);
+            assertThat(retry.getMetadata()).containsEntry(StripeBillingService.PARTNER_OFFER_METADATA, "Abc23XyZ9k");
+            assertThat(retry.getSubscriptionData().getMetadata()).containsEntry(StripeBillingService.PARTNER_OFFER_METADATA, "Abc23XyZ9k");
+            assertThat(retry.getCancelUrl()).isEqualTo("https://livecontext.ai/offer/Abc23XyZ9k?plan=team&tier=0&cycle=yearly");
         }
 
         @Test

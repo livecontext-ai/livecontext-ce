@@ -215,7 +215,7 @@ class EmbeddedAuthControllerResetTest {
             + "which is what is being tested here: the rule itself belongs to PasswordAuthService "
             + "and is pinned there, not by this stubbed message")
     void weakPasswordIsBadRequest() {
-        doThrow(new IllegalArgumentException("New password must be at least 8 characters"))
+        doThrow(new IllegalArgumentException("New password must be at least 12 characters"))
                 .when(passwordResetService).resetPassword("raw", "short");
 
         ResponseEntity<Map<String, Object>> res =
@@ -224,7 +224,7 @@ class EmbeddedAuthControllerResetTest {
         assertThat(res.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         // The requester's own input, so naming it leaks nothing and saves a
         // wasted link.
-        assertThat(String.valueOf(res.getBody())).contains("8 characters");
+        assertThat(String.valueOf(res.getBody())).contains("12 characters");
     }
 
     @Test

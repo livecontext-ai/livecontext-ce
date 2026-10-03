@@ -62,6 +62,8 @@ class MonolithSecurityFilterTest {
         MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/storage/quota");
         request.setRemoteAddr("127.0.0.1");
+        // In-process caller: presents this boot's secret (CASA LC-032).
+        request.addHeader(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret());
         request.addHeader("X-User-ID", "42");
         request.addHeader("X-User-Roles", "USER");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -320,7 +322,7 @@ class MonolithSecurityFilterTest {
                 "userId", 42,
                 "roles", List.of("USER"),
                 "token_type", "access",
-                "exp", Instant.now().minusSeconds(5).getEpochSecond()
+                "exp", Instant.now().minusSeconds(MonolithSecurityFilter.EXP_LEEWAY_SECONDS + 5).getEpochSecond()
         )));
         MockHttpServletResponse response = new MockHttpServletResponse();
         AtomicReference<ServletRequest> captured = new AtomicReference<>();
@@ -1215,12 +1217,36 @@ class MonolithSecurityFilterTest {
     }
 
     @Test
-    @DisplayName("rejects an access token that expired one second ago (strict greater-than boundary)")
+    @DisplayName("LC-014: accepts an access token that expired 10 s ago (inside the 30 s skew leeway, as the gateway does)")
+    void jwtInsideSkewLeewayIsAccepted() throws Exception {
+        KeyPair keyPair = generateRsaKeyPair();
+        long fixedMillis = 1_700_000_000_000L;
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                () -> keyPair.getPublic(), List.of(), null, () -> fixedMillis);
+        MockHttpServletRequest request = externalRequest("/api/storage/quota");
+        request.addHeader("Authorization", "Bearer " + signedJwt(keyPair, Map.of(
+                "sub", "42",
+                "userId", 42,
+                "roles", List.of("USER"),
+                "token_type", "access",
+                "exp", fixedMillis / 1000 - 10
+        )));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(MonolithSecurityFilter.EXP_LEEWAY_SECONDS).isEqualTo(30);
+        assertThat(captured.get()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("rejects an access token that expired one second beyond the 30 s skew leeway (strict greater-than boundary)")
     void jwtExpiredOneSecondAgoIsRejected() throws Exception {
         KeyPair keyPair = generateRsaKeyPair();
         MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> keyPair.getPublic(), List.of());
         MockHttpServletRequest request = externalRequest("/api/storage/quota");
-        long expiredSecond = System.currentTimeMillis() / 1000 - 1;
+        long expiredSecond = System.currentTimeMillis() / 1000 - MonolithSecurityFilter.EXP_LEEWAY_SECONDS - 1;
         request.addHeader("Authorization", "Bearer " + signedJwt(keyPair, Map.of(
                 "sub", "42",
                 "userId", 42,

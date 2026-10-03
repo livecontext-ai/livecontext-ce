@@ -5,6 +5,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import com.apimarketplace.common.web.GatewaySignatureV2Interceptor;
+import com.apimarketplace.common.web.InternalGatewaySigner;
 import com.apimarketplace.common.web.OrgContextHeaderForwarder;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
@@ -53,8 +55,16 @@ public class AuthClient {
     // chunks 2+3 must-fix).
     private final RestTemplate boundedRestTemplate;
     // Used ONLY by {@link #sendNotificationMail}: long enough for an SMTP send.
-    private final RestTemplate mailRestTemplate = createMailRestTemplate();
+    private final RestTemplate mailRestTemplate;
     private final String baseUrl;
+
+    /**
+     * Provider id every call is signed with. auth-service can require the gateway HMAC on its
+     * whole {@code /api/internal/auth/} prefix ({@code AUTH_INTERNAL_HMAC_REQUIRED_PATH}), and
+     * this client is the main caller of that prefix, so every request it sends is signed.
+     */
+    static final String INTERNAL_PROVIDER_ID = "internal-auth-client";
+    private final String gatewaySecretKey;
 
     // Simple in-memory cache for user summaries (userId → CachedUserSummary).
     // Shared by {@link #getDisplayName} (single-user, name-only consumer) and
@@ -80,16 +90,41 @@ public class AuthClient {
         }
     }
 
+    /** Unsigned client: only for a deployment whose auth-service verifies nothing (dev, CE). */
     public AuthClient(String authServiceUrl) {
-        this.restTemplate = new RestTemplate();
-        this.boundedRestTemplate = createBoundedRestTemplate();
-        this.baseUrl = authServiceUrl;
+        this(authServiceUrl, null);
+    }
+
+    /**
+     * Client that signs every call with the shared gateway secret (v1 headers, plus the v2
+     * signature added at send time). A blank secret leaves calls unsigned, as
+     * {@link InternalGatewaySigner#stamp} does.
+     */
+    public AuthClient(String authServiceUrl, String gatewaySecretKey) {
+        this(signing(new RestTemplate(), gatewaySecretKey), authServiceUrl, gatewaySecretKey);
     }
 
     public AuthClient(RestTemplate restTemplate, String authServiceUrl) {
+        this(restTemplate, authServiceUrl, null);
+    }
+
+    /**
+     * @param restTemplate used as given: a caller that wants the v2 signature on it adds a
+     *                     {@link GatewaySignatureV2Interceptor} itself. The client's own bounded
+     *                     and mail templates always get one.
+     */
+    public AuthClient(RestTemplate restTemplate, String authServiceUrl, String gatewaySecretKey) {
         this.restTemplate = restTemplate;
-        this.boundedRestTemplate = createBoundedRestTemplate();
+        this.gatewaySecretKey = gatewaySecretKey;
+        this.boundedRestTemplate = signing(createBoundedRestTemplate(), gatewaySecretKey);
+        this.mailRestTemplate = signing(createMailRestTemplate(), gatewaySecretKey);
         this.baseUrl = authServiceUrl;
+    }
+
+    /** Adds the send-time v2 signature; a no-op on a request {@link #buildHeaders} did not sign. */
+    private static RestTemplate signing(RestTemplate template, String gatewaySecretKey) {
+        template.getInterceptors().add(new GatewaySignatureV2Interceptor(() -> gatewaySecretKey));
+        return template;
     }
 
     private static RestTemplate createBoundedRestTemplate() {
@@ -935,7 +970,7 @@ public class AuthClient {
         return new RestTemplate(factory);
     }
 
-    private static HttpHeaders buildHeaders(String tenantId) {
+    private HttpHeaders buildHeaders(String tenantId) {
         HttpHeaders headers = new HttpHeaders();
         headers.set("Content-Type", "application/json");
         if (tenantId != null) {
@@ -946,6 +981,9 @@ public class AuthClient {
         // (credential read, org-aware quota check, etc.) see the active
         // workspace. No-op for async/scheduled paths with no request context.
         OrgContextHeaderForwarder.forward(headers);
+        // Signed LAST, over the X-User-ID / X-Organization-ID the request actually carries
+        // (forward() may have copied them from the inbound request).
+        InternalGatewaySigner.stamp(headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
         return headers;
     }
 

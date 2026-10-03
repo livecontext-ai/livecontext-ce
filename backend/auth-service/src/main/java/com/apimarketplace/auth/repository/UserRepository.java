@@ -61,6 +61,23 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByApiKeyHash(String apiKeyHash);
 
     /**
+     * Legacy single-key lookup over every hash form the key can be stored under
+     * ({@code CredentialEncryptionService.hmacHashCandidates}): one query, not one per form.
+     */
+    List<User> findByApiKeyHashIn(java.util.Collection<String> apiKeyHashes);
+
+    /**
+     * Moves a legacy key's stored hash to the current HMAC key after a successful lookup under an
+     * older form (CASA LC-070): the hash is one-way, so this is the only moment it can move.
+     * Compare-and-set on the old hash, own transaction (the resolve path runs NOT_SUPPORTED).
+     */
+    @Modifying
+    @org.springframework.transaction.annotation.Transactional(
+            propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    @Query("UPDATE User u SET u.apiKeyHash = :newHash WHERE u.id = :userId AND u.apiKeyHash = :oldHash")
+    int rehashApiKey(@Param("userId") Long userId, @Param("oldHash") String oldHash, @Param("newHash") String newHash);
+
+    /**
      * The subset of {@code userIds} that hold the platform ADMIN role and are still
      * enabled. Feeds {@code VerifiedAccountService}: an admin is verified by virtue of
      * the role, with nothing stored on their profile, so today's admins and tomorrow's

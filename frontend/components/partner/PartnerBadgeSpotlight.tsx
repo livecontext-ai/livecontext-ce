@@ -4,18 +4,19 @@ import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
 import { PartnerBadgeIcon } from '@/components/profile/PartnerBadgeIcon';
 import type { PublicPublicationSummary } from '@/lib/marketplace/publicPublications';
 import { PartnerTierChip } from './PartnerTierChip';
+import { PartnerExampleAppScreen, type ExampleAppScreenCopy } from './PartnerExampleAppScreen';
 
 /**
  * The illustrative partner of the /partners page, a fictional agency: the hero card and the badge
  * spotlight show the same one. It has no account behind it, so it links nowhere.
  *
- * <p>`avatar` is a placeholder (one of the product's illustrated avatars): drop the final
- * portrait in `public/partners/examples/` and point `avatar` at it.
+ * <p>`avatar` is a generated portrait of a person who does not exist (the agency's fictional
+ * founder), kept with the other example assets in `public/examples/` (a folder the proxy serves).
  */
 export const PARTNER_EXAMPLE = {
   publisher: 'Northwind Automation',
   handle: 'northwind',
-  avatar: '/avatars/avatar-2.svg',
+  avatar: '/examples/northwind-founder.webp',
   rating: 4.9,
   reviews: 41,
   apps: 12,
@@ -93,6 +94,8 @@ export interface BadgeSpotlightCopy {
   profileApps: string;
   /** "4.9 (41 reviews)", the rating formatted for the locale. */
   profileRating: string;
+  /** The words of the app's screen, drawn as its card's cover. */
+  screen: Omit<ExampleAppScreenCopy, 'appTitle'>;
 }
 
 const SPOTLIGHT_BADGE_GLOW = '.lc-spotlight-card [data-badge="partner"]{transform:scale(1.45);filter:drop-shadow(0 0 5px rgba(242,182,64,0.95));}';
@@ -144,9 +147,12 @@ function Neighbour({ listing }: { listing: PublicPublicationSummary | null }) {
 export function PartnerBadgeSpotlight({
   copy,
   neighbours,
+  locale,
 }: {
   copy: BadgeSpotlightCopy;
   neighbours: readonly PublicPublicationSummary[];
+  /** The reader's locale, for the amounts on the app's screen. */
+  locale: string;
 }) {
   // A marketplace that could not be read leaves quiet placeholders rather than a hole.
   const [left, right] = Array.from({ length: NEIGHBOURS }, (_, i) => neighbours[i] ?? null);
@@ -202,6 +208,7 @@ export function PartnerBadgeSpotlight({
                   publisherPartner
                   publisherAvatarSrc={PARTNER_EXAMPLE.avatar}
                   badgeLabel={copy.badge}
+                  cover={<PartnerExampleAppScreen copy={{ ...copy.screen, appTitle: copy.appTitle }} locale={locale} />}
                 />
               </div>
             </div>

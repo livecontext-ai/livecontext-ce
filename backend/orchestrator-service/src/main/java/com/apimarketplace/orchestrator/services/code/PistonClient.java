@@ -194,7 +194,7 @@ public class PistonClient implements CodeExecutor {
             }
 
             if (statusCode != 200) {
-                logger.error("Piston HTTP {} response: {}", statusCode, responseBody);
+                logger.error("Piston HTTP {} response: {}", statusCode, com.apimarketplace.common.logging.PayloadLogSafety.describeText(responseBody, 300));
                 throw new RuntimeException("Piston returned HTTP " + statusCode + ": " + responseBody);
             }
 

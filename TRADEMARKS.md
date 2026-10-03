@@ -3,7 +3,7 @@
 > Draft. This policy is separate from the software license and needs legal
 > review before it is treated as final.
 
-The LiveContext Sustainable Use License 1.0 (see LICENSE) covers the **source
+The LiveContext Sustainable Use License 1.1 (see LICENSE) covers the **source
 code** of LiveContext Community Edition. It does not grant any rights to the
 LiveContext brand.
 

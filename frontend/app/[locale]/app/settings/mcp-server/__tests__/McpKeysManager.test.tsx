@@ -17,6 +17,7 @@ vi.mock('next-intl', () => ({
 
 vi.mock('@/lib/utils/dateFormatters', () => ({
   formatUtcDate: () => 'Jul 10, 2026',
+  parseUtcAware: (s: string) => new Date(s),
 }));
 
 const listKeys = vi.fn();
@@ -67,6 +68,18 @@ describe('McpKeysManager', () => {
     expect(screen.getByText('keys.fullAccess')).toBeTruthy();
     expect(screen.getByText('workflow')).toBeTruthy();
     expect(screen.getByText('table')).toBeTruthy();
+  });
+
+  it('shows when a key expires, and marks an already expired key (LC-054)', async () => {
+    listKeys.mockResolvedValue([
+      { id: 'k1', name: 'Live', maskedApiKey: 'lc_live_...aaaa', scopes: null, createdAt: '2026-07-10', lastUsedAt: null, expiresAt: '2999-01-01T00:00:00Z' },
+      { id: 'k2', name: 'Old', maskedApiKey: 'lc_live_...bbbb', scopes: null, createdAt: '2020-07-10', lastUsedAt: null, expiresAt: '2021-01-01T00:00:00Z' },
+      { id: 'k3', name: 'Legacy', maskedApiKey: 'lc_live_...cccc', scopes: null, createdAt: '2020-07-10', lastUsedAt: null, expiresAt: null },
+    ]);
+    renderManager();
+    expect(await screen.findByText('Live')).toBeTruthy();
+    expect(screen.getAllByText('keys.expiresAt:Jul 10, 2026')).toHaveLength(1);
+    expect(screen.getAllByText('keys.expired:Jul 10, 2026')).toHaveLength(1);
   });
 
   it('creates a FULL-access key (scopes null) and shows the plaintext once', async () => {

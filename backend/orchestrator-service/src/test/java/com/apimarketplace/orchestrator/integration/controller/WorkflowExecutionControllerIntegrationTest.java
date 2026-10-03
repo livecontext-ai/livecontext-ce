@@ -88,6 +88,9 @@ class WorkflowExecutionControllerIntegrationTest extends BaseControllerIntegrati
         when(creditClient.checkCredits(any())).thenReturn(true);
         lenient().when(orgAccessGuard.canWrite(any(), any(), any(), any(), any()))
             .thenReturn(true);
+        // Run reads go through the org deny-list too (CASA read RBAC, canReadRun).
+        lenient().when(orgAccessGuard.canAccess(any(), any(), any(), any(), any()))
+            .thenReturn(true);
 
         testWorkflow = createAndSaveWorkflow(TENANT_ID, "Execution Test Workflow");
     }

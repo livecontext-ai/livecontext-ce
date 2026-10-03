@@ -185,6 +185,18 @@ public class StripeBillingService {
 
     public String createCheckoutSession(Long userId, String planCode, String billingCycle, int creditTierIndex,
                                         Long personalOfferId, Integer offerVersion) throws Exception {
+        return createCheckoutSession(userId, planCode, billingCycle, creditTierIndex, personalOfferId, offerVersion, null);
+    }
+
+    /**
+     * @param partnerOfferToken a checkout opened from a partner's offer page (already checked live by
+     *     {@link PartnerOfferCheckoutService}): the session and its subscription carry it in their
+     *     metadata, so what the offer brings after payment is driven by Stripe's webhook, never by the
+     *     browser; a cancel returns to that offer, a success to the offer's welcome. Ignored for a
+     *     personal-offer checkout and for a plan change of a live subscription.
+     */
+    public String createCheckoutSession(Long userId, String planCode, String billingCycle, int creditTierIndex,
+                                        Long personalOfferId, Integer offerVersion, String partnerOfferToken) throws Exception {
         // MDC logging for traceability
         BillingMDC.context(userId, null, "checkout").withPlanCode(planCode);
         BillingMDC.logStart(log, "Creating checkout session for plan {} ({}) creditTier={}", planCode, billingCycle, creditTierIndex);
@@ -373,6 +385,18 @@ public class StripeBillingService {
 
         String successUrl = checkoutSuccessUrl + "&session_id={CHECKOUT_SESSION_ID}";
         String cancelUrl = checkoutCancelUrl;
+        // A checkout opened from a partner's offer: back to that offer (with the choice) on cancel,
+        // to the offer's welcome on success.
+        String partnerOffer = prepared == null ? partnerOfferToken : null;
+        if (partnerOffer != null) {
+            successUrl += "&offer=" + java.net.URLEncoder.encode(partnerOffer, java.nio.charset.StandardCharsets.UTF_8);
+            cancelUrl = partnerOfferCancelUrl(partnerOffer, normalizedPlanCode, creditTierIndex, billingCycle);
+        }
+        // A checkout opened on a personal offer: back to that offer (with the choice) on cancel,
+        // where its time left and its bonus still show, rather than the plain price list.
+        if (prepared != null) {
+            cancelUrl = personalOfferCancelUrl(normalizedPlanCode, creditTierIndex, billingCycle);
+        }
 
         log.info("Creating checkout session with URLs - successUrl: {}, cancelUrl: {}", successUrl, cancelUrl);
         
@@ -400,7 +424,8 @@ public class StripeBillingService {
                 creditPriceId,
                 creditQuantity,
                 creditTierIndex,
-                prepared == null ? null : prepared.attempt()
+                prepared == null ? null : prepared.attempt(),
+                partnerOffer
                                                        );
 
         try {
@@ -429,7 +454,7 @@ public class StripeBillingService {
                             bc.getProviderCustomerId(), priceId, retryNonce, planCode,
                             String.valueOf(bc.getId()), successUrl, cancelUrl, creditPriceId,
                             creditQuantity, creditTierIndex,
-                            prepared == null ? null : prepared.attempt());
+                            prepared == null ? null : prepared.attempt(), partnerOffer);
                 } catch (StripeException | RuntimeException repairFailure) {
                     // The first create was definitively refused and the repair create
                     // has not yet been submitted. A reused attempt may contain an
@@ -1526,6 +1551,32 @@ public class StripeBillingService {
         return code.charAt(0) + code.substring(1).toLowerCase(java.util.Locale.ROOT);
     }
 
+    /** The Stripe metadata key that ties a checkout session and its subscription to a partner's offer. */
+    public static final String PARTNER_OFFER_METADATA = "partner_offer_token";
+
+    /** Where a cancelled offer checkout lands: the offer itself, with the client's choice preselected. */
+    String partnerOfferCancelUrl(String token, String planCode, int creditTierIndex, String billingCycle) {
+        if (checkoutCancelUrl == null || checkoutCancelUrl.isBlank()) return checkoutCancelUrl;
+        java.net.URI base = java.net.URI.create(checkoutCancelUrl);
+        String origin = base.getScheme() + "://" + base.getRawAuthority();
+        String cycle = "yearly".equalsIgnoreCase(billingCycle) ? "yearly" : "monthly";
+        return origin + "/offer/" + java.net.URLEncoder.encode(token, java.nio.charset.StandardCharsets.UTF_8)
+                + "?plan=" + planCode.toLowerCase(java.util.Locale.ROOT) + "&tier=" + creditTierIndex + "&cycle=" + cycle;
+    }
+
+    /**
+     * Where a cancelled personal-offer checkout lands: the offer's page, with the client's choice
+     * preselected (the page reads the offer from the account, so no code travels in the address).
+     */
+    String personalOfferCancelUrl(String planCode, int creditTierIndex, String billingCycle) {
+        if (checkoutCancelUrl == null || checkoutCancelUrl.isBlank()) return checkoutCancelUrl;
+        java.net.URI base = java.net.URI.create(checkoutCancelUrl);
+        String origin = base.getScheme() + "://" + base.getRawAuthority();
+        String cycle = "yearly".equalsIgnoreCase(billingCycle) ? "yearly" : "monthly";
+        return origin + "/offer/personal?planCode=" + planCode.toLowerCase(java.util.Locale.ROOT)
+                + "&creditTierIndex=" + creditTierIndex + "&billingCycle=" + cycle + "&checkout=cancelled";
+    }
+
     private SessionCreateParams buildSessionParams(
             String customerId,
             String priceId,
@@ -1537,7 +1588,8 @@ public class StripeBillingService {
             String creditPriceId,
             int creditQuantity,
             int creditTierIndex,
-            com.apimarketplace.auth.domain.PersonalOfferCheckoutAttempt offerAttempt
+            com.apimarketplace.auth.domain.PersonalOfferCheckoutAttempt offerAttempt,
+            String partnerOfferToken
                                                            ) {
         var builder = SessionCreateParams.builder()
                                   .setMode(SessionCreateParams.Mode.SUBSCRIPTION)
@@ -1577,6 +1629,11 @@ public class StripeBillingService {
                     .setSubscriptionData(SessionCreateParams.SubscriptionData.builder()
                             .putMetadata("personal_offer_attempt_id", attemptId).build())
                     .setExpiresAt(offerAttempt.getSessionExpiresAt().getEpochSecond());
+        } else if (partnerOfferToken != null) {
+            // On the subscription too: its invoices (the paid one included) lead back to the offer.
+            builder.putMetadata(PARTNER_OFFER_METADATA, partnerOfferToken)
+                    .setSubscriptionData(SessionCreateParams.SubscriptionData.builder()
+                            .putMetadata(PARTNER_OFFER_METADATA, partnerOfferToken).build());
         }
 
         // Add credit pack line item if quantity > 0

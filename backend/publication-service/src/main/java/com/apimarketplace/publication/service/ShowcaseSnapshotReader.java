@@ -25,9 +25,31 @@ public class ShowcaseSnapshotReader {
     private static final Logger log = LoggerFactory.getLogger(ShowcaseSnapshotReader.class);
 
     private final ShowcaseFileRefRewriter fileRefRewriter;
+    private final ShowcaseRestrictionGuard restrictionGuard;
 
-    public ShowcaseSnapshotReader(ShowcaseFileRefRewriter fileRefRewriter) {
+    public ShowcaseSnapshotReader(ShowcaseFileRefRewriter fileRefRewriter,
+                                  ShowcaseRestrictionGuard restrictionGuard) {
         this.fileRefRewriter = fileRefRewriter;
+        this.restrictionGuard = restrictionGuard;
+    }
+
+    /**
+     * LC-066: why this publication's showcase is not served (it comes from a run holding Gmail or
+     * Google Drive data, or that could not be verified yet), or null when it may be served. See
+     * {@link ShowcaseRestrictionGuard}. Every read below answers empty while this is non-null.
+     */
+    public String withheldReason(WorkflowPublicationEntity pub) {
+        return restrictionGuard.withheldReason(pub);
+    }
+
+    /** The stored snapshot when it may be served, else null (missing, or withheld under LC-066). */
+    private Map<String, Object> servableSnapshot(WorkflowPublicationEntity pub) {
+        Map<String, Object> snap = pub.getShowcaseSnapshot();
+        if (snap == null || snap.isEmpty() || restrictionGuard.isWithheld(pub)) {
+            return null;
+        }
+        // Re-read: verifying a snapshot stored before the check stamps it on this instance.
+        return pub.getShowcaseSnapshot();
     }
 
     /**
@@ -147,7 +169,7 @@ public class ShowcaseSnapshotReader {
      */
     @SuppressWarnings("unchecked")
     public Optional<List<Map<String, Object>>> readAggregatedSteps(WorkflowPublicationEntity pub, Integer epoch) {
-        Map<String, Object> snap = pub.getShowcaseSnapshot();
+        Map<String, Object> snap = servableSnapshot(pub);
         if (snap == null) return Optional.empty();
         Object aggregated = snap.get("aggregatedSteps");
         if (!(aggregated instanceof Map<?, ?> aggMap)) return Optional.empty();
@@ -174,7 +196,7 @@ public class ShowcaseSnapshotReader {
      */
     @SuppressWarnings("unchecked")
     public Optional<List<Map<String, Object>>> readEpochSignals(WorkflowPublicationEntity pub, int epoch) {
-        Map<String, Object> snap = pub.getShowcaseSnapshot();
+        Map<String, Object> snap = servableSnapshot(pub);
         if (snap == null) return Optional.empty();
         Object epochSignals = snap.get("epochSignals");
         if (!(epochSignals instanceof Map<?, ?> esMap)) return Optional.empty();
@@ -201,7 +223,7 @@ public class ShowcaseSnapshotReader {
      */
     @SuppressWarnings("unchecked")
     public Optional<Map<String, Object>> readEpochState(WorkflowPublicationEntity pub, int epoch) {
-        Map<String, Object> snap = pub.getShowcaseSnapshot();
+        Map<String, Object> snap = servableSnapshot(pub);
         if (snap != null) {
             Object epochStates = snap.get("epochStates");
             if (epochStates instanceof Map<?, ?> esMap) {
@@ -288,7 +310,7 @@ public class ShowcaseSnapshotReader {
                                                               int page,
                                                               int size,
                                                               Integer epoch) {
-        Map<String, Object> snap = pub.getShowcaseSnapshot();
+        Map<String, Object> snap = servableSnapshot(pub);
         if (snap == null) return Optional.empty();
         Object renders = snap.get("interfaceRenders");
         if (!(renders instanceof Map<?, ?> rMap)) return Optional.empty();
@@ -452,7 +474,7 @@ public class ShowcaseSnapshotReader {
 
     @SuppressWarnings("unchecked")
     private Optional<Map<String, Object>> readSection(WorkflowPublicationEntity pub, String key) {
-        Map<String, Object> snap = pub.getShowcaseSnapshot();
+        Map<String, Object> snap = servableSnapshot(pub);
         if (snap == null) return Optional.empty();
         Object section = snap.get(key);
         if (section instanceof Map<?, ?> m && !m.isEmpty()) {

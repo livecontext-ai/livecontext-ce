@@ -18,19 +18,32 @@ public class InternalCredentialLookupController {
 
     private final CredentialRepository credentialRepository;
 
+    /** LC-058: every hand-off of credential material is an audit event. Optional for tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.auth.credential.service.CredentialAuditRecorder auditRecorder;
+
     public InternalCredentialLookupController(CredentialRepository credentialRepository) {
         this.credentialRepository = credentialRepository;
+    }
+
+    private void auditRead(String userId, Credential credential, String accessPath) {
+        if (auditRecorder != null && credential != null) {
+            auditRecorder.recordSecretRead(userId, credential.id(), credential.integration(), accessPath);
+        }
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<Credential> getCredentialById(
             @PathVariable Long id,
             @RequestParam String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        userId = InternalCallerIdentity.bind(signedUserId, userId);
         Optional<Credential> credential = credentialRepository.findById(id);
         // Org-aware: accept when the caller owns the row OR it belongs to the caller's
         // active workspace (mirrors InternalCredentialService.findActiveCredentialById).
         if (credential.isPresent() && matchesOwnerOrOrg(credential.get(), userId, organizationId)) {
+            auditRead(userId, credential.get(), "credential_row");
             return ResponseEntity.ok(credential.get());
         }
         return ResponseEntity.notFound().build();
@@ -40,7 +53,9 @@ public class InternalCredentialLookupController {
     public ResponseEntity<Credential> getDefaultCredential(
             @RequestParam String userId,
             @RequestParam String integration,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        userId = InternalCallerIdentity.bind(signedUserId, userId);
         // The executing user's own default wins; otherwise fall back to the
         // workspace-shared credential for this integration (is_default first). This
         // makes execution nodes that resolve by integration (SSH/SFTP/Database/SMTP,
@@ -53,13 +68,17 @@ public class InternalCredentialLookupController {
                     .filter(c -> c.status() == CredentialStatus.active)
                     .findFirst();
         }
+        final String auditUserId = userId;
+        credential.ifPresent(c -> auditRead(auditUserId, c, "credential_row"));
         return credential.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
     }
 
     @GetMapping("/all")
     public ResponseEntity<List<Credential>> getAllCredentials(
             @RequestParam String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        userId = InternalCallerIdentity.bind(signedUserId, userId);
         // Org-aware: when an active workspace is supplied, return every credential in
         // that workspace (post-V261 each row carries the workspace org_id, including the
         // user's own), so agent/builder credential pickers see workspace-shared rows.
@@ -67,6 +86,10 @@ public class InternalCredentialLookupController {
         List<Credential> credentials = (organizationId != null && !organizationId.isBlank())
                 ? credentialRepository.findByOrganizationIdStrict(organizationId, 1, 10_000)
                 : credentialRepository.findAllByTenantId(userId);
+        if (auditRecorder != null && !credentials.isEmpty()) {
+            auditRecorder.recordSecretReadBatch(userId,
+                    credentials.stream().map(Credential::id).toList(), "credential_list");
+        }
         return ResponseEntity.ok(credentials);
     }
 
@@ -83,7 +106,9 @@ public class InternalCredentialLookupController {
     @GetMapping("/identities")
     public ResponseEntity<List<CredentialIdentity>> getCredentialIdentities(
             @RequestParam String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = InternalCallerIdentity.HEADER_USER_ID, required = false) String signedUserId) {
+        userId = InternalCallerIdentity.bind(signedUserId, userId);
         List<Credential> credentials = (organizationId != null && !organizationId.isBlank())
                 ? credentialRepository.findByOrganizationIdStrict(organizationId, 1, 10_000)
                 : credentialRepository.findAllByTenantId(userId);

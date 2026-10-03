@@ -61,7 +61,9 @@ describe('persona public routes', () => {
     expect(metadata.alternates?.canonical).toBe('https://livecontext.ai/fr/for/creator');
     expect(metadata.openGraph?.title).toBe('fr:PersonaLanding.personas.creator.metaTitle');
     expect(metadata.twitter?.title).toBe(metadata.openGraph?.title);
-    expect(metadata.robots).toEqual({ index: true, follow: true });
+    // regression: no robots of its own on the cloud, so the root layout's googleBot directives
+    // (max-image-preview, max-snippet) apply; `{ index: true, follow: true }` replaced them.
+    expect('robots' in metadata).toBe(false);
   });
 
   it('shares the card of its own language, not the site-wide English one', async () => {

@@ -55,6 +55,22 @@ class NotificationDeliveryWiringTest {
     }
 
     @Test
+    @DisplayName("The stop close is wired to notificationDeliveryExecutor: without it, it would run on the connection of the transaction that just completed")
+    void stopExecutorIsTheDeliveryPool() throws Exception {
+        Method setter = NotificationDeliveryService.class.getMethod("setStopExecutor", TaskExecutor.class);
+
+        assertThat(setter.getAnnotation(org.springframework.beans.factory.annotation.Autowired.class)).isNotNull();
+        assertThat(setter.getParameters()[0]
+                .getAnnotation(org.springframework.beans.factory.annotation.Qualifier.class).value())
+                .isEqualTo("notificationDeliveryExecutor");
+        Method bean = ShedLockConfig.class.getMethod("notificationDeliveryExecutor",
+                io.micrometer.core.instrument.MeterRegistry.class);
+        assertThat(bean.getAnnotation(org.springframework.context.annotation.Bean.class).value())
+                .contains("notificationDeliveryExecutor");
+        assertThat(TaskExecutor.class).isAssignableFrom(bean.getReturnType());
+    }
+
+    @Test
     @DisplayName("A saturated pool drops the delivery; it never runs it on the caller's thread")
     void saturatedPoolDropsInsteadOfCallerRuns() throws Exception {
         ThreadPoolTaskExecutor pool = (ThreadPoolTaskExecutor)

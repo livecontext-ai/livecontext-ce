@@ -228,7 +228,7 @@ class HttpExecutionServiceCredentialLogRedactionTest {
             assertThat(error).doesNotContain(API_KEY).doesNotContain(encoded(API_KEY))
                     .contains("https://api.clickup.com/v1/items");
             assertThat(everythingLogged()).doesNotContain(API_KEY).doesNotContain(encoded(API_KEY))
-                    .contains("api_key=<redacted>");
+                    .contains("https://api.clickup.com/v1/items").doesNotContain("api_key=");
         }
 
         @Test
@@ -257,9 +257,10 @@ class HttpExecutionServiceCredentialLogRedactionTest {
             givenQueryInjectedKey();
             String refreshed = "sk_test_FAKE_refreshed_token_99";
             when(userCredentialService.forceRefreshAndGetToken("user1", "example")).thenReturn(Optional.of(refreshed));
+            // The refreshed retry goes through the same URI overload as the first call: every
+            // outbound request is SSRF-validated as a URI first (LC-006).
             when(restTemplate.exchange(any(URI.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Object.class)))
-                    .thenThrow(HttpClientErrorException.create(HttpStatus.UNAUTHORIZED, "expired", null, new byte[0], null));
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Object.class)))
+                    .thenThrow(HttpClientErrorException.create(HttpStatus.UNAUTHORIZED, "expired", null, new byte[0], null))
                     .thenAnswer(inv -> {
                         throw new ResourceAccessException("I/O error on GET request for \"" + inv.getArgument(0)
                                 + "\" with " + refreshed + ": Connection reset");
@@ -312,7 +313,7 @@ class HttpExecutionServiceCredentialLogRedactionTest {
         }
 
         @Test
-        @DisplayName("Regression: a transport failure returns and logs the safe URL, stack trace included")
+        @DisplayName("Regression: a transport failure returns and logs the safe URL, never the token")
         void typedTransportFailureScrubbed() {
             givenTelegramCredential();
             when(restTemplate.exchange(any(URI.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class)))
@@ -330,8 +331,8 @@ class HttpExecutionServiceCredentialLogRedactionTest {
         }
 
         @Test
-        @DisplayName("A failure with no URL in it keeps its stack trace: nothing was scrubbed, nothing is lost")
-        void unrelatedFailureKeepsStackTrace() {
+        @DisplayName("A failure with no URL in it logs its message and exception type, never a stack trace (LC-010)")
+        void unrelatedFailureLogsTypeWithoutStackTrace() {
             givenTelegramCredential();
             when(restTemplate.exchange(any(URI.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Object.class)))
                     .thenThrow(new IllegalStateException("converter blew up"));
@@ -341,8 +342,10 @@ class HttpExecutionServiceCredentialLogRedactionTest {
                     objectMapper.createArrayNode(), Set.of(), "user1", "telegram", "tenant-1");
 
             assertThat(logs.list).anySatisfy(e -> {
-                assertThat(e.getFormattedMessage()).contains("converter blew up");
-                assertThat(e.getThrowableProxy()).isNotNull();
+                // A parse failure quotes the payload in its stack trace: the type is logged instead.
+                assertThat(e.getFormattedMessage()).contains("converter blew up")
+                        .contains(IllegalStateException.class.getName());
+                assertThat(e.getThrowableProxy()).isNull();
             });
         }
 
@@ -366,7 +369,7 @@ class HttpExecutionServiceCredentialLogRedactionTest {
 
             assertThat(String.valueOf(result.get("error"))).doesNotContain(API_KEY).doesNotContain(encoded(API_KEY));
             assertThat(everythingLogged()).doesNotContain(API_KEY).doesNotContain(encoded(API_KEY))
-                    .contains("api_key=<redacted>");
+                    .contains("https://api.clickup.com/v1/items").doesNotContain("api_key=");
         }
 
         @Test

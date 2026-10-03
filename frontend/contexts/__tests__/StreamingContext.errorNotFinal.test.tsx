@@ -38,7 +38,7 @@ const getRecentMessagesAsc = vi.fn<(...args: unknown[]) => Promise<unknown[]>>()
 vi.mock('@/lib/api/conversationApi', () => ({
   conversationApi: { getRecentMessagesAsc: (...args: unknown[]) => getRecentMessagesAsc(...args) },
 }));
-vi.mock('@/lib/api/error-utils', () => ({ is402Error: () => false, is413StorageError: () => false }));
+vi.mock('@/lib/api/error-utils', () => ({ is402Error: () => false, is413StorageError: () => false, isRestrictedDataRefusal: () => false }));
 vi.mock('@/lib/billing/ceRelayErrorModals', () => ({ handleCeRelayError: () => false }));
 vi.mock('@/components/billing/InsufficientCreditsModal', () => ({ showInsufficientCreditsModal: vi.fn() }));
 vi.mock('@/components/billing/InsufficientStorageModal', () => ({ showInsufficientStorageModal: vi.fn() }));

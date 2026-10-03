@@ -6,6 +6,7 @@ import com.apimarketplace.orchestrator.domain.workflow.RunStatus;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlanParser;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
+import com.apimarketplace.orchestrator.services.persistence.StepPayloadService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -189,6 +190,38 @@ class ApplicationShowcaseResolverTest {
         @DisplayName("Empty for a null workflow id (no repository hit)")
         void emptyForNullWorkflowId() {
             assertThat(resolver.resolveLatestShowcaseRunId(null)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("LC-066: skips a newer run holding Gmail/Drive data for the newest showcaseable run without it")
+        void prefersNewestNonRestrictedRun() {
+            StepPayloadService stepPayloadService = mock(StepPayloadService.class);
+            ApplicationShowcaseResolver guarded = new ApplicationShowcaseResolver(workflowRunRepository, stepPayloadService);
+            UUID wfId = UUID.randomUUID();
+            WorkflowRunEntity newestGmail = run("newest-gmail", RunStatus.COMPLETED, false, "execute");
+            WorkflowRunEntity olderPlain = run("older-plain", RunStatus.COMPLETED, false, "execute");
+            when(workflowRunRepository.findByWorkflowIdOrderByStartedAtDescPageable(eq(wfId), any()))
+                .thenReturn(new PageImpl<>(List.of(newestGmail, olderPlain)));
+            when(stepPayloadService.isRunRestricted("newest-gmail")).thenReturn(true);
+            when(stepPayloadService.isRunRestricted("older-plain")).thenReturn(false);
+
+            assertThat(guarded.resolveLatestShowcaseRunId(wfId)).hasValue("older-plain");
+        }
+
+        @Test
+        @DisplayName("LC-066: when every showcaseable run holds Gmail/Drive data, still returns the newest (published without a preview)")
+        void fallsBackToNewestRestrictedRun() {
+            StepPayloadService stepPayloadService = mock(StepPayloadService.class);
+            ApplicationShowcaseResolver guarded = new ApplicationShowcaseResolver(workflowRunRepository, stepPayloadService);
+            UUID wfId = UUID.randomUUID();
+            WorkflowRunEntity failed = run("newest-failed", RunStatus.FAILED, false, "execute");
+            WorkflowRunEntity newerGmail = run("newer-gmail", RunStatus.COMPLETED, false, "execute");
+            WorkflowRunEntity olderGmail = run("older-gmail", RunStatus.WAITING_TRIGGER, false, "execute");
+            when(workflowRunRepository.findByWorkflowIdOrderByStartedAtDescPageable(eq(wfId), any()))
+                .thenReturn(new PageImpl<>(List.of(failed, newerGmail, olderGmail)));
+            when(stepPayloadService.isRunRestricted(any())).thenReturn(true);
+
+            assertThat(guarded.resolveLatestShowcaseRunId(wfId)).hasValue("newer-gmail");
         }
     }
 }

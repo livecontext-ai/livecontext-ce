@@ -140,7 +140,7 @@ class NotificationDeliveryServiceTest {
     class Topics {
 
         @Test
-        @DisplayName("A category outside the four topics (an approval, a trophy) never leaves the bell")
+        @DisplayName("A category outside every topic (an approval, a trophy) never leaves the bell")
         void unknownCategoryIgnored() {
             service.handle(event("APPROVAL_PENDING"));
             service.handle(event("BADGE_UNLOCKED"));
@@ -418,5 +418,126 @@ class NotificationDeliveryServiceTest {
 
         assertThat(off.hasOpenIncident(WORKFLOW)).isFalse();
         verifyNoInteractions(preferences, incidents, sender);
+    }
+
+    @Nested
+    @DisplayName("A workflow its owner stopped is no longer 'still failing'")
+    class Stopped {
+
+        @Test
+        @DisplayName("Regression (reminder after a stop): its open incidents are closed, and nothing is sent")
+        void closesIncidentsSilently() {
+            when(incidents.closeStopped(eq(WORKFLOW), any())).thenReturn(1);
+
+            service.onWorkflowStopped(WORKFLOW);
+
+            verify(incidents).closeStopped(eq(WORKFLOW), any());
+            verifyNoInteractions(sender, composer);
+        }
+
+        /** Runs {@code body} as if inside a transaction, then completes it the way Spring does. */
+        private void inTransaction(int completionStatus, Runnable body) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+            org.springframework.transaction.support.TransactionSynchronizationManager.setActualTransactionActive(true);
+            try {
+                body.run();
+                if (completionStatus == org.springframework.transaction.support.TransactionSynchronization.STATUS_COMMITTED) {
+                    // Spring walks a SNAPSHOT for afterCommit, and reads the list again for
+                    // afterCompletion: a synchronization registered during afterCommit only
+                    // ever gets the second call.
+                    List.copyOf(org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations()).forEach(org.springframework.transaction.support.TransactionSynchronization::afterCommit);
+                }
+                List.copyOf(org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations())
+                        .forEach(sync -> sync.afterCompletion(completionStatus));
+            } finally {
+                org.springframework.transaction.support.TransactionSynchronizationManager.clear();
+            }
+        }
+
+        @Test
+        @DisplayName("Inside a transaction the close waits for the commit, so a failed UPDATE cannot abort the caller's stop")
+        void deferredToCommit() {
+            inTransaction(org.springframework.transaction.support.TransactionSynchronization.STATUS_COMMITTED, () -> {
+                service.onWorkflowStopped(WORKFLOW);
+                verifyNoInteractions(incidents);
+            });
+
+            verify(incidents).closeStopped(eq(WORKFLOW), any());
+        }
+
+        @Test
+        @DisplayName("Regression (run cancel/pause): a stop reported from INSIDE an afterCommit callback still closes the incident")
+        void stopReportedFromAfterCommitStillCloses() {
+            inTransaction(org.springframework.transaction.support.TransactionSynchronization.STATUS_COMMITTED, () ->
+                    org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            service.onWorkflowStopped(WORKFLOW);
+                        }
+                    }));
+
+            verify(incidents).closeStopped(eq(WORKFLOW), any());
+        }
+
+        @Test
+        @DisplayName("A stop that rolls back closes nothing")
+        void rolledBackStopClosesNothing() {
+            inTransaction(org.springframework.transaction.support.TransactionSynchronization.STATUS_ROLLED_BACK, () -> service.onWorkflowStopped(WORKFLOW));
+
+            verifyNoInteractions(incidents);
+        }
+
+        @Test
+        @DisplayName("With the delivery pool wired, the close runs on it (its own connection), never on the caller's thread")
+        void closeRunsOnTheDeliveryPool() {
+            java.util.List<Runnable> queued = new java.util.ArrayList<>();
+            service.setStopExecutor(queued::add);
+
+            service.onWorkflowStopped(WORKFLOW);
+
+            verifyNoInteractions(incidents);
+            assertThat(queued).hasSize(1);
+            queued.get(0).run();
+            verify(incidents).closeStopped(eq(WORKFLOW), any());
+        }
+
+        @Test
+        @DisplayName("Defensive: an executor that throws on submit never reaches the caller (the real pool drops instead)")
+        void rejectedByThePoolIsSwallowed() {
+            service.setStopExecutor(task -> {
+                throw new org.springframework.core.task.TaskRejectedException("pool full");
+            });
+
+            service.onWorkflowStopped(WORKFLOW);
+
+            verifyNoInteractions(incidents, sender);
+        }
+
+        @Test
+        @DisplayName("A store failure never reaches the caller: it is counted, and the stop itself still succeeds")
+        void storeFailureIsSwallowed() {
+            SimpleMeterRegistry registry = new SimpleMeterRegistry();
+            NotificationDeliveryService counted = new NotificationDeliveryService(preferences, incidents, deliveryLog,
+                    entitlement, composer, sender, registry, true, 10);
+            when(incidents.closeStopped(any(), any())).thenThrow(new IllegalStateException("db down"));
+
+            counted.onWorkflowStopped(WORKFLOW);
+
+            assertThat(registry.counter("notification.delivery.errors", "type", "IllegalStateException").count())
+                    .isEqualTo(1.0);
+            verifyNoInteractions(sender);
+        }
+
+        @Test
+        @DisplayName("Does nothing when delivery is disabled, or for a schedule that belongs to no workflow")
+        void disabledOrNoWorkflow() {
+            NotificationDeliveryService off = new NotificationDeliveryService(preferences, incidents, deliveryLog,
+                    entitlement, composer, sender, new SimpleMeterRegistry(), false, 10);
+
+            off.onWorkflowStopped(WORKFLOW);
+            service.onWorkflowStopped(null);
+
+            verifyNoInteractions(incidents);
+        }
     }
 }

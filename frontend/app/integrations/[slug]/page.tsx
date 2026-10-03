@@ -108,7 +108,8 @@ export async function generateMetadata({
       title,
       description,
     },
-    robots: noIndex ? { index: false, follow: true } : undefined,
+    // Only when set: an explicit 'robots: undefined' wiped the root layout's directives.
+    ...(noIndex ? { robots: { index: false, follow: true } } : {}),
   };
 }
 

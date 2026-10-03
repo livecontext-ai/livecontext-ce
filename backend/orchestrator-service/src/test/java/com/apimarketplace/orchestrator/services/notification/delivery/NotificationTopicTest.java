@@ -28,8 +28,31 @@ class NotificationTopicTest {
         assertThat(NotificationTopic.CREDITS.isDigest()).isFalse();
         assertThat(NotificationTopic.ACCOUNT.isDigest()).isTrue();
         assertThat(NotificationTopic.TASKS.isDigest()).isTrue();
+        assertThat(NotificationTopic.FOLLOWING.isDigest()).isTrue();
+        assertThat(NotificationTopic.AUDIENCE.isDigest()).isTrue();
         assertThat(NotificationTopic.digestCategories()).containsExactlyInAnyOrder("CRED_EXPIRED",
-                "WEBHOOK_TRIGGER_DISABLED", "AGENT_TASK_ASSIGNED", "AGENT_TASK_MENTION", "AGENT_TASK_AWAITING_REVIEW");
+                "WEBHOOK_TRIGGER_DISABLED", "AGENT_TASK_ASSIGNED", "AGENT_TASK_MENTION", "AGENT_TASK_AWAITING_REVIEW",
+                "CREATOR_PUBLISHED", "CREATOR_FOLLOWED");
+    }
+
+    @Test
+    @DisplayName("The creator topics: emailed in the daily summary, person-scoped and on every plan")
+    void creatorTopics() {
+        // Summary, never alone: one approval fans out to every follower at once, which would
+        // otherwise pile onto the delivery pool failure alerts share and spend their daily cap.
+        assertThat(NotificationTopic.FOLLOWING.isDigest()).isTrue();
+        assertThat(NotificationTopic.AUDIENCE.isDigest()).isTrue();
+        assertThat(NotificationTopic.ofCategory("CREATOR_PUBLISHED")).contains(NotificationTopic.FOLLOWING);
+        assertThat(NotificationTopic.ofCategory("CREATOR_FOLLOWED")).contains(NotificationTopic.AUDIENCE);
+        for (NotificationTopic t : List.of(NotificationTopic.FOLLOWING, NotificationTopic.AUDIENCE)) {
+            assertThat(t.defaultDelivery()).as(t.name()).isEqualTo(DeliveryMode.EMAIL);
+            // The rows land in the person's personal workspace, so a per-workspace choice would never apply.
+            assertThat(t.isPersonScoped()).as(t.name()).isTrue();
+            assertThat(t.emailOnEveryPlan()).as(t.name()).isTrue();
+        }
+        assertThat(NotificationTopic.CREDITS.emailOnEveryPlan()).isTrue();
+        assertThat(NotificationTopic.FAILURES.emailOnEveryPlan()).isFalse();
+        assertThat(NotificationTopic.TASKS.isPersonScoped()).isFalse();
     }
 
     @Test

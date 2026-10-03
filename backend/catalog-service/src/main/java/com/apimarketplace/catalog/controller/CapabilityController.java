@@ -508,6 +508,9 @@ public class CapabilityController {
      *
      * Request body: SynthesisDataRequest with provider, resource, action, keywords, etc.
      *
+     * <p>Admin-only: the rows it writes are platform-global, see
+     * {@link #mayWriteGlobalIndex}.
+     *
      * @param toolId The API tool ID
      * @param request The synthesis data
      * @return Success status
@@ -578,6 +581,9 @@ public class CapabilityController {
      * Batch save synthesis data for multiple tools.
      *
      * POST /api/tools/synthesis/batch
+     *
+     * <p>Admin-only, for the same reason as the single-tool sibling and more so: one
+     * request rewrites the discovery rows of arbitrarily many tools at once.
      *
      * @param requests Map of toolId -> SynthesisDataRequest
      * @return Batch result with success/failure counts

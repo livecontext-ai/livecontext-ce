@@ -1,5 +1,10 @@
+import { takePostOnboardingReturn } from './postOnboardingReturn';
+
 /**
- * Leave the current page for the chat, with a full document load.
+ * Leave the current page for the chat, with a full document load; or, when onboarding was entered
+ * from the pricing page or a partner's offer page, for that page (see {@link
+ * takePostOnboardingReturn}): a person who signed up to buy goes back to buying, with their
+ * selection and partner code intact.
  *
  * <p>A full load rather than a router push, because the callers are finishing onboarding: the
  * next screen reads a fresh session, a fresh organization and the hand-off flags written a moment
@@ -16,5 +21,5 @@
  */
 export function leaveForChat(locale: string): void {
   if (typeof window === 'undefined') return;
-  window.location.href = `/${locale}/app/chat`;
+  window.location.href = takePostOnboardingReturn(window) ?? `/${locale}/app/chat`;
 }

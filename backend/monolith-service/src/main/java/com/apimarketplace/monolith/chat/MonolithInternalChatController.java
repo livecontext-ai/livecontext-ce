@@ -2,8 +2,10 @@ package com.apimarketplace.monolith.chat;
 
 import com.apimarketplace.common.credit.ChatCreditRefusal;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
+import com.apimarketplace.conversation.controller.internal.InternalChatController;
 import com.apimarketplace.conversation.dto.ChatRequest;
 import com.apimarketplace.conversation.dto.MessageDto;
+import com.apimarketplace.conversation.service.ConversationExecutionLockService;
 import com.apimarketplace.conversation.service.ConversationQueryService;
 import com.apimarketplace.conversation.service.MessageService;
 import com.apimarketplace.conversation.service.ai.AgentObservabilityClient;
@@ -41,6 +43,7 @@ public class MonolithInternalChatController {
     private final CreditConsumptionClient creditClient;
     private final AgentObservabilityClient observabilityClient;
     private final ConversationQueryService conversationQueryService;
+    private final ConversationExecutionLockService executionLockService;
 
     /**
      * Reachable only in-process: MonolithSecurityFilter 404s any non-loopback caller on this path,
@@ -91,6 +94,25 @@ public class MonolithInternalChatController {
                 .body(Map.of("success", false, "error", "Conversation not found"));
         }
 
+        // One turn at a time per conversation (cloud parity): the agent tasks of one agent share a
+        // conversation, so two task runs at once would interleave their messages and each run on
+        // the other's half-written history. Same lock service, same 409 as the cloud
+        // InternalChatController; the 402 audit trail below is written under the lock too.
+        try {
+            return executionLockService.withConversationLock(conversationId,
+                () -> chatSyncLocked(request, userId, organizationId, conversationId));
+        } catch (ConversationExecutionLockService.ConversationExecutionLockTimeoutException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(Map.of("success", false,
+                    "error", "Conversation is busy",
+                    "conversationId", conversationId));
+        }
+    }
+
+    private ResponseEntity<Map<String, Object>> chatSyncLocked(ChatRequest request,
+                                                               String userId,
+                                                               String organizationId,
+                                                               String conversationId) {
         // Source-type-scoped gate (cloud parity): FREE monthly workflow credits
         // must not admit a scheduled/webhook chat turn, and the AI allowance may fund
         // one when the model is open to the free tier (V494). No-op in CE unlimited
@@ -105,14 +127,17 @@ public class MonolithInternalChatController {
             // schedule/webhook/task/widget runs leave the same audit trail.
             String errorContent = "[Error] " + ChatCreditRefusal.MESSAGE + " - this scheduled run was skipped. "
                 + "Top up your wallet to resume scheduled execution.";
-            messageService.persistAttemptAndError(conversationId, request.getMessage(), errorContent);
+            messageService.persistAttemptAndError(conversationId, request.getMessage(), errorContent,
+                InternalChatController.restrictedOrNull(request));
             // Also record a FAILED execution row for Agent Performance / Agent
             // Fleet visibility (stop reason BUDGET_EXHAUSTED). Mirror of cloud.
             observabilityClient.recordFailureAsync(userId, organizationId,
                 request.getAgentId(), request.getSource(), conversationId,
                 "BUDGET_EXHAUSTED", ChatCreditRefusal.MESSAGE,
                 request.getMessage(), errorContent,
-                request.getProvider(), request.getModel());
+                request.getProvider(), request.getModel(),
+                // A refused task run is still the run its task points at (cloud parity).
+                ConversationAgentService.callerExecutionIdOrNew(request));
             // Mirror of cloud: flash the Fleet view so the throttled fire is
             // visible (frontend reducer bumps completionSeq → metrics refetch).
             agentService.publishFleetFailureNoExecution(
@@ -128,6 +153,9 @@ public class MonolithInternalChatController {
         userMessage.setRole("user");
         userMessage.setContent(request.getMessage());
         userMessage.setTimestamp(Instant.now().toString());
+        // LC-066 cloud parity: a delegated task written from a restricted execution carries Gmail /
+        // Drive content, so its turn is stored RESTRICTED, exactly as InternalChatController does.
+        userMessage.setDataSensitivity(InternalChatController.restrictedOrNull(request));
         messageService.addMessage(conversationId, userMessage);
 
         Map<String, Object> result = agentService.executeSync(request, conversationId);

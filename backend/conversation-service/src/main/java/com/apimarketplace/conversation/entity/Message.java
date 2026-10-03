@@ -76,6 +76,14 @@ public class Message {
     private String executionId;
 
     /**
+     * NORMAL, or RESTRICTED when this message was produced in a turn whose tool results derives from a Google restricted-scope integration
+     * (Gmail, Drive; see common-lib RestrictedDataPolicy). RESTRICTED content is excluded from
+     * message search and redacted after the retention window by RestrictedConversationContentPurger.
+     */
+    @Column(name = "data_sensitivity", nullable = false, length = 16)
+    private String dataSensitivity = "NORMAL";
+
+    /**
      * User feedback on this message: 1 (thumbs up), -1 (thumbs down), null (no feedback).
      */
     @Column(name = "feedback")
@@ -102,6 +110,15 @@ public class Message {
         this.toolCalls = toolCalls;
         this.model = model;
         this.timestamp = timestamp;
+    }
+
+
+    public String getDataSensitivity() {
+        return dataSensitivity;
+    }
+
+    public void setDataSensitivity(String dataSensitivity) {
+        this.dataSensitivity = dataSensitivity == null ? "NORMAL" : dataSensitivity;
     }
 
     /**

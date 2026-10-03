@@ -1,5 +1,7 @@
 package com.apimarketplace.orchestrator.trigger;
 
+import com.apimarketplace.common.classification.DataSensitivity;
+
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowPlanVersionEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
@@ -97,6 +99,22 @@ public class ReusableTriggerService {
      */
     public static final String PLAN_FROM_PAYLOAD_MARKER = "__planFromPayload";
 
+    /**
+     * Internal payload key (CASA LC-066): this fire hands the run Gmail / Drive content, so the
+     * run must be tagged restricted before the fire writes its first payload. Set with
+     * {@link #withRestrictedDataMarker} by the dispatchers that forward data from elsewhere: a
+     * table row derived from Gmail ({@link DatasourceTriggerDispatchService}) and the outputs of
+     * a restricted upstream run ({@link WorkflowTriggerDispatchService}).
+     *
+     * <p>It travels inside the payload because the execution queue may run the fire on another
+     * replica than the dispatcher's, and a run mark lives in one replica's memory until the
+     * first tagged payload makes it durable. Read-and-stripped at the top of
+     * {@link #executeTriggerInternal}, on the replica that runs the fire, so it never reaches the
+     * trigger's output. {@link #sanitizePlanMarker} strips it from inbound payloads, so a caller
+     * cannot set it; a forged one could only make a run stricter anyway, never looser.
+     */
+    public static final String RESTRICTED_DATA_MARKER = "__restrictedData";
+
     @Value("${orchestrator.execution.parallel-ready.enabled:true}")
     private boolean parallelReadyExecutionEnabled;
 
@@ -112,16 +130,33 @@ public class ReusableTriggerService {
      * <p>{@link TriggerController} is the ONLY legitimate setter of the marker -
      * it does so AFTER a successful {@link WorkflowResumeService#updateRunPlan}.
      *
-     * @return a new map without the marker key, or the original map unchanged
-     *         when the marker is absent (no-allocation fast path).
+     * <p>Strips {@link #RESTRICTED_DATA_MARKER} too, for the same reason: only a
+     * dispatcher that knows the data it forwards is restricted may set it, after
+     * sanitizing. And the {@code __dataSensitivity__} tag a trigger output is classified by,
+     * which a caller could otherwise write to restrict a production run for good.
+     *
+     * @return a new map without the marker keys, or the original map unchanged
+     *         when both are absent (no-allocation fast path).
      */
     public static Map<String, Object> sanitizePlanMarker(Map<String, Object> payload) {
-        if (payload == null || !payload.containsKey(PLAN_FROM_PAYLOAD_MARKER)) {
+        if (payload == null || !(payload.containsKey(PLAN_FROM_PAYLOAD_MARKER)
+                || payload.containsKey(RESTRICTED_DATA_MARKER)
+                || payload.containsKey(DataSensitivity.CREDENTIAL_KEY))) {
             return payload;
         }
         Map<String, Object> sanitized = new HashMap<>(payload);
         sanitized.remove(PLAN_FROM_PAYLOAD_MARKER);
+        sanitized.remove(RESTRICTED_DATA_MARKER);
+        // The trigger output's own tag: set by the platform (a table load), never by a caller.
+        sanitized.remove(DataSensitivity.CREDENTIAL_KEY);
         return sanitized;
+    }
+
+    /** A copy of {@code payload} carrying {@link #RESTRICTED_DATA_MARKER}. Call it after sanitizing. */
+    public static Map<String, Object> withRestrictedDataMarker(Map<String, Object> payload) {
+        Map<String, Object> marked = payload != null ? new HashMap<>(payload) : new HashMap<>();
+        marked.put(RESTRICTED_DATA_MARKER, Boolean.TRUE);
+        return marked;
     }
 
     public static String deterministicScheduleRequestId(UUID scheduleId, Instant scheduledAt) {
@@ -239,6 +274,10 @@ public class ReusableTriggerService {
      */
     @Autowired(required = false)
     private com.apimarketplace.orchestrator.services.state.patch.AdvisoryLockHelper advisoryLockHelper;
+
+    /** Marks a run restricted for a fire carrying {@link #RESTRICTED_DATA_MARKER}. Optional for narrow tests. */
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
 
     // Lazy injection to avoid circular dependency (WorkflowTriggerDispatchService → ReusableTriggerService → WorkflowTriggerDispatchService)
     @Autowired
@@ -506,6 +545,16 @@ public class ReusableTriggerService {
         }
 
         String runId = run.getRunIdPublic();
+
+        // LC-066: read here, on the replica that runs this fire, and stripped whatever its value
+        // (see RESTRICTED_DATA_MARKER). Honoured only once the fire is past every refusal, right
+        // before it writes its first payload: a refused fire leaves the run as it was.
+        boolean restrictedData = false;
+        if (payload != null && payload.containsKey(RESTRICTED_DATA_MARKER)) {
+            restrictedData = Boolean.TRUE.equals(payload.get(RESTRICTED_DATA_MARKER));
+            payload = new HashMap<>(payload);
+            payload.remove(RESTRICTED_DATA_MARKER);
+        }
         RunStatus previousStatus = run.getStatus();
         logger.info("[ReusableTrigger] Executing {} trigger for runId={}, triggerId={}, previousStatus={}",
             triggerType, runId, triggerId, previousStatus);
@@ -1020,6 +1069,9 @@ public class ReusableTriggerService {
             if (triggerType == TriggerType.DATASOURCE) {
                 logger.info("[ReusableTrigger] Loading datasource data for triggerId={}", triggerId);
                 triggerPayload = loadDatasourceData(run, plan, triggerId, payload);
+                // LC-066: the table holds rows a restricted run stored (tagged by the resolver).
+                restrictedData |= triggerPayload != null && DataSensitivity.parse(
+                        triggerPayload.get(DataSensitivity.CREDENTIAL_KEY)).isRestricted();
             }
 
             if (triggerPayload != null && !triggerPayload.isEmpty()) {
@@ -1040,6 +1092,9 @@ public class ReusableTriggerService {
                 resetRunOnFailure(run, runId, triggerId);
                 return TriggerExecutionResult.failure(runId, triggerId, triggerType,
                     "V2 execution service not available");
+            }
+            if (restrictedData && stepPayloadService != null) {
+                stepPayloadService.markRunRestricted(runId);
             }
             TriggerExecutionResult result = executeWithV2Service(
                 run, execution, plan, triggerId, triggerType, runId, forceAutoMode, newEpoch, triggerGlobalData);

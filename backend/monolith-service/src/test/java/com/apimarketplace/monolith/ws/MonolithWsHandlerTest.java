@@ -60,13 +60,13 @@ class MonolithWsHandlerTest {
     }
 
     @Test
-    @DisplayName("keeps query params as backward-compatible WebSocket auth fallback")
-    void extractsTokenAndActiveOrgFromQueryParams() {
+    @DisplayName("LC-044: ignores a ?token= query JWT, still reads the activeOrg claim from the query")
+    void ignoresQueryTokenButKeepsActiveOrgQueryParam() {
         WebSocketSession session = mock(WebSocketSession.class);
         when(session.getUri()).thenReturn(URI.create("ws://localhost:8080/ws?token=query-token&activeOrg=org-query"));
         when(session.getHandshakeHeaders()).thenReturn(new HttpHeaders());
 
-        assertThat(MonolithWsHandler.extractToken(session)).isEqualTo("query-token");
+        assertThat(MonolithWsHandler.extractToken(session)).isNull();
         assertThat(MonolithWsHandler.extractActiveOrg(session)).isEqualTo("org-query");
     }
 
@@ -122,6 +122,20 @@ class MonolithWsHandlerTest {
             assertThat(payload).contains("\"execution_started\"");
             assertThat(payload).contains("\"exec-1\"");
         });
+    }
+
+    @Test
+    @DisplayName("LC-044: a connection presenting its JWT only as ?token= is closed, the token never validated")
+    void queryOnlyTokenConnectionIsClosed() throws Exception {
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.getId()).thenReturn("s-query");
+        when(session.getUri()).thenReturn(URI.create("ws://localhost:8080/ws?token=query-token"));
+        when(session.getHandshakeHeaders()).thenReturn(new HttpHeaders());
+
+        newHandler().afterConnectionEstablished(session);
+
+        verify(session).close(org.springframework.web.socket.CloseStatus.POLICY_VIOLATION);
+        org.mockito.Mockito.verifyNoInteractions(jwtTokenProvider);
     }
 
     private MonolithWsHandler newHandler() {

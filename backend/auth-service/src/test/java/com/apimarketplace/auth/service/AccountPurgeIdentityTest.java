@@ -320,6 +320,10 @@ class AccountPurgeIdentityTest {
                 AccountPurgeService.DELETE_PARTNER_APPLICATIONS_SQL + " <- " + USER_ID,
                 AccountPurgeService.UNLINK_PARTNER_APPLICATION_REVIEWER_SQL + " <- " + USER_ID,
                 AccountPurgeService.DELETE_PARTNER_STANDING_SQL + " <- " + USER_ID,
+                // The partner's offers (one link per client) go with the account.
+                AccountPurgeService.DELETE_PARTNER_OFFERS_SQL + " <- " + USER_ID,
+                // As a client: the apps partner offers delivered to them.
+                AccountPurgeService.DELETE_PARTNER_OFFER_DELIVERIES_SQL + " <- " + USER_ID,
                 AccountPurgeService.UNLINK_PARTNER_STANDING_ADMIN_SQL + " <- " + USER_ID);
         assertThat(executed).containsSubsequence(
                 AccountPurgeService.DEACTIVATE_PERSONAL_REWARD_CODES_SQL + " <- " + USER_ID,

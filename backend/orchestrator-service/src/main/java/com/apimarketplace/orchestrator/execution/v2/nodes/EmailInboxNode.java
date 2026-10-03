@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.execution.v2.nodes;
 
+import com.apimarketplace.common.web.UrlSafetyValidator;
 import com.apimarketplace.orchestrator.services.template.ReportedParams;
 
 import com.apimarketplace.credential.client.CredentialClient;
@@ -573,16 +574,32 @@ public class EmailInboxNode extends BaseNode {
     // here: the orchestrator-service runs with -Djava.net.preferIPv4Stack=true (helm
     // values javaToolOptions -> JAVA_TOOL_OPTIONS) so name resolution/connect uses A
     // records only. Do NOT connect by resolved IPv4 literal instead: that would break TLS
-    // hostname/SNI verification against the server certificate.
+    // hostname/SNI verification against the server certificate. The address pinning below keeps
+    // the NAME for TLS and only pins the socket, and it inherits the same JVM setting because the
+    // shared guard resolves in this JVM.
     private Store connect(String host, int port, String username, String password, boolean useSsl)
             throws MessagingException {
+        // SSRF (LC-075): the mailbox host and port come from a stored credential and go straight
+        // to a socket, so they get the shared outbound filter. Only the ADDRESS is pinned, through
+        // the shared socket factory, which closes the rebinding window without touching
+        // certificate identity (LC-073).
+        java.net.InetAddress vetted = UrlSafetyValidator.resolveOutboundHostSafe(host, port);
         Properties props = buildMailProperties(host, port, useSsl, mailTimeouts);
         String protocol = useSsl ? "imaps" : "imap";
+        UrlSafetyValidator.applyJavaMailAddressPinning(props, "mail." + protocol, vetted);
 
         Session session = Session.getInstance(props);
-        Store store = session.getStore(protocol);
+        Store store = openStore(session, protocol);
         store.connect(host, port, username, password);
         return store;
+    }
+
+    /**
+     * The single point where a mail store is obtained from the session. Extracted so a test can
+     * assert the address pinning reached the properties Jakarta Mail reads, without a socket.
+     */
+    Store openStore(Session session, String protocol) throws MessagingException {
+        return session.getStore(protocol);
     }
 
     /**

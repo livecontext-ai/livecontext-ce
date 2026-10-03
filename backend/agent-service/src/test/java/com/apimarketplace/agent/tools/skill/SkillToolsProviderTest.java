@@ -135,4 +135,103 @@ class SkillToolsProviderTest {
             assertThat(r.success()).isFalse();
         }
     }
+
+    // ==================== LC-066: a restricted conversation cannot write skill text ====================
+
+    @Nested
+    @DisplayName("LC-066 restricted context (a skill is the memory tool's twin)")
+    class Lc066RestrictedContext {
+
+        private ToolExecutionContext restrictedCtx() {
+            return new ToolExecutionContext(TENANT,
+                Map.of(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY, "RESTRICTED"),
+                Map.of(), null, null, null, null, null);
+        }
+
+        @Test
+        @DisplayName("LC-066: create in a restricted conversation is refused and never reaches the CRUD module")
+        void lc066RestrictedCreateIsRefused() {
+            ToolExecutionResult r = provider.execute("skill",
+                Map.of("action", "create", "name", "Inbox", "description", "d", "instructions", "Gmail body"),
+                restrictedCtx());
+
+            assertThat(r.success()).isFalse();
+            assertThat(r.error()).startsWith("RESTRICTED_DATA_PROVIDER_NOT_ALLOWED").contains("skill");
+            verify(crudModule, never()).execute(anyString(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: an update that changes skill text (nested params) in a restricted conversation is refused")
+        void lc066RestrictedTextUpdateIsRefused() {
+            ToolExecutionResult r = provider.execute("skill",
+                Map.of("action", "update", "skill_id", "s1", "params", Map.of("instructions", "Gmail body")),
+                restrictedCtx());
+
+            assertThat(r.success()).isFalse();
+            assertThat(r.error()).startsWith("RESTRICTED_DATA_PROVIDER_NOT_ALLOWED");
+            verify(crudModule, never()).execute(anyString(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: reads, assign, delete and a folder-only move still work in a restricted conversation")
+        void lc066RestrictedNonWritingActionsStillWork() {
+            when(crudModule.canHandle(anyString())).thenReturn(true);
+            when(crudModule.execute(anyString(), any(), eq(TENANT), any()))
+                .thenReturn(Optional.of(ToolExecutionResult.success(Map.of("ok", true))));
+
+            for (String action : List.of("get", "list", "delete", "assign")) {
+                assertThat(provider.execute("skill", Map.of("action", action), restrictedCtx()).success())
+                    .as(action).isTrue();
+            }
+            assertThat(provider.execute("skill",
+                Map.of("action", "update", "skill_id", "s1", "folder_id", "root"), restrictedCtx()).success())
+                .as("folder-only move").isTrue();
+        }
+
+        @Test
+        @DisplayName("LC-066 regression: publish in a restricted conversation is refused and never reaches the publish module")
+        void lc066RestrictedPublishIsRefused() {
+            ToolExecutionResult r = provider.execute("skill",
+                Map.of("action", "publish", "skill_id", UUID.randomUUID().toString(),
+                    "title", "Inbox digest", "interface_id", UUID.randomUUID().toString()),
+                restrictedCtx());
+
+            assertThat(r.success()).isFalse();
+            assertThat(r.error()).startsWith("RESTRICTED_DATA_PROVIDER_NOT_ALLOWED").contains("published");
+            verify(publishModule, never()).execute(anyString(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: unpublish in a restricted conversation still works; publish in an ordinary one is not refused")
+        void lc066UnpublishAndOrdinaryPublishStillWork() {
+            when(publishModule.canHandle(anyString())).thenReturn(true);
+            when(publishModule.execute(anyString(), any(), eq(TENANT), any()))
+                .thenReturn(Optional.of(ToolExecutionResult.success(Map.of("ok", true))));
+
+            assertThat(provider.execute("skill",
+                Map.of("action", "unpublish", "skill_id", "s1"), restrictedCtx()).success())
+                .as("unpublish").isTrue();
+            assertThat(provider.execute("skill",
+                Map.of("action", "publish", "skill_id", "s1", "title", "t", "interface_id", "i"), ctx(TENANT)).success())
+                .as("ordinary publish").isTrue();
+            verify(publishModule).execute(eq("unpublish"), any(), eq(TENANT), any());
+            verify(publishModule).execute(eq("publish"), any(), eq(TENANT), any());
+        }
+
+        @Test
+        @DisplayName("LC-066: an ordinary conversation still creates and updates skills (no over-refusal)")
+        void lc066NormalContextStillWrites() {
+            when(crudModule.canHandle(anyString())).thenReturn(true);
+            when(crudModule.execute(anyString(), any(), eq(TENANT), any()))
+                .thenReturn(Optional.of(ToolExecutionResult.success(Map.of("ok", true))));
+
+            assertThat(provider.execute("skill",
+                Map.of("action", "create", "name", "n", "description", "d", "instructions", "i"), ctx(TENANT)).success())
+                .isTrue();
+            assertThat(provider.execute("skill",
+                Map.of("action", "update", "skill_id", "s1", "instructions", "i2"), ctx(TENANT)).success())
+                .isTrue();
+            verify(crudModule, times(2)).execute(anyString(), any(), eq(TENANT), any());
+        }
+    }
 }

@@ -6,6 +6,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.apimarketplace.common.web.GatewayAuthenticationFilter;
 import com.apimarketplace.common.web.GatewayFilterProperties;
+import com.apimarketplace.common.web.GatewaySignatureV2;
 import com.apimarketplace.common.web.InternalGatewaySigner;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,16 +18,19 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -37,6 +41,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 /**
  * Pins the {@link ToolSchemaFetcher#checkToolExists} dispatch across three id shapes:
@@ -220,12 +227,73 @@ class ToolSchemaFetcherSlugTest {
             .satisfies(e -> assertThat(e.getFormattedMessage()).contains("configured=false"));
     }
 
+    // --- CASA LC-035 cutover: the slug lookup signed v1 only, through a bare RestTemplate with no
+    // v2 interceptor, so it would 401 ("Catalog slug lookup REJECTED") once accept-v1 is false.
+    // These run the fetcher's OWN RestTemplate (MockRestServiceServer keeps its interceptors).
+
+    @Test
+    @DisplayName("Regression v1-only slug lookup: carries the v2 signature and passes catalog's filter with accept-v1=false")
+    void slugLookupCarriesV2SignatureAndPassesFilterWithV1Off() throws Exception {
+        ToolSchemaFetcher realFetcher = fetcherWithItsOwnRestTemplate(GATEWAY_SECRET);
+        MockRestServiceServer server = MockRestServiceServer.bindTo(
+                (RestTemplate) ReflectionTestUtils.getField(realFetcher, "restTemplate")).build();
+        AtomicReference<HttpHeaders> sent = new AtomicReference<>();
+        server.expect(requestTo(CATALOG_URL + "/api/workflow-inspector/tools/deepseek-chat"))
+                .andExpect(method(HttpMethod.GET))
+                .andExpect(request -> sent.set(copyOf(request.getHeaders())))
+                .andRespond(withSuccess("{\"slug\":\"deepseek-chat\"}", MediaType.APPLICATION_JSON));
+
+        assertThat(realFetcher.checkToolExists("deepseek/deepseek-chat"))
+                .isEqualTo(ToolSchemaFetcher.ToolExistence.EXISTS);
+        server.verify();
+
+        assertThat(sent.get().getFirst(GatewaySignatureV2.HEADER)).startsWith(GatewaySignatureV2.PREFIX);
+        assertThat(replayThroughCatalogFilter(sent.get(), "/api/workflow-inspector/tools/deepseek-chat", false)
+                .getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("The public UUID lookup stays unsigned: the v2 interceptor adds nothing to an unstamped call")
+    void publicUuidLookupStaysUnsigned() {
+        ToolSchemaFetcher realFetcher = fetcherWithItsOwnRestTemplate(GATEWAY_SECRET);
+        MockRestServiceServer server = MockRestServiceServer.bindTo(
+                (RestTemplate) ReflectionTestUtils.getField(realFetcher, "restTemplate")).build();
+        AtomicReference<HttpHeaders> sent = new AtomicReference<>();
+        server.expect(requestTo(CATALOG_URL + "/api/catalog/tools/" + UUID_FORM + "/info"))
+                .andExpect(request -> sent.set(copyOf(request.getHeaders())))
+                .andRespond(withSuccess("{\"id\":\"" + UUID_FORM + "\"}", MediaType.APPLICATION_JSON));
+
+        assertThat(realFetcher.checkToolExists(UUID_FORM)).isEqualTo(ToolSchemaFetcher.ToolExistence.EXISTS);
+        server.verify();
+
+        assertThat(sent.get().getFirst(GatewaySignatureV2.HEADER)).isNull();
+        assertThat(sent.get().getFirst(InternalGatewaySigner.HEADER_SECRET)).isNull();
+    }
+
+    private static HttpHeaders copyOf(HttpHeaders headers) {
+        HttpHeaders copy = new HttpHeaders();
+        headers.forEach((name, values) -> copy.put(name, List.copyOf(values)));
+        return copy;
+    }
+
+    private static ToolSchemaFetcher fetcherWithItsOwnRestTemplate(String secret) {
+        ToolSchemaFetcher realFetcher = new ToolSchemaFetcher();
+        ReflectionTestUtils.setField(realFetcher, "catalogServiceUrl", CATALOG_URL);
+        ReflectionTestUtils.setField(realFetcher, "gatewaySecretKey", secret);
+        return realFetcher;
+    }
+
     /**
      * Replays the captured outgoing headers through the filter catalog-service runs, configured
      * with catalog's public paths (which do NOT include /api/workflow-inspector).
      */
     private static MockHttpServletResponse replayThroughCatalogFilter(HttpHeaders headers, String path)
             throws Exception {
+        return replayThroughCatalogFilter(headers, path, true);
+    }
+
+    private static MockHttpServletResponse replayThroughCatalogFilter(HttpHeaders headers, String path,
+                                                                      boolean acceptV1) throws Exception {
         GatewayFilterProperties props = new GatewayFilterProperties();
         props.setSecretKey(GATEWAY_SECRET);
         props.setVerificationEnabled(true);
@@ -234,7 +302,7 @@ class ToolSchemaFetcherSlugTest {
         props.setPublicPaths(List.of("/health", "/actuator", "/api/internal/", "/api/agent-tools",
                 "/api/tools", "/api/catalog", "/api/v1", "/catalog/v1", "/api/tool-responses",
                 "/api/mcp", "/api/tool-categories", "/api/apis"));
-        GatewayAuthenticationFilter filter = new GatewayAuthenticationFilter(props);
+        GatewayAuthenticationFilter filter = new GatewayAuthenticationFilter(props, acceptV1);
 
         MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
         headers.forEach((name, values) -> values.forEach(v -> request.addHeader(name, v)));

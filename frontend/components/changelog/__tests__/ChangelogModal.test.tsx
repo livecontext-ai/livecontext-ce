@@ -17,6 +17,10 @@ vi.mock('next-intl', () => ({
       'latest.title': 'See what changed',
       'latest.body': 'One entry, the newest, shown once.',
       'latest.mediaAlt': 'The panel illustration',
+      'latestCloud.title': 'The partner program is open',
+      'latestCloud.body': 'Earn a share of your clients invoices.',
+      'latestCloud.mediaAlt': 'The partner illustration',
+      'latestCloud.action': 'Become a partner',
     };
     return copy[key] ?? key;
   },
@@ -34,6 +38,15 @@ const ENTRY = {
   publishedAt: '2026-09-07',
   media: { type: 'image' as const, src: '/changelog/x.svg', width: 1200, height: 630 },
   learnMoreUrl: '/changelog',
+  copy: 'latest' as const,
+  action: null,
+};
+
+const CLOUD_ENTRY = {
+  ...ENTRY,
+  key: '2026-10-partner-program',
+  copy: 'latestCloud' as const,
+  action: { href: '/partners' },
 };
 
 describe('ChangelogModal', () => {
@@ -285,5 +298,84 @@ describe('ChangelogModal', () => {
     const body = screen.getByText('One entry, the newest, shown once.').parentElement;
     expect(body).toHaveClass('overflow-y-auto');
     expect(body).toHaveClass('min-h-0');
+  });
+
+  it('keeps the line breaks of a long entry written as paragraphs and a list', () => {
+    render(<ChangelogModal />);
+    settle();
+
+    expect(screen.getByText('One entry, the newest, shown once.')).toHaveClass('whitespace-pre-line');
+  });
+
+  describe('an entry with its own copy block and a call to action (the cloud partner entry)', () => {
+    beforeEach(() => {
+      mockUseChangelog.mockReturnValue({
+        entry: CLOUD_ENTRY, decision: 'announce', markSeen, isAvailable: true, isLoading: false,
+      });
+    });
+
+    it('reads its words from the block the entry names, not from the self-hosted one', () => {
+      render(<ChangelogModal />);
+      settle();
+
+      expect(screen.getByText('The partner program is open')).toBeInTheDocument();
+      expect(screen.getByText('Earn a share of your clients invoices.')).toBeInTheDocument();
+      expect(screen.getByAltText('The partner illustration')).toBeInTheDocument();
+      expect(screen.queryByText('See what changed')).not.toBeInTheDocument();
+    });
+
+    it('draws the call to action in the partner gold, opening the in-app path in a new tab', () => {
+      render(<ChangelogModal />);
+      settle();
+
+      const action = screen.getByTestId('changelog-action');
+      expect(action).toHaveTextContent('Become a partner');
+      expect(action).toHaveAttribute('href', '/partners');
+      expect(action).toHaveAttribute('target', '_blank');
+      expect(action).toHaveAttribute('rel', 'noopener noreferrer');
+      // The gold of the partner program (PARTNER_GOLD_BG), not the neutral fallback.
+      expect(action.getAttribute('style')).toContain('linear-gradient');
+    });
+
+    it('acknowledges and reports the entry when the reader follows the call to action', () => {
+      mockTrack.mockReset();
+      render(<ChangelogModal />);
+      settle();
+      // The open effect has already acknowledged; the click path must acknowledge on its own.
+      markSeen.mockClear();
+
+      fireEvent.click(screen.getByTestId('changelog-action'));
+
+      expect(markSeen).toHaveBeenCalled();
+      expect(mockTrack).toHaveBeenCalledWith('changelog_closed', { entry_key: CLOUD_ENTRY.key, has_media: true, action: 'cta' });
+      expect(screen.queryByText('The partner program is open')).not.toBeInTheDocument();
+    });
+
+    it('puts the call to action in the footer, where a short window cannot scroll it away', () => {
+      render(<ChangelogModal />);
+      settle();
+
+      // Same row as the dismiss button, outside the scroll region that holds the long text.
+      const action = screen.getByTestId('changelog-action');
+      const dismiss = screen.getByTestId('changelog-dismiss');
+      expect(action.parentElement).toBe(dismiss.parentElement);
+      expect(action.closest('.overflow-y-auto')).toBeNull();
+    });
+
+    it('lets "Got it" step back to a secondary button next to the call to action', () => {
+      render(<ChangelogModal />);
+      settle();
+
+      // The outline variant: the gold button is the one primary action of the panel.
+      expect(screen.getByTestId('changelog-dismiss').className).toContain('bg-transparent');
+    });
+  });
+
+  it('draws no call to action for an entry that has none, and keeps "Got it" primary', () => {
+    render(<ChangelogModal />);
+    settle();
+
+    expect(screen.queryByTestId('changelog-action')).not.toBeInTheDocument();
+    expect(screen.getByTestId('changelog-dismiss').className).not.toContain('bg-transparent');
   });
 });

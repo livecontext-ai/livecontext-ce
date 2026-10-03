@@ -191,8 +191,8 @@ class ApiKeyServiceTest {
             UserResolutionResponse expectedResponse = new UserResolutionResponse();
             expectedResponse.setUserId(USER_ID);
 
-            when(encryptionService.hmacHash("lc_live_testkey123")).thenReturn(HMAC_HASH);
-            when(userRepository.findByApiKeyHash(HMAC_HASH)).thenReturn(Optional.of(user));
+            when(encryptionService.hmacHashCandidates("lc_live_testkey123")).thenReturn(java.util.List.of(HMAC_HASH));
+            when(userRepository.findByApiKeyHashIn(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of(user));
             when(userResolutionService.resolveUser(PROVIDER_ID, null)).thenReturn(expectedResponse);
 
             UserResolutionResponse result = apiKeyService.resolveByPlaintextKey("lc_live_testkey123");
@@ -203,10 +203,39 @@ class ApiKeyServiceTest {
         }
 
         @Test
+        @DisplayName("LC-070: a key hashed before the HMAC key separation (password-keyed) still resolves at write-version 2")
+        void resolveByPlaintextKey_findsKeyHashedWithLegacyHmacKey() {
+            String plaintext = "lc_live_" + "ab".repeat(32);
+            CredentialEncryptionService v1 = new CredentialEncryptionService("test-password-123", "0123456789abcdef");
+            CredentialEncryptionService v2 = new CredentialEncryptionService("test-password-123", "0123456789abcdef",
+                    "", "", false, false, "2", "allow", "");
+            String storedHash = v1.hmacHash(plaintext);
+            assertThat(v2.hmacHash(plaintext)).isNotEqualTo(storedHash);
+            User user = buildUser();
+            user.setApiKeyHash(storedHash);
+            UserResolutionResponse expected = new UserResolutionResponse();
+            expected.setUserId(USER_ID);
+            // The real IN query semantics: only a candidate list containing the stored hash matches.
+            when(userRepository.findByApiKeyHashIn(anyCollection())).thenAnswer(inv ->
+                    ((java.util.Collection<?>) inv.getArgument(0)).contains(storedHash)
+                            ? java.util.List.of(user) : java.util.List.of());
+            when(userResolutionService.resolveUser(PROVIDER_ID, null)).thenReturn(expected);
+            ApiKeyService withRealCrypto = new ApiKeyService(
+                    userRepository, apiKeyRepository, v2, userResolutionService, gatewayCacheClient);
+
+            UserResolutionResponse result = withRealCrypto.resolveByPlaintextKey(plaintext);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getUserId()).isEqualTo(USER_ID);
+            // ... and the one-way hash moves to the current HMAC key on this successful use.
+            verify(userRepository).rehashApiKey(user.getId(), storedHash, v2.hmacHash(plaintext));
+        }
+
+        @Test
         @DisplayName("should return null for unknown key")
         void resolveByPlaintextKey_returnsNullForUnknownKey() {
-            when(encryptionService.hmacHash("lc_live_unknown")).thenReturn("some_hash");
-            when(userRepository.findByApiKeyHash("some_hash")).thenReturn(Optional.empty());
+            when(encryptionService.hmacHashCandidates("lc_live_unknown")).thenReturn(java.util.List.of("some_hash"));
+            when(userRepository.findByApiKeyHashIn(java.util.List.of("some_hash"))).thenReturn(java.util.List.of());
 
             UserResolutionResponse result = apiKeyService.resolveByPlaintextKey("lc_live_unknown");
 
@@ -220,8 +249,8 @@ class ApiKeyServiceTest {
             User user = buildUser();
             user.setEnabled(false);
 
-            when(encryptionService.hmacHash("lc_live_disabled")).thenReturn(HMAC_HASH);
-            when(userRepository.findByApiKeyHash(HMAC_HASH)).thenReturn(Optional.of(user));
+            when(encryptionService.hmacHashCandidates("lc_live_disabled")).thenReturn(java.util.List.of(HMAC_HASH));
+            when(userRepository.findByApiKeyHashIn(java.util.List.of(HMAC_HASH))).thenReturn(java.util.List.of(user));
 
             UserResolutionResponse result = apiKeyService.resolveByPlaintextKey("lc_live_disabled");
 

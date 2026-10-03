@@ -1,10 +1,12 @@
 package com.apimarketplace.orchestrator.services.impl;
 
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.datasource.client.DataSourceClient;
 import com.apimarketplace.datasource.client.dto.CrudRequestDto;
 import com.apimarketplace.datasource.client.dto.CrudResultDto;
 import com.apimarketplace.orchestrator.config.OrchestratorLimitsConfig;
 import com.apimarketplace.orchestrator.services.interfaces.ExecutionResult;
+import com.apimarketplace.orchestrator.services.persistence.StepPayloadService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -22,17 +24,42 @@ public class CrudToolExecutor {
 
     private final DataSourceClient dataSourceClient;
     private final OrchestratorLimitsConfig renderLimits;
+    private final StepPayloadService stepPayloadService;
 
     /**
-     * Execute CRUD operations locally.
+     * Execute CRUD operations locally. Back-compat overload for a caller with no billing/run
+     * context on hand - always dispatched as NOT restricted (the pre-fix behaviour).
      *
      * @param toolId Tool ID like "crud/delete-row", "crud/create-row", etc.
      * @param input Input data containing dataSourceId, crud config, and resolved values
      * @param tenantId Tenant ID for authorization
      * @return ExecutionResult with CRUD operation result
      */
-    @SuppressWarnings("unchecked")
     public ExecutionResult execute(String toolId, Map<String, Object> input, String tenantId) {
+        return execute(toolId, input, tenantId, null);
+    }
+
+    /**
+     * Execute CRUD operations locally.
+     *
+     * <p>LC-066/LC-011 re-audit item 2: {@code billingIdentifiers} carries {@code
+     * __workflowRunId__} (set by {@code StepNode}/{@code FindNode} for every workflow node
+     * execution), which is used ONLY to check {@link StepPayloadService#isRunRestricted} - the
+     * SAME run-taint decision every other restricted-data path in the codebase makes. A chat-only
+     * table tool call (no workflow run) has no {@code __workflowRunId__} and is dispatched as
+     * NOT restricted here; the conversation-level restriction is caught upstream by
+     * {@code RestrictedDataTransferGuard} before the chat turn is ever built.
+     *
+     * @param toolId Tool ID like "crud/delete-row", "crud/create-row", etc.
+     * @param input Input data containing dataSourceId, crud config, and resolved values
+     * @param tenantId Tenant ID for authorization
+     * @param billingIdentifiers execution context markers (may be null); only
+     *                           {@code __workflowRunId__} is read here
+     * @return ExecutionResult with CRUD operation result
+     */
+    @SuppressWarnings("unchecked")
+    public ExecutionResult execute(String toolId, Map<String, Object> input, String tenantId,
+                                   Map<String, Object> billingIdentifiers) {
         String operation = toolId.substring("crud/".length());
         log.info("[CRUD] Executing operation: {}, tenant: {}", operation, tenantId);
         log.debug("[CRUD] Input keys: {}", input != null ? input.keySet() : "null");
@@ -52,7 +79,8 @@ public class CrudToolExecutor {
             }
             log.debug("[CRUD] crudConfig keys: {}", crudConfig.keySet());
 
-            CrudRequestDto request = buildCrudRequestDto(operation, dataSourceId, crudConfig, tenantId);
+            boolean restricted = isRunRestricted(billingIdentifiers);
+            CrudRequestDto request = buildCrudRequestDto(operation, dataSourceId, crudConfig, tenantId, restricted);
             if (request == null) {
                 return createErrorResult("Unknown CRUD operation: " + operation);
             }
@@ -67,6 +95,20 @@ public class CrudToolExecutor {
             log.error("[CRUD] Execution error: {}", e.getMessage(), e);
             return createErrorResult("CRUD execution failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * True when the workflow run this CRUD call executes in already holds restricted data.
+     * {@code stepPayloadService} is a required collaborator (unlike the optional field-injected
+     * uses elsewhere), so it is null only in a test that constructs this class directly without
+     * one - degrades to "not restricted" rather than NPE-ing.
+     */
+    private boolean isRunRestricted(Map<String, Object> billingIdentifiers) {
+        if (billingIdentifiers == null || stepPayloadService == null) {
+            return false;
+        }
+        Object runId = billingIdentifiers.get("__workflowRunId__");
+        return runId != null && stepPayloadService.isRunRestricted(runId.toString());
     }
 
     /**
@@ -134,7 +176,8 @@ public class CrudToolExecutor {
      */
     @SuppressWarnings("unchecked")
     private CrudRequestDto buildCrudRequestDto(String operation, Long dataSourceId,
-                                                Map<String, Object> crudConfig, String tenantId) {
+                                                Map<String, Object> crudConfig, String tenantId,
+                                                boolean restricted) {
         String normalizedOp = switch (operation) {
             case "create-row", "create_row", "insert_row", "insert-row", "insert_rows" -> "create-row";
             case "read-row", "read_row", "read_rows", "find" -> "read-row";
@@ -208,7 +251,7 @@ public class CrudToolExecutor {
         }
 
         return new CrudRequestDto(normalizedOp, dataSourceId, null, tenantId,
-                rows, columns, where, limit, offset, setData, similarity);
+                rows, columns, where, limit, offset, setData, similarity, restricted);
     }
 
     /**
@@ -277,6 +320,15 @@ public class CrudToolExecutor {
             // which is why the same text appears twice.
             if (data.warnings() != null && !data.warnings().isEmpty()) {
                 output.put("warnings", data.warnings());
+            }
+            // LC-066/LC-011 re-audit item 2: a table read whose result datasource-service tagged
+            // RESTRICTED (a row's own stored classification, or the calling context's restricted
+            // flag - see CrudExecutorService.readResultSensitivity) is tagged here the SAME way
+            // every other restricted tool result is: RestrictedDataPolicy.fromToolMetadata reads
+            // this key straight off the step output, gating the run from a disallowed LLM
+            // processor exactly like a Gmail/Drive catalog tool result does.
+            if (DataSensitivity.parse(data.dataSensitivity()).isRestricted()) {
+                output.put(DataSensitivity.CREDENTIAL_KEY, DataSensitivity.RESTRICTED.name());
             }
         }
 

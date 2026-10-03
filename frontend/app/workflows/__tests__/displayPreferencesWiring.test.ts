@@ -20,7 +20,9 @@ import { join } from 'node:path';
 const read = (relative: string) => readFileSync(join(process.cwd(), relative), 'utf8');
 
 const workflowsLayout = read('app/workflows/layout.tsx');
-const appLayout = read('app/[locale]/app/layout.tsx');
+// The /app shell lives in the client half of the layout since the per-request CSP nonce split
+// (LC-027): app/[locale]/app/layout.tsx is a thin server wrapper around AppLayoutClient.
+const appLayout = read('app/[locale]/app/AppLayoutClient.tsx');
 const providers = read('lib/providers/smart-providers.tsx');
 
 /**

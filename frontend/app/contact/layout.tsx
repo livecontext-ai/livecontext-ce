@@ -19,7 +19,8 @@ export async function generateMetadata(): Promise<Metadata> {
     // no [locale] segment), so its card is built from the same translator.
     ...socialCard({ title: t('title'), description: t('description'), path: '/contact' }),
     // Self-hosted deployments must never index marketing pages.
-    robots: IS_CE ? { index: false, follow: false } : undefined,
+    // Only on CE: on the cloud an explicit 'robots: undefined' wiped the root layout's directives.
+    ...(IS_CE ? { robots: { index: false, follow: false } } : {}),
   };
 }
 

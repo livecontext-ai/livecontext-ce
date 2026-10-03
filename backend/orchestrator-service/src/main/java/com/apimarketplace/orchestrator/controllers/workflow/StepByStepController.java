@@ -488,7 +488,7 @@ public class StepByStepController {
             }
 
             logger.info("[StepByStep] ========== V1 STEP EXECUTION ==========");
-            logger.info("[StepByStep] Executing single step (step-by-step): {} for run: {}, inputData: {}", stepId, runId, inputData);
+            logger.info("[StepByStep] Executing single step (step-by-step): {} for run: {}, inputData: {}", stepId, runId, com.apimarketplace.common.logging.PayloadLogSafety.describeAny(inputData));
             StepExecutionResult result = resumeService.executeSingleStepInStepByStepMode(runId, stepId, inputData);
             WorkflowRunState newState = resumeService.reconstructStateForApi(runId);
 

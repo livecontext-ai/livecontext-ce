@@ -34,6 +34,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -238,7 +239,7 @@ class VectorEditionGatingTest {
             assertThat(result.success()).isFalse();
             assertThat(result.message()).isEqualTo(VectorFeatureGate.DISABLED_MESSAGE);
             verify(vectorRepository, never()).insertVectorBatch(anyLong(), anyString(), anyList());
-            verify(crudRepository, never()).createRows(anyLong(), anyString(), anyList());
+            verify(crudRepository, never()).createRows(anyLong(), anyString(), anyList(), any());
         }
 
         @Test
@@ -266,7 +267,7 @@ class VectorEditionGatingTest {
         void scalarUpdateOnLegacyVectorTableAllowed() {
             stubDataSource(vectorDataSource());
             when(crudRepository.findIdsMatching(anyLong(), anyString(), any())).thenReturn(List.of(10L));
-            when(crudRepository.updateRows(anyLong(), anyString(), any(), any())).thenReturn(1);
+            when(crudRepository.updateRows(anyLong(), anyString(), any(), any(), anyBoolean())).thenReturn(1);
             com.apimarketplace.datasource.crud.dto.UpdateRowRequest request =
                     new com.apimarketplace.datasource.crud.dto.UpdateRowRequest();
             request.setDataSourceId(1L);
@@ -285,7 +286,7 @@ class VectorEditionGatingTest {
         @DisplayName("insert WITHOUT vector values on a legacy vector table stays allowed (scalar columns survive)")
         void scalarInsertOnLegacyVectorTableAllowed() {
             stubDataSource(vectorDataSource());
-            when(crudRepository.createRows(anyLong(), anyString(), anyList())).thenReturn(List.of(10L));
+            when(crudRepository.createRows(anyLong(), anyString(), anyList(), any())).thenReturn(List.of(10L));
             CreateRowRequest request = new CreateRowRequest();
             request.setDataSourceId(1L);
             request.setRows(List.of(new CreateRowRequest.RowData(null, new LinkedHashMap<>(
@@ -411,7 +412,7 @@ class VectorEditionGatingTest {
 
             assertThat(result.success()).isFalse();
             assertThat(result.message()).contains("expected 4").contains("got 3");
-            verify(crudRepository, never()).createRows(anyLong(), anyString(), anyList());
+            verify(crudRepository, never()).createRows(anyLong(), anyString(), anyList(), any());
             verify(vectorRepository, never()).insertVectorBatch(anyLong(), anyString(), anyList());
         }
 

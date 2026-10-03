@@ -18,12 +18,14 @@ import {
   useDataSourceCreation,
   useCellEditing,
 } from './hooks';
+import { TABLE_URL_KEYS } from './hooks/useSortingAndFiltering';
+import { urlInt, useUrlState } from '@/hooks/useUrlState';
 
-export type UseDataTableControllerParams = Pick<DataTableProps, 'dataSourceId' | 'jsonPath' | 'workflowContext' | 'showIdColumn' | 'readOnly' | 'snapshotData' | 'serverFilters'>;
+export type UseDataTableControllerParams = Pick<DataTableProps, 'dataSourceId' | 'jsonPath' | 'workflowContext' | 'showIdColumn' | 'readOnly' | 'snapshotData' | 'serverFilters' | 'urlState'>;
 
 export type DataTableController = ReturnType<typeof useDataTableController>;
 
-export function useDataTableController({ dataSourceId, jsonPath, workflowContext, showIdColumn = false, readOnly = false, snapshotData, serverFilters }: UseDataTableControllerParams) {
+export function useDataTableController({ dataSourceId, jsonPath, workflowContext, showIdColumn = false, readOnly = false, snapshotData, serverFilters, urlState = false }: UseDataTableControllerParams) {
   const isSnapshot = !!snapshotData;
   const { toasts, addToast, removeToast } = useToast();
 
@@ -45,7 +47,25 @@ export function useDataTableController({ dataSourceId, jsonPath, workflowContext
   const rowLevelFields = useMemo(() => getRowLevelExportFields(viewConfig), [viewConfig]);
 
   // Use pagination hook
-  const { pagination, setPagination } = usePagination({ initialPageSize: 20 });
+  // On a table's own page the page and page size live in the address. They are read ONCE,
+  // to start where a reload left off, and then follow the pagination state (see the effect
+  // below): the response decides which page is on screen, the address only records it.
+  const [urlPage, setUrlPage] = useUrlState(TABLE_URL_KEYS.page, 1, {
+    codec: urlInt(1, 1_000_000),
+    enabled: urlState,
+  });
+  const [urlPageSize, setUrlPageSize] = useUrlState(TABLE_URL_KEYS.pageSize, 20, {
+    codec: urlInt(1, 100),
+    enabled: urlState,
+  });
+  const { pagination, setPagination } = usePagination({
+    initialPageSize: urlPageSize,
+    initialPage: urlPage,
+  });
+  useEffect(() => {
+    setUrlPage(pagination.currentPage);
+    setUrlPageSize(pagination.pageSize);
+  }, [pagination.currentPage, pagination.pageSize, setUrlPage, setUrlPageSize]);
 
   // Use column management hook
   const {
@@ -146,6 +166,7 @@ export function useDataTableController({ dataSourceId, jsonPath, workflowContext
     fetchData: (page, pageSize, sort) => fetchDataBase(page, pageSize, sort, null, serverFilters),
     pagination,
     dataSourceId,
+    urlState,
   });
 
   // Use cell editing hook
@@ -370,6 +391,9 @@ export function useDataTableController({ dataSourceId, jsonPath, workflowContext
   // Keep a ref of pageSize to avoid re-triggering the initial load effect on page size changes
   const pageSizeRef = useRef(pagination.pageSize);
   pageSizeRef.current = pagination.pageSize;
+  const currentPageRef = useRef(pagination.currentPage);
+  currentPageRef.current = pagination.currentPage;
+  const loadedDatasetRef = useRef(`${dataSourceId ?? ''}|${jsonPath ?? ''}`);
 
   // Reset columns and rows when jsonPath or other key config changes
   useEffect(() => {
@@ -406,7 +430,15 @@ export function useDataTableController({ dataSourceId, jsonPath, workflowContext
     }
 
     fetchColumns();
-    fetchDataBase(1, pageSizeRef.current, sortConfig, null, serverFilters);
+    // Always the first page, except on a table's own page, where the SAME table (the first
+    // load, or this effect re-running once auth settles) keeps the page the address asked for.
+    // Only there: an embedded table also re-runs this for another run or step of the same
+    // workflow, and starting that one on the page the previous one had scrolled to would skip
+    // its first rows.
+    const dataset = `${dataSourceId ?? ''}|${jsonPath ?? ''}`;
+    const startPage = urlState && loadedDatasetRef.current === dataset ? currentPageRef.current : 1;
+    loadedDatasetRef.current = dataset;
+    fetchDataBase(startPage, pageSizeRef.current, sortConfig, null, serverFilters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthLoading, dataSourceId, jsonPath, workflowContext?.workflowId, workflowContext?.runId, workflowContext?.stepAlias, isSnapshot]);
 
@@ -435,6 +467,15 @@ export function useDataTableController({ dataSourceId, jsonPath, workflowContext
   const handlePageChange = useCallback((page: number) => {
     fetchDataBase(page, pagination.pageSize, sortConfig, null, serverFilters);
   }, [fetchDataBase, pagination.pageSize, sortConfig, serverFilters]);
+
+  // A page restored from the address can be past the end (rows were deleted since): step back
+  // to the last page rather than show an empty table reading "page 40 of 3".
+  useEffect(() => {
+    if (!urlState || tableLoading) return;
+    if (pagination.totalPages > 0 && pagination.currentPage > pagination.totalPages) {
+      handlePageChange(pagination.totalPages);
+    }
+  }, [urlState, tableLoading, pagination.currentPage, pagination.totalPages, handlePageChange]);
 
   const handlePageSizeChange = useCallback((pageSize: number) => {
     setPagination(prev => ({ ...prev, pageSize }));

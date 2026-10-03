@@ -5,6 +5,8 @@ import { ChevronLeft, ChevronRight, CircleX, Layers } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { formatUtcTime } from '@/lib/utils/dateFormatters';
 import { getRunStatusLabel } from '@/lib/utils/runStatusUtils';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { EpochDetailsCard } from './EpochDetailsCard';
 import {
   epochDisplayDurationMs,
   epochTone,
@@ -49,6 +51,7 @@ const TONE_RANK: Record<EpochTone, number> = { failed: 4, running: 3, stopped: 2
 interface EpochPoint {
   epoch: number;
   startedAt: string;
+  endedAt: string | null;
   status: string | null;
   tone: EpochTone;
   durationMs: number | null;
@@ -133,6 +136,7 @@ export const RunEpochNavigator = memo(function RunEpochNavigator({
         return {
           epoch: entry.epoch,
           startedAt: entry.startedAt,
+          endedAt: entry.endedAt ?? null,
           status,
           tone: epochTone(status),
           // A live epoch's figure would go stale without a ticker; show none.
@@ -150,6 +154,9 @@ export const RunEpochNavigator = memo(function RunEpochNavigator({
 
   /** Epoch under the pointer or reached with the keyboard, not committed yet. */
   const [preview, setPreview] = useState<number | null>(null);
+  /** The epoch card is up: pointer over the timeline, or a key step. Outlives the commit that clears
+   *  the preview, so a key step or a click does not close the card it just opened. */
+  const [cardOpen, setCardOpen] = useState(false);
   const draggingRef = useRef(false);
   const keyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -210,12 +217,14 @@ export const RunEpochNavigator = memo(function RunEpochNavigator({
     if (e.button !== 0) return;
     draggingRef.current = true;
     e.currentTarget.setPointerCapture?.(e.pointerId);
+    setCardOpen(true);
     setPreview(epochAtPointer(e));
   }, [epochAtPointer]);
 
   const onPointerMove = useCallback((e: PointerEvent<HTMLDivElement>) => {
     const epoch = epochAtPointer(e);
     // Same epoch under the pointer: no state update, no render.
+    setCardOpen(true);
     setPreview(prev => (prev === epoch ? prev : epoch));
   }, [epochAtPointer]);
 
@@ -226,12 +235,15 @@ export const RunEpochNavigator = memo(function RunEpochNavigator({
   }, [commit, epochAtPointer]);
 
   const onPointerLeave = useCallback(() => {
-    if (!draggingRef.current) setPreview(null);
+    if (draggingRef.current) return;
+    setPreview(null);
+    setCardOpen(false);
   }, []);
 
   const onPointerCancel = useCallback(() => {
     draggingRef.current = false;
     setPreview(null);
+    setCardOpen(false);
   }, []);
 
   /** Escape from any control of the navigator folds it (a pending key step is dropped). */
@@ -245,6 +257,7 @@ export const RunEpochNavigator = memo(function RunEpochNavigator({
       keyTimerRef.current = null;
     }
     setPreview(null);
+    setCardOpen(false);
     onClose?.();
   }, [onClose]);
 
@@ -263,6 +276,7 @@ export const RunEpochNavigator = memo(function RunEpochNavigator({
     e.preventDefault();
     const epoch = points[target].epoch;
     setPreview(epoch);
+    setCardOpen(true);
     if (keyTimerRef.current) clearTimeout(keyTimerRef.current);
     keyTimerRef.current = setTimeout(() => commit(epoch), EPOCH_NAV_KEY_COMMIT_MS);
   }, [commit, indexOfEpoch, last, points, preview, selectedEpoch]);
@@ -271,6 +285,10 @@ export const RunEpochNavigator = memo(function RunEpochNavigator({
   const shown = shownEpoch == null ? null : points[indexOfEpoch(shownEpoch)] ?? null;
   const highlightIndex = indexOfEpoch(shownEpoch);
   const dimOthers = highlightIndex >= 0;
+  /** The bar the previewed epoch sits in: the hover card hangs under it. */
+  const previewBarIndex = !cardOpen || highlightIndex < 0
+    ? -1
+    : bars.findIndex(bar => highlightIndex >= bar.from && highlightIndex <= bar.to);
 
   /** Counts per outcome; an epoch that carries no outcome yet is in none of them. */
   const summary = useMemo(() => {
@@ -380,9 +398,10 @@ export const RunEpochNavigator = memo(function RunEpochNavigator({
         onPointerLeave={onPointerLeave}
         onPointerCancel={onPointerCancel}
         onKeyDown={onSliderKeyDown}
+        onBlur={() => setCardOpen(false)}
         // Beyond ~60 bars the 1 px gaps alone would outgrow a narrow pill: drop them, so
         // the bars always share exactly the timeline's width (what the pointer maps onto).
-        className={`mt-1.5 flex h-9 touch-none cursor-pointer items-end ${bars.length > EPOCH_NAV_GAPLESS_FROM ? 'gap-0' : 'gap-px'} rounded-sm border-b border-[var(--border-color)] px-px pt-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-primary)]`}
+        className={`relative mt-1.5 flex h-9 touch-none cursor-pointer items-end ${bars.length > EPOCH_NAV_GAPLESS_FROM ? 'gap-0' : 'gap-px'} rounded-sm border-b border-[var(--border-color)] px-px pt-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-primary)]`}
       >
         {bars.map((bar, i) => {
           const active = highlightIndex >= bar.from && highlightIndex <= bar.to;
@@ -399,6 +418,35 @@ export const RunEpochNavigator = memo(function RunEpochNavigator({
             />
           );
         })}
+        {/* The same epoch card as the Run tab's epoch list, opened below the bar under the
+            pointer (or reached with the keyboard). ONE tooltip anchored on an invisible marker
+            that follows the previewed bar, not one per bar: a long run draws up to
+            EPOCH_NAV_MAX_BARS of them. Its own provider: the canvas pill is outside the side
+            panel's. */}
+        {shown && previewBarIndex >= 0 && (
+          <TooltipProvider>
+            <Tooltip open>
+              <TooltipTrigger asChild>
+                <span
+                  aria-hidden="true"
+                  data-epoch-nav-card-anchor
+                  className="pointer-events-none absolute bottom-0 h-0 w-0"
+                  style={{ left: `${((previewBarIndex + 0.5) / bars.length) * 100}%` }}
+                />
+              </TooltipTrigger>
+              {/* "always": the anchor moves by a style change, which nothing else would report. */}
+              <TooltipContent side="bottom" sideOffset={8} align="center" updatePositionStrategy="always" className="px-3 py-2.5 min-w-[240px]">
+                <EpochDetailsCard
+                  epoch={shown.epoch}
+                  status={shown.status}
+                  startedAt={shown.startedAt}
+                  endedAt={shown.endedAt}
+                  durationMs={shown.durationMs}
+                />
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
       </div>
 
       <p data-epoch-nav-detail className="mt-1.5 flex items-start gap-1.5 text-xs leading-4 text-gray-600 dark:text-gray-300">

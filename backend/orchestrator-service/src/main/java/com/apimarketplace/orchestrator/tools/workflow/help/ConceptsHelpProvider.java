@@ -45,11 +45,46 @@ public final class ConceptsHelpProvider {
             Map.entry("mcps", "External tools via catalog(action='search')"),
             Map.entry("tables", "CRUD: insert_row, find_rows, read_rows, update_row, delete_row. " +
                 "find_rows supports vector similarity search (RAG) via similarity={column, queryVector, topK?, threshold?}"),
-            Map.entry("interfaces", "Visual interfaces: display data (variable_mapping) OR interactive apps (action_mapping + trigger = user submits → workflow → results displayed)")
+            Map.entry("interfaces", "Visual interfaces: display data (variable_mapping) OR interactive apps (action_mapping + trigger = user submits → workflow → results displayed)"),
+            Map.entry("notes", "Sticky notes that explain the workflow to the user, optionally attached to one node. Never executed. workflow(action='help', topics=['notes'])")
         ));
 
         result.put("tip", "Start with workflow(action='init') - it returns all available node types and syntax.");
 
+        return result;
+    }
+
+    // ==================== NOTES ====================
+
+    public static Map<String, Object> getNotesHelp() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("title", "STICKY NOTES - explain the workflow to the person reading it");
+        result.put("what", "A note is text on the canvas. It never runs, takes no edge and no connect_after, "
+                + "and does not count as an orphan or a dead end in validate.");
+        result.put("add", "workflow(action='add_node', type='note', params={text: '...', attached_to: '<node label>'}). "
+                + "text is required. attached_to is optional: the label of the node the note explains. "
+                + "label is optional (one is generated, e.g. 'About Check Seen'); color is optional, one of yellow, blue, green, pink, purple, orange; leave it out and successive notes alternate through these colours.");
+        result.put("attached_vs_free", "ATTACHED (attached_to set): placed next to that node, shown when the user focuses "
+                + "that node in the editor or in a run, renamed with it, and REMOVED with it (undo brings both back). "
+                + "FREE (no attached_to): one note about the whole workflow, placed above the graph.");
+        result.put("placement", "Do not invent a position for a note you add: the canvas places it in the reading direction "
+                + "the user chose for this workflow (an attached note above its node when the graph reads left to right, to its "
+                + "right when it reads top to bottom) and places an attached note again when the user switches direction. "
+                + "When you send back a plan read with get_plan, keep the position each note came with: the user put it there.");
+        result.put("when_to_add", List.of(
+                "The WHY a reader cannot guess from the node itself: the rule behind a decision, why a dedup or a find_rows guard exists, why a wait or a retry is there.",
+                "What the user must do or provide: a credential to connect, a table to fill, an interface page to open.",
+                "A trap the next editor would fall into: an order that matters, a field that must stay in sync.",
+                "One free note summarising what the workflow does and when it runs, for a workflow of more than a few nodes."));
+        result.put("when_not_to", "Do not restate what a node already says (its type, its label, its params), and do not annotate "
+                + "every node: a few notes on the nodes that need explaining read better than one on each.");
+        result.put("style", "Write for the user, in their language, 1 to 3 short sentences. Plain text; line breaks are kept.");
+        result.put("edit_remove", "workflow(action='modify', node='<note label>', params={text: '...', attachedTo: '<node label>'}) "
+                + "to change it; workflow(action='remove', node='<note label>') to delete it.");
+        result.put("in_set_plan", "notes: [{label: 'Why dedup', text: '...', attachedTo: 'Check Seen'}] - attachedTo takes a node "
+                + "label like an edge endpoint; a label that names no node is refused. get_plan returns the same shape. "
+                + "Give each note its own label, distinct from every node: modify and remove find a note by its label. "
+                + "color takes the same palette names (or their hex); leave it out and the notes alternate through the palette.");
         return result;
     }
 

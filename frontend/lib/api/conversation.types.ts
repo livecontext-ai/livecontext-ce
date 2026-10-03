@@ -77,6 +77,18 @@ export function conversationRoute(conversation: Pick<Conversation, 'id' | 'kind'
     : `/app/c/${conversation.id}`;
 }
 
+/** The conversation of one delegated task (it carries the agent id too, but it is not the agent's chat). */
+export function isTaskConversation(conversation: { taskId?: string | null } | null | undefined): boolean {
+  return Boolean(conversation?.taskId);
+}
+
+/** The agent's own conversation: bound to an agent and not to one of its tasks. */
+export function isAgentMainConversation(
+  conversation: { agentId?: string | null; taskId?: string | null } | null | undefined,
+): boolean {
+  return Boolean(conversation?.agentId) && !isTaskConversation(conversation);
+}
+
 export interface Conversation {
   id: string;
   userId: string;
@@ -88,6 +100,13 @@ export interface Conversation {
   messageCount: number;
   workflowId?: string;
   agentId?: string;
+  /**
+   * Set when this is the conversation of one delegated task (a task holding Gmail / Google Drive
+   * data runs its turns in a conversation of its own, titled "<agent> - task <id8>"), absent for
+   * the agent's own conversation. Both carry the agent id: read it through
+   * {@link isAgentMainConversation} / {@link isTaskConversation} rather than testing agentId alone.
+   */
+  taskId?: string | null;
   /**
    * What the conversation IS: a chat with a model or an agent, or a studio thread of pure
    * generations.

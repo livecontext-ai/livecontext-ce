@@ -74,7 +74,7 @@ import { EmptyCanvasChat } from './EmptyCanvasChat';
 import { CanvasToolbar } from './CanvasToolbar';
 import { CanvasSettingsPanel } from './CanvasSettingsPanel';
 import { nodeMatchesStep } from '../services/nodeMatcher';
-import { resolveFollowFrame } from '../services/runFollowBounds';
+import { computeFollowBounds, resolveFollowFrame, withAttachedNotes } from '../services/runFollowBounds';
 import {
   WORKFLOW_FOLLOW_NODES_EVENT,
   FOLLOW_TRANSITION_MS,
@@ -689,9 +689,24 @@ export function BuilderCanvas({
       if (!node) return;
       // Select the node
       onSelectionChange([node.id]);
-      // Center viewport on the node
       const inst = instance;
-      if (inst && node.position) {
+      // A node that has notes is framed WITH them, so the explanation is on screen too.
+      const framed = withAttachedNotes(nodes, [node.id]);
+      const notesBounds = framed.length > 1
+        ? computeFollowBounds(framed, {
+            pad: FOCUS_NOTES_PAD_UNITS,
+            fallbackWidth: FOLLOW_FALLBACK_NODE_WIDTH,
+            fallbackHeight: FOLLOW_FALLBACK_NODE_HEIGHT,
+          })
+        : null;
+      if (inst && notesBounds) {
+        try {
+          inst.fitBounds(notesBounds, { duration: 300 });
+        } catch {
+          // A camera move must never break the canvas it is decorating.
+        }
+      } else if (inst && node.position) {
+        // Center viewport on the node
         const nodeWidth = (node.width ?? 200) / 2;
         const nodeHeight = (node.height ?? 60) / 2;
         inst.setCenter(
@@ -1603,6 +1618,8 @@ const FOLLOW_PENDING_TTL_MS = 2000;
 /** Used only before ReactFlow has measured a node. */
 const FOLLOW_FALLBACK_NODE_WIDTH = 240;
 const FOLLOW_FALLBACK_NODE_HEIGHT = 80;
+/** Room around a focused node and its notes, in flow units: tighter than a run follow. */
+const FOCUS_NOTES_PAD_UNITS = 80;
 
 const CANVAS_STYLES = `
   .react-flow { height: 100% !important; width: 100% !important; }

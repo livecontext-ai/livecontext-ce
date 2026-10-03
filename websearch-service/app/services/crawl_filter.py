@@ -139,13 +139,80 @@ BLOCKED_NETWORKS = [
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
     ipaddress.ip_network("fe80::/10"),
+    # Never a legitimate public destination either: multicast, broadcast,
+    # "reserved for future use", and the unspecified IPv6 address.
+    ipaddress.ip_network("224.0.0.0/4"),
+    ipaddress.ip_network("240.0.0.0/4"),
+    ipaddress.ip_network("::/128"),
+    ipaddress.ip_network("ff00::/8"),
 ]
+
+# IPv6 prefixes that embed an IPv4 address in their low 32 bits and are
+# translated to it by the network (NAT64 well-known prefix + local-use
+# prefix, RFC 6052 / RFC 8215). The embedded IPv4 is what gets reached.
+_NAT64_NETWORKS = [
+    ipaddress.ip_network("64:ff9b::/96"),
+    ipaddress.ip_network("64:ff9b:1::/48"),
+]
+
+
+# IPv4-compatible IPv6 addresses (::a.b.c.d, RFC 4291 section 2.5.5.1). Deprecated
+# and never a legitimate destination, but the stdlib reports them as global
+# (`::7f00:1`, i.e. ::127.0.0.1, has is_global=True) and a dual-stack host may
+# still route them to the embedded IPv4. The whole /96 is refused; `::` and
+# `::1` sit inside it and keep their own, more specific reasons.
+_IPV4_COMPATIBLE_NETWORK = ipaddress.ip_network("::/96")
+
+
+def _embedded_ipv4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
+    """Return the IPv4 address an IPv6 address really targets, if any.
+
+    Covers IPv4-mapped (::ffff:a.b.c.d), 6to4 (2002::/16) and NAT64.
+    Without this, `http://[::ffff:169.254.169.254]/` slips past a check that
+    compares an IPv6 address against IPv4 networks only. IPv4-compatible
+    addresses (::a.b.c.d) are refused outright by `ip_block_reason`.
+    """
+    if ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    if ip.sixtofour is not None:
+        return ip.sixtofour
+    for network in _NAT64_NETWORKS:
+        if ip in network:
+            return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return None
+
+
+def ip_block_reason(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
+    """Return why `ip` is not a safe public destination, or "" when it is.
+
+    Blocks loopback, RFC 1918, link-local (incl. cloud metadata 169.254/16),
+    CGNAT 100.64/10, IPv6 ULA / link-local, multicast, reserved, unspecified,
+    any IPv6 form that embeds one of those IPv4 addresses, and every
+    deprecated IPv4-compatible address (::a.b.c.d). Anything the stdlib does
+    not consider globally routable is blocked too, so a range missing from
+    BLOCKED_NETWORKS still fails closed.
+    """
+    if isinstance(ip, ipaddress.IPv6Address):
+        embedded = _embedded_ipv4(ip)
+        if embedded is not None:
+            inner = ip_block_reason(embedded)
+            return f"{inner} (embedded in {ip})" if inner else ""
+        if ip in _IPV4_COMPATIBLE_NETWORK and int(ip) > 1:
+            return (f"{ip} is a deprecated IPv4-compatible address "
+                    f"(embeds {ipaddress.IPv4Address(int(ip))})")
+    for network in BLOCKED_NETWORKS:
+        if ip in network:
+            return f"{ip} is in {network}"
+    if not ip.is_global:
+        return f"{ip} is not a globally routable address"
+    return ""
+
 
 # Hostname-suffix denylist applied BEFORE DNS resolution. Guards against
 # DNS poisoning, Host-header tricks, and split-horizon DNS where the same
 # name resolves to a public IP externally and a private one inside the mesh.
 # Called by both `is_url_blacklisted` (cheap fetch) and
-# `is_url_safe_for_navigation` (browser-agent on every page event).
+# `is_url_safe_for_navigation` (every browser request, see browser_request_guard).
 BLOCKED_HOSTNAME_SUFFIXES: set[str] = {
     # Cloud metadata IMDS endpoints
     "metadata.google.internal",
@@ -161,7 +228,14 @@ BLOCKED_HOSTNAME_SUFFIXES: set[str] = {
     "local",
     "internal",
     "localdomain",
+    # Chrome resolves *.localhost to loopback itself, without asking DNS.
+    "localhost",
 }
+
+
+def _normalize_hostname(hostname: str) -> str:
+    """Lowercase and drop the trailing root dot ("metadata.google.internal.")."""
+    return (hostname or "").lower().rstrip(".")
 
 
 def _hostname_blocked_by_suffix(hostname: str) -> tuple[bool, str]:
@@ -169,6 +243,7 @@ def _hostname_blocked_by_suffix(hostname: str) -> tuple[bool, str]:
 
     Returns (blocked, matched_suffix).
     """
+    hostname = _normalize_hostname(hostname)
     for suffix in BLOCKED_HOSTNAME_SUFFIXES:
         if hostname == suffix or hostname.endswith("." + suffix):
             return True, suffix
@@ -176,33 +251,113 @@ def _hostname_blocked_by_suffix(hostname: str) -> tuple[bool, str]:
 
 
 def _ip_literal_blocked(hostname: str) -> tuple[bool, str]:
-    """If `hostname` is an IP literal, check it against BLOCKED_NETWORKS.
+    """If `hostname` is an IP literal, check it with `ip_block_reason`.
 
     Returns (blocked, reason). Returns (False, "") if hostname is not an IP.
     """
     try:
-        ip = ipaddress.ip_address(hostname)
+        ip = ipaddress.ip_address(_normalize_hostname(hostname))
     except ValueError:
         return False, ""
-    for network in BLOCKED_NETWORKS:
-        if ip in network:
-            return True, f"SSRF blocked: literal IP {hostname} is in {network}"
+    reason = ip_block_reason(ip)
+    if reason:
+        return True, f"SSRF blocked: literal IP {reason}"
     return False, ""
 
 
-def _is_private_ip(hostname: str) -> bool:
-    """Resolve hostname and check if it points to a private/internal IP."""
+# Reasons for a name that has no DNS answer start with this prefix. Such a
+# request is still refused (there is nothing to connect to), but it is the
+# ordinary "site can't be reached" failure of a typo'd, dead or briefly
+# unresolvable domain, NOT an SSRF attempt: callers must not report it as
+# one, stop a browser-agent run on it, cache it, or count it against the
+# domain's reputation. See `is_unresolvable_reason`.
+UNRESOLVABLE_REASON_PREFIX = "unresolvable host: "
+
+
+def is_unresolvable_reason(reason: str) -> bool:
+    """True when a refusal reason means "the name does not resolve"."""
+    return (reason or "").startswith(UNRESOLVABLE_REASON_PREFIX)
+
+
+# Crawl result `blocked_reason` kinds for a page the SSRF checks refused.
+CRAWL_BLOCK_SSRF = "ssrf_blocked"
+CRAWL_BLOCK_DNS = "dns_unresolved"
+
+
+def crawl_block_reason(reason: str) -> str:
+    """The crawl result's `blocked_reason` for a refusal of the SSRF checks:
+    `dns_unresolved: ...` when the host does not resolve, `ssrf_blocked: ...`
+    otherwise."""
+    kind = CRAWL_BLOCK_DNS if is_unresolvable_reason(reason) else CRAWL_BLOCK_SSRF
+    return f"{kind}: {reason}"
+
+
+def _resolve_public_addresses(hostname: str) -> tuple[list[str], str]:
+    """Resolve `hostname`; return (addresses, "") only when EVERY one is public.
+
+    Returns ([], reason) when the name does not resolve (reason starts with
+    UNRESOLVABLE_REASON_PREFIX) or when any address it resolves to is
+    non-public (fail closed: one private answer refuses the whole name).
+    """
     try:
         infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        for family, _, _, _, sockaddr in infos:
+    except (socket.gaierror, ValueError, OSError) as e:
+        return [], f"{UNRESOLVABLE_REASON_PREFIX}{hostname} does not resolve ({type(e).__name__})"
+    if not infos:
+        return [], f"{UNRESOLVABLE_REASON_PREFIX}{hostname} does not resolve"
+    addresses: list[str] = []
+    for _family, _, _, _, sockaddr in infos:
+        try:
             ip = ipaddress.ip_address(sockaddr[0])
-            for network in BLOCKED_NETWORKS:
-                if ip in network:
-                    return True
-    except (socket.gaierror, ValueError, OSError):
-        # DNS resolution failed - block to be safe
-        return True
-    return False
+        except ValueError:
+            return [], f"{hostname} resolves to an unparsable address"
+        reason = ip_block_reason(ip)
+        if reason:
+            return [], f"{hostname} resolves to a private/internal address: {reason}"
+        if str(ip) not in addresses:
+            addresses.append(str(ip))
+    return addresses, ""
+
+
+def _dns_refusal(hostname: str) -> str:
+    """Why `hostname` may not be fetched after DNS, or "" when it may.
+
+    A name that does not resolve gets its own reason (see
+    `is_unresolvable_reason`); a name with any non-public answer gets the
+    SSRF reason. Both refuse the request.
+    """
+    addresses, reason = _resolve_public_addresses(hostname)
+    if addresses:
+        return ""
+    if is_unresolvable_reason(reason):
+        return reason
+    return f"SSRF blocked: {hostname} resolves to private/internal IP"
+
+
+def resolve_egress_addresses(host: str) -> tuple[list[str], str]:
+    """Addresses a browser connection to `host` may use, or ([], reason).
+
+    Used at CONNECT time by `egress_guard_proxy`, which then connects to one
+    of the returned addresses itself. Because the address checked here is
+    the address connected to, a DNS answer that changes between the request
+    check and the connection (DNS rebinding) cannot reach a private host.
+    Applies the same rules as `is_url_safe_for_navigation`: internal
+    hostname suffixes, IP literals, then DNS with every answer public.
+    """
+    hostname = _normalize_hostname(host)
+    if not hostname:
+        return [], "no hostname"
+    blocked, suffix = _hostname_blocked_by_suffix(hostname)
+    if blocked:
+        return [], f"blocked internal/metadata hostname: {hostname} (suffix: {suffix})"
+    try:
+        literal = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        reason = ip_block_reason(literal)
+        return ([], f"SSRF blocked: literal IP {reason}") if reason else ([str(literal)], "")
+    return _resolve_public_addresses(hostname)
 
 
 def _extract_domain_parts(hostname: str) -> list[str]:
@@ -233,7 +388,7 @@ def is_url_blacklisted(url: str) -> tuple[bool, str]:
     if parsed.scheme not in ("http", "https"):
         return True, f"blocked scheme: {parsed.scheme}"
 
-    hostname = (parsed.hostname or "").lower()
+    hostname = _normalize_hostname(parsed.hostname or "")
     if not hostname:
         return True, "no hostname"
 
@@ -247,9 +402,10 @@ def is_url_blacklisted(url: str) -> tuple[bool, str]:
     if blocked:
         return True, reason
 
-    # SSRF - DNS-resolved private IPs
-    if _is_private_ip(hostname):
-        return True, f"SSRF blocked: {hostname} resolves to private/internal IP"
+    # SSRF - DNS-resolved private IPs (or a name with no DNS answer)
+    reason = _dns_refusal(hostname)
+    if reason:
+        return True, reason
 
     # Domain blacklist check (match any parent domain)
     for domain in _extract_domain_parts(hostname):
@@ -519,12 +675,13 @@ def should_skip_url(url: str) -> tuple[bool, str]:
 
 
 def is_url_safe_for_navigation(url: str) -> tuple[bool, str]:
-    """Strict SSRF check designed for browser-agent navigation events.
+    """Strict SSRF check for a URL the browser is about to fetch.
 
-    Called on EVERY page-navigated CDP event (post-redirect, post-iframe,
-    post-window.open), not only on the user-supplied initial URL. This
-    guards against redirect chains and meta-refresh tricks that bypass
-    a check done only at the entry point.
+    Called for EVERY request Chrome makes (each redirect hop, iframe,
+    subresource, worker and service-worker fetch) through
+    `is_request_url_allowed` and `browser_request_guard`, not only on the
+    user-supplied initial URL. This guards against redirect chains and
+    meta-refresh tricks that bypass a check done only at the entry point.
 
     Differs from `is_url_blacklisted` in that:
       - returns (safe, reason) where safe=True means navigation is allowed
@@ -543,7 +700,7 @@ def is_url_safe_for_navigation(url: str) -> tuple[bool, str]:
     if parsed.scheme not in ("http", "https"):
         return False, f"blocked scheme: {parsed.scheme}"
 
-    hostname = (parsed.hostname or "").lower()
+    hostname = _normalize_hostname(parsed.hostname or "")
     if not hostname:
         return False, "no hostname"
 
@@ -555,9 +712,125 @@ def is_url_safe_for_navigation(url: str) -> tuple[bool, str]:
     if blocked:
         return False, reason
 
-    if _is_private_ip(hostname):
-        return False, f"SSRF blocked: {hostname} resolves to private/internal IP"
+    reason = _dns_refusal(hostname)
+    if reason:
+        return False, reason
 
+    return True, ""
+
+
+# Schemes the browser may load without any network egress: inline data,
+# in-memory blobs and the blank page. They cannot reach an internal host.
+_NON_NETWORK_SCHEMES = {"data", "blob", "about"}
+_WEBSOCKET_SCHEMES = {"ws": "http", "wss": "https"}
+
+
+def is_request_url_allowed(url: str) -> tuple[bool, str]:
+    """Decide whether a browser request (any resource type) may go out.
+
+    http/https and ws/wss go through `is_url_safe_for_navigation`; data:,
+    blob: and about: carry no network egress and are allowed; any other
+    scheme (file:, ftp:, chrome:, gopher:, ...) is refused.
+    """
+    try:
+        scheme = urlparse(url).scheme.lower()
+    except Exception:
+        return False, "invalid URL"
+    if scheme in _NON_NETWORK_SCHEMES:
+        return True, ""
+    if scheme in _WEBSOCKET_SCHEMES:
+        url = _WEBSOCKET_SCHEMES[scheme] + url[len(scheme):]
+    return is_url_safe_for_navigation(url)
+
+
+# Callbacks only ever target the orchestrator's internal API.
+CALLBACK_PATH_PREFIX = "/api/internal/"
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlparse(url.strip())
+        scheme = parsed.scheme.lower()
+        if scheme not in _DEFAULT_PORTS or not parsed.hostname:
+            return None
+        return scheme, _normalize_hostname(parsed.hostname), parsed.port or _DEFAULT_PORTS[scheme]
+    except ValueError:
+        return None
+
+
+def parse_callback_origins(allowed_origins: str) -> tuple[set[tuple[str, str, int]], list[str]]:
+    """Parse WEBSEARCH_CALLBACK_ALLOWED_ORIGINS into (origins, invalid entries).
+
+    Each comma-separated entry must be a bare origin, `scheme://host[:port]`
+    (a trailing "/" is tolerated). An entry with a path, query, credentials
+    or a non-http(s) scheme is reported as invalid and ignored, so a typo
+    can never widen the allow-list.
+    """
+    origins: set[tuple[str, str, int]] = set()
+    invalid: list[str] = []
+    for entry in (e.strip() for e in (allowed_origins or "").split(",")):
+        if not entry:
+            continue
+        try:
+            parsed = urlparse(entry)
+            extra = (parsed.path not in ("", "/") or parsed.query or parsed.fragment
+                     or parsed.username or parsed.password)
+        except ValueError:
+            extra = True
+        origin = None if extra else _origin(entry)
+        if origin is None:
+            invalid.append(entry)
+        else:
+            origins.add(origin)
+    return origins, invalid
+
+
+def callback_origin_warnings(allowed_origins: str) -> list[str]:
+    """Operator-facing warnings about the callback allow-list, logged at startup.
+
+    The orchestrator attaches a step callback to every browser-agent run;
+    with an empty allow-list every one of them is dropped, silently from
+    the user's point of view (no live step trace in Docker mode).
+    """
+    origins, invalid = parse_callback_origins(allowed_origins)
+    warnings = [f"WEBSEARCH_CALLBACK_ALLOWED_ORIGINS entry ignored (not a bare http(s) origin): {e!r}"
+                for e in invalid]
+    if not origins:
+        warnings.append(
+            "WEBSEARCH_CALLBACK_ALLOWED_ORIGINS is empty: every callback_url "
+            "(browser-agent step callbacks, crawl screenshot callbacks) will be "
+            "dropped. Set it to the orchestrator origin of WEBSEARCH_CALLBACK_BASE_URL."
+        )
+    return warnings
+
+
+def is_callback_url_allowed(url: str, allowed_origins: str) -> tuple[bool, str]:
+    """Check a caller-supplied callback URL against the configured origins.
+
+    `allowed_origins` is the comma-separated WEBSEARCH_CALLBACK_ALLOWED_ORIGINS
+    value (e.g. "http://10.0.0.2:8099"). The callback must use one of those
+    exact origins (scheme, host, port), carry no credentials, and target the
+    internal API path. An empty allow-list refuses every callback: this
+    service POSTs to private addresses here, so the SSRF guard cannot be
+    used instead and the default must fail closed.
+    """
+    if not url:
+        return False, "no callback URL"
+    origins, _invalid = parse_callback_origins(allowed_origins)
+    if not origins:
+        return False, "no callback origin configured (WEBSEARCH_CALLBACK_ALLOWED_ORIGINS)"
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False, "invalid callback URL"
+    if parsed.username or parsed.password:
+        return False, "callback URL must not carry credentials"
+    origin = _origin(url)
+    if origin is None or origin not in origins:
+        return False, f"callback origin not allowed: {parsed.scheme}://{parsed.netloc}"
+    if not parsed.path.startswith(CALLBACK_PATH_PREFIX) or ".." in parsed.path.split("/"):
+        return False, f"callback path must stay under {CALLBACK_PATH_PREFIX}"
     return True, ""
 
 

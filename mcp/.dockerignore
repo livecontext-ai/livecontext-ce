@@ -6,5 +6,7 @@
 # its e2e suites are excluded from the PUBLIC repo (deploy/ce-export/exclude-paths.txt)
 # while the public bridge image builds from this PRIVATE context - shipping them
 # would bypass the repo export gates. Pinned by dockerContextHygiene.test.mjs and
-# publish-ce.yml's image content gate.
+# publish-ce.yml's image content gate. Same exclusions as the lane-2 bridge tarballs
+# (deploy.yml, deploy-direct.sh).
 bridge/test/
+bridge/lib/__tests__/

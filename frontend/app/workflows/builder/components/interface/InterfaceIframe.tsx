@@ -4,12 +4,16 @@ import * as React from 'react';
 import {
   renderInterfaceTemplate,
   sanitizeHtml,
+  isOpenableNavigationUrl,
   RenderMode,
   RenderOptions,
 } from '../../utils/interfaceHtmlUtils';
 import { fileService, type FileRef } from '@/lib/api/orchestrator/file.service';
 import { useInterfaceFileUrls } from './useInterfaceFileUrls';
 import { OpenLinkConfirmModal } from './OpenLinkConfirmModal';
+
+/** The interface-rendering shell route (LC-027): see app/interface-frame/route.ts. */
+const INTERFACE_FRAME_SRC = '/interface-frame';
 
 export interface ContentSize {
   width: number;
@@ -128,6 +132,15 @@ export const InterfaceIframe = React.forwardRef<HTMLIFrameElement, InterfaceIfra
     const internalRef = React.useRef<HTMLIFrameElement>(null);
     const iframeRef = (ref as React.RefObject<HTMLIFrameElement>) || internalRef;
 
+    // Interfaces that keep their scripts (removeScripts=false) render through the
+    // `/interface-frame` shell instead of `srcDoc`: an `about:srcdoc` document inherits the
+    // embedder's CSP, which is why the app's own CSP could never enforce a strict `script-src`
+    // (LC-027 CASA E3 - see lib/security/securityHeaders.mjs's module header for the full
+    // rationale). `removeScripts=true` surfaces (marketplace/showcase previews, thumbnails)
+    // contain no script at all by construction, so `srcDoc` stays exactly as it was - there is
+    // nothing there a strict script-src would need to exempt.
+    const useShell = !removeScripts;
+
     // The mute state the document is BUILT with, captured once. See the memo below.
     const initialMediaMutedRef = React.useRef(mediaMuted);
 
@@ -200,6 +213,76 @@ export const InterfaceIframe = React.forwardRef<HTMLIFrameElement, InterfaceIfra
       prevHtmlRef.current = htmlTemplate;
     }, [htmlTemplate]);
 
+    // Shell handshake (useShell only - see the flag above). The shell (always '/interface-frame')
+    // receives the rendered HTML over postMessage and replaces its own document with
+    // `document.open()/write()/close()`, instead of inheriting the bytes from the embedder as a
+    // srcDoc would. That write erases the shell's listener, so each shell document takes exactly
+    // ONE payload: a later `completeHtml` change reloads the shell (deliverToShell), which is what
+    // a srcDoc change did too (a fresh document per content). `shellReadyRef` gates delivery
+    // on the shell's own 'interface-frame-ready' announcement (its listener attaches during
+    // parsing, before the shell's trivial document finishes loading, so this handshake - not
+    // the iframe's native `load` event - is the reliable "safe to postMessage" signal).
+    const shellReadyRef = React.useRef(false);
+    const pendingShellHtmlRef = React.useRef<string | null>(null);
+    // True once at least one content payload has been POSTED to the shell. Gates handleLoad
+    // (below): the shell's OWN initial (empty) document also fires the iframe's native `load`
+    // event, and that must NOT be mistaken for "the interface finished loading" (premature
+    // fade-in / onLoad callback / mute re-arm).
+    const shellContentDeliveredRef = React.useRef(false);
+
+    const deliverToShell = React.useCallback((html: string) => {
+      const win = iframeRef.current?.contentWindow;
+      if (!win) {
+        pendingShellHtmlRef.current = html;
+        return;
+      }
+      if (!shellReadyRef.current) {
+        pendingShellHtmlRef.current = html;
+        return;
+      }
+      if (shellContentDeliveredRef.current) {
+        // A document was already written, and the shell's document.open() erased every listener
+        // on its window, its own 'interface-frame-html' one included: a second postMessage would
+        // land in a document that no longer listens (the interface stayed on its first render,
+        // e.g. "[title]" placeholders before the row data arrived). Re-setting `src` navigates the
+        // shell to a FRESH document, exactly like a srcDoc change did, which also gives the
+        // interface's own scripts a fresh global (a reused window would re-declare their
+        // top-level let/const and throw). The new shell announces 'ready' and gets this html.
+        pendingShellHtmlRef.current = html;
+        shellReadyRef.current = false;
+        shellContentDeliveredRef.current = false;
+        iframeRef.current?.setAttribute('src', INTERFACE_FRAME_SRC);
+        return;
+      }
+      shellContentDeliveredRef.current = true;
+      win.postMessage({ type: 'interface-frame-html', html }, '*');
+    }, [iframeRef]);
+
+    React.useEffect(() => {
+      if (!useShell) return;
+      deliverToShell(completeHtml);
+    }, [useShell, completeHtml, deliverToShell]);
+
+    React.useEffect(() => {
+      if (!useShell) return;
+      const handler = (event: MessageEvent) => {
+        if (event.source !== iframeRef.current?.contentWindow) return;
+        if (event.data?.type === 'interface-frame-ready') {
+          shellReadyRef.current = true;
+          const pending = pendingShellHtmlRef.current ?? completeHtml;
+          pendingShellHtmlRef.current = null;
+          deliverToShell(pending);
+        }
+      };
+      window.addEventListener('message', handler);
+      return () => window.removeEventListener('message', handler);
+      // completeHtml intentionally omitted: the ready handshake only needs the LATEST value at
+      // the moment 'ready' fires, which the effect above already keeps pendingShellHtmlRef/the
+      // live document in sync with. Re-subscribing on every content change would not change
+      // behavior here (the listener body reads live refs), only churn the listener.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [useShell, iframeRef, deliverToShell]);
+
     // Listen for postMessage events from the iframe (bridge script + height reporter + file uploads)
     React.useEffect(() => {
       const hasActions = onAction && actionMapping && Object.keys(actionMapping).length > 0;
@@ -262,8 +345,14 @@ export const InterfaceIframe = React.forwardRef<HTMLIFrameElement, InterfaceIfra
     React.useEffect(() => {
       const handler = (event: MessageEvent) => {
         if (event.source !== iframeRef.current?.contentWindow) return;
-        if (event.data?.type === 'navigation-request' && typeof event.data.url === 'string' && event.data.url) {
-          setPendingNavUrl(event.data.url);
+        if (event.data?.type === 'navigation-request') {
+          // Validate the SCHEME here, on the parent side (LC-076). The in-frame classifier is
+          // bypassed by a hostile interface posting this message itself, and the parent is NOT
+          // sandboxed, so a javascript:/data:/blob: URL opened from here would run on the app
+          // origin. Rejected URLs never reach the confirmation modal.
+          if (isOpenableNavigationUrl(event.data.url)) {
+            setPendingNavUrl(event.data.url as string);
+          }
         }
       };
       window.addEventListener('message', handler);
@@ -300,7 +389,8 @@ export const InterfaceIframe = React.forwardRef<HTMLIFrameElement, InterfaceIfra
     // Confirm runs inside the button's click handler so the window.open stays a user gesture
     // (popup blockers allow it). The parent page is not sandboxed, so the new tab opens.
     const confirmNavigation = React.useCallback(() => {
-      if (pendingNavUrl) {
+      // Re-checked at the sink as well as at intake: window.open is what actually navigates.
+      if (pendingNavUrl && isOpenableNavigationUrl(pendingNavUrl)) {
         window.open(pendingNavUrl, '_blank', 'noopener,noreferrer');
       }
       setPendingNavUrl(null);
@@ -310,18 +400,23 @@ export const InterfaceIframe = React.forwardRef<HTMLIFrameElement, InterfaceIfra
     const handleLoad = React.useCallback(() => {
       const iframe = iframeRef.current;
       if (!iframe) return;
+      // Shell mode fires a native `load` TWICE: once for the shell's own (empty) document, once
+      // more after document.write() replaces it with real content. Only the second is "the
+      // interface loaded" - the first must be ignored, or fade-in/onLoad/mute-rearm would fire
+      // on a blank frame a moment before the real content lands.
+      if (useShell && !shellContentDeliveredRef.current) return;
       // Fade in after new content has loaded
       setIframeOpacity(1);
       // Re-arms the mute push above: a fresh document starts from the baked-in value.
       setIframeLoadCount((n) => n + 1);
       onLoad?.(iframe);
-    }, [iframeRef, onLoad]);
+    }, [iframeRef, onLoad, useShell]);
 
     return (
       <>
         <iframe
           ref={iframeRef}
-          srcDoc={completeHtml}
+          {...(useShell ? { src: INTERFACE_FRAME_SRC } : { srcDoc: completeHtml })}
           sandbox={sandbox}
           className={className}
           style={{

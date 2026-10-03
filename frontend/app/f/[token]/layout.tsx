@@ -5,6 +5,12 @@ import { getMessages, setRequestLocale } from 'next-intl/server';
 import { ThemeProvider } from '@/components/ThemeProvider';
 import { resolveRequestLocale } from '@/i18n/resolveRequestLocale';
 
+// CASA round 2: this public link gets the per-request nonce script-src (NONCE_CSP_PREFIXES in
+// lib/security/securityHeaders.mjs, proxy.ts) instead of the static 'unsafe-inline' one. A nonce
+// is only meaningful on a per-request render; the locale cookie read below already made this
+// route dynamic, and this pins it so a later refactor cannot make it static under a nonce CSP.
+export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
   title: 'Form Submission',
   description: 'Submit a form',

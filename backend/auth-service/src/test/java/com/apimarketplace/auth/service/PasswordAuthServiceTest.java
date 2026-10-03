@@ -77,12 +77,12 @@ class PasswordAuthServiceTest {
         void registerNormalizesEmailLikeInvitations() {
             when(userRepository.existsByEmail(anyString())).thenReturn(false);
 
-            User plain = service.register("  Kate@Example.COM ", "password123", "Kate", "Doe");
+            User plain = service.register("  Kate@Example.COM ", "password1234", "Kate", "Doe");
             assertThat(plain.getEmail()).isEqualTo("kate@example.com");
 
             // U+212A (Kelvin sign) must NOT fold to "k": otherwise this account would match an
             // invitation for kate@example.com that the ASCII-only invitation compare refuses.
-            User lookalike = service.register("\u212Aate@example.com", "password123", "Kelvin", "Doe");
+            User lookalike = service.register("\u212Aate@example.com", "password1234", "Kelvin", "Doe");
             assertThat(lookalike.getEmail()).isEqualTo("\u212Aate@example.com");
         }
 
@@ -91,7 +91,7 @@ class PasswordAuthServiceTest {
         void shouldSetUsernameFromFirstAndLastName() {
             when(userRepository.existsByEmail(anyString())).thenReturn(false);
 
-            User result = service.register("test@example.com", "password123", "John", "Doe");
+            User result = service.register("test@example.com", "password1234", "John", "Doe");
 
             assertThat(result.getUsername()).isEqualTo("john_doe");
         }
@@ -101,7 +101,7 @@ class PasswordAuthServiceTest {
         void shouldSetUsernameFromFirstNameOnly() {
             when(userRepository.existsByEmail(anyString())).thenReturn(false);
 
-            User result = service.register("test@example.com", "password123", "Alice", null);
+            User result = service.register("test@example.com", "password1234", "Alice", null);
 
             assertThat(result.getUsername()).isEqualTo("alice");
         }
@@ -111,7 +111,7 @@ class PasswordAuthServiceTest {
         void shouldSetUsernameFromLastNameOnly() {
             when(userRepository.existsByEmail(anyString())).thenReturn(false);
 
-            User result = service.register("test@example.com", "password123", "  ", "Smith");
+            User result = service.register("test@example.com", "password1234", "  ", "Smith");
 
             assertThat(result.getUsername()).isEqualTo("smith");
         }
@@ -121,7 +121,7 @@ class PasswordAuthServiceTest {
         void shouldFallbackToEmailLocalPart() {
             when(userRepository.existsByEmail(anyString())).thenReturn(false);
 
-            User result = service.register("alice@example.com", "password123", null, null);
+            User result = service.register("alice@example.com", "password1234", null, null);
 
             assertThat(result.getUsername()).isEqualTo("alice");
         }
@@ -133,7 +133,7 @@ class PasswordAuthServiceTest {
             when(userRepository.existsByUsername("e2e_tester")).thenReturn(true);
             when(userRepository.existsByUsername("e2e_tester_1")).thenReturn(false);
 
-            User result = service.register("unique@example.com", "password123", "E2E", "Tester");
+            User result = service.register("unique@example.com", "password1234", "E2E", "Tester");
 
             assertThat(result.getUsername()).isEqualTo("e2e_tester_1");
         }
@@ -143,7 +143,7 @@ class PasswordAuthServiceTest {
         void shouldCreatePersonalOrganization() {
             when(userRepository.existsByEmail(anyString())).thenReturn(false);
 
-            service.register("test@example.com", "password123", "John", "Doe");
+            service.register("test@example.com", "password1234", "John", "Doe");
 
             verify(organizationService).createPersonalOrganization(any(User.class), eq("John Doe"));
         }
@@ -155,7 +155,7 @@ class PasswordAuthServiceTest {
             doThrow(new RuntimeException("DB error"))
                     .when(organizationService).createPersonalOrganization(any(), anyString());
 
-            User result = service.register("test@example.com", "password123", "John", "Doe");
+            User result = service.register("test@example.com", "password1234", "John", "Doe");
 
             assertThat(result).isNotNull();
             assertThat(result.getUsername()).isEqualTo("john_doe");
@@ -168,7 +168,7 @@ class PasswordAuthServiceTest {
             ReflectionTestUtils.setField(service, "organizationService", null);
             when(userRepository.existsByEmail(anyString())).thenReturn(false);
 
-            User result = service.register("test@example.com", "password123", "John", "Doe");
+            User result = service.register("test@example.com", "password1234", "John", "Doe");
 
             assertThat(result).isNotNull();
             assertThat(result.getUsername()).isEqualTo("john_doe");
@@ -180,7 +180,7 @@ class PasswordAuthServiceTest {
             when(userRepository.existsByEmail(anyString())).thenReturn(false);
             when(firstAdminBootstrap.claimFirstAdminSlot()).thenReturn(true);
 
-            User result = service.register("admin@example.com", "password123", "Admin", "User");
+            User result = service.register("admin@example.com", "password1234", "Admin", "User");
 
             assertThat(result.getRoles()).contains("ADMIN", "USER");
         }
@@ -192,7 +192,7 @@ class PasswordAuthServiceTest {
             // Helper default in setUp returns false - pinning the I3 invariant:
             // post-bootstrap CE (or Cloud) never promotes regardless of user-count.
 
-            User result = service.register("user@example.com", "password123", "Regular", "User");
+            User result = service.register("user@example.com", "password1234", "Regular", "User");
 
             assertThat(result.getRoles()).contains("USER");
             assertThat(result.getRoles()).doesNotContain("ADMIN");
@@ -203,7 +203,7 @@ class PasswordAuthServiceTest {
         void shouldDelegateFirstUserDecisionToBootstrapHelper() {
             when(userRepository.existsByEmail(anyString())).thenReturn(false);
 
-            service.register("u@example.com", "password123", "U", "ser");
+            service.register("u@example.com", "password1234", "U", "ser");
 
             verify(firstAdminBootstrap).claimFirstAdminSlot();
             verify(userRepository, never()).count();
@@ -214,7 +214,7 @@ class PasswordAuthServiceTest {
         void shouldRejectDuplicateEmail() {
             when(userRepository.existsByEmail("taken@example.com")).thenReturn(true);
 
-            assertThatThrownBy(() -> service.register("taken@example.com", "password123", "John", "Doe"))
+            assertThatThrownBy(() -> service.register("taken@example.com", "password1234", "John", "Doe"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Email already registered");
         }
@@ -224,13 +224,13 @@ class PasswordAuthServiceTest {
         void shouldRejectShortPassword() {
             assertThatThrownBy(() -> service.register("test@example.com", "short", "John", "Doe"))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("at least 8 characters");
+                    .hasMessageContaining("at least 12 characters");
         }
 
         @Test
         @DisplayName("Should reject blank email")
         void shouldRejectBlankEmail() {
-            assertThatThrownBy(() -> service.register("  ", "password123", "John", "Doe"))
+            assertThatThrownBy(() -> service.register("  ", "password1234", "John", "Doe"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Email is required");
         }
@@ -240,19 +240,35 @@ class PasswordAuthServiceTest {
         void shouldSetCorrectAuthProviderAndProviderId() {
             when(userRepository.existsByEmail(anyString())).thenReturn(false);
 
-            User result = service.register("test@example.com", "password123", "John", "Doe");
+            User result = service.register("test@example.com", "password1234", "John", "Doe");
 
             assertThat(result.getAuthProvider()).isEqualTo(AuthProvider.LOCAL);
             assertThat(result.getProviderId()).isEqualTo("local:test@example.com");
         }
 
         @Test
-        @DisplayName("CE embedded registration should mark local accounts email verified")
-        void ceEmbeddedRegistrationMarksLocalAccountsEmailVerified() {
+        @DisplayName("CE embedded registration marks the FIRST (operator) account email verified "
+                + "(CASA LC-084)")
+        void ceEmbeddedRegistrationMarksFirstUserEmailVerified() {
             when(userRepository.existsByEmail(anyString())).thenReturn(false);
+            when(firstAdminBootstrap.claimFirstAdminSlot()).thenReturn(true);
 
-            User result = service.register("test@example.com", "password123", "John", "Doe");
+            User result = service.register("admin@example.com", "password1234", "Admin", "User");
 
+            assertThat(result.isEmailVerified()).isTrue();
+        }
+
+        @Test
+        @DisplayName("CE embedded registration verifies a later self-registered account too: CE has no "
+                + "email verification flow and onboarding requires a verified email (e2e regression)")
+        void ceEmbeddedRegistrationVerifiesSubsequentUsers() {
+            when(userRepository.existsByEmail(anyString())).thenReturn(false);
+            // Helper default in setUp returns false - not the first user.
+
+            User result = service.register("user@example.com", "password1234", "Regular", "User");
+
+            // Verifying only the first user left every later CE member unable to finish onboarding
+            // (OnboardingService refuses an unverified email); the CE e2e suite failed 400 on it.
             assertThat(result.isEmailVerified()).isTrue();
         }
 
@@ -261,7 +277,7 @@ class PasswordAuthServiceTest {
         void shouldTrimAndLowercaseEmail() {
             when(userRepository.existsByEmail("test@example.com")).thenReturn(false);
 
-            User result = service.register("  Test@Example.COM  ", "password123", "John", "Doe");
+            User result = service.register("  Test@Example.COM  ", "password1234", "John", "Doe");
 
             assertThat(result.getEmail()).isEqualTo("test@example.com");
         }
@@ -281,15 +297,15 @@ class PasswordAuthServiceTest {
     class TheOneStrengthRule {
 
         @Test
-        @DisplayName("is 8 characters, a number that cannot be derived from itself")
-        void theMinimumIsEight() {
+        @DisplayName("is 12 characters (CASA LC-084, was 8), a number that cannot be derived from itself")
+        void theMinimumIsTwelve() {
             // Deliberately a literal. Asserting against the constant would pass
             // for any value, and this number is mirrored by hand in
             // frontend/app/[locale]/reset-password/page.tsx, which checks it
             // before spending a single-use link. Changing it here is a decision
             // that has to be taken on the frontend too, so it should not be
             // possible to do quietly.
-            assertThat(PasswordAuthService.MIN_PASSWORD_LENGTH).isEqualTo(8);
+            assertThat(PasswordAuthService.MIN_PASSWORD_LENGTH).isEqualTo(12);
         }
 
         @Test

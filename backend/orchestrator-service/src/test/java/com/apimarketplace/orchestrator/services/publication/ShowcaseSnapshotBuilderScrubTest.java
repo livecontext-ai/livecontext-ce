@@ -126,7 +126,8 @@ class ShowcaseSnapshotBuilderScrubTest {
                 interfaceClient,
                 workflowStepDataRepository,
                 storageSkeletonService,
-                new ObjectMapper());
+                new ObjectMapper(),
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.persistence.StepPayloadService.class));
 
         ShowcaseSnapshotBuilder.CaptureOutcome outcome = builder.captureWithOutcome("run-org", "tenant-owner", null, null);
 
@@ -181,7 +182,8 @@ class ShowcaseSnapshotBuilderScrubTest {
                 interfaceClient,
                 workflowStepDataRepository,
                 storageSkeletonService,
-                new ObjectMapper());
+                new ObjectMapper(),
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.persistence.StepPayloadService.class));
 
         Optional<Map<String, Object>> snapshot = builder.capture("run-org", "tenant-caller", "org-acme", 2);
 
@@ -253,7 +255,8 @@ class ShowcaseSnapshotBuilderScrubTest {
                 interfaceClient,
                 workflowStepDataRepository,
                 storageSkeletonService,
-                new ObjectMapper());
+                new ObjectMapper(),
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.persistence.StepPayloadService.class));
 
         Optional<Map<String, Object>> snapshot = builder.capture("run-epochs", "tenant-caller", "org-acme", 2);
 
@@ -336,7 +339,8 @@ class ShowcaseSnapshotBuilderScrubTest {
                 interfaceClient,
                 workflowStepDataRepository,
                 storageSkeletonService,
-                new ObjectMapper());
+                new ObjectMapper(),
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.persistence.StepPayloadService.class));
 
         Optional<Map<String, Object>> snapshot = builder.capture("run-renumber", "tenant-caller", "org-acme", 7);
 
@@ -383,7 +387,8 @@ class ShowcaseSnapshotBuilderScrubTest {
                 interfaceClient,
                 workflowStepDataRepository,
                 storageSkeletonService,
-                new ObjectMapper());
+                new ObjectMapper(),
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.persistence.StepPayloadService.class));
 
         ShowcaseSnapshotBuilder.CaptureOutcome outcome =
                 builder.captureWithOutcome("run-invalid-epoch", "tenant-caller", "org-acme", 99);
@@ -414,7 +419,8 @@ class ShowcaseSnapshotBuilderScrubTest {
         ShowcaseSnapshotBuilder builder = new ShowcaseSnapshotBuilder(
                 workflowRunRepository, workflowResumeService, stateSnapshotService, workflowEpochService,
                 stepAggregationService, signalWaitRepository, interfaceRenderService, interfaceClient,
-                workflowStepDataRepository, storageSkeletonService, new ObjectMapper());
+                workflowStepDataRepository, storageSkeletonService, new ObjectMapper(),
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.persistence.StepPayloadService.class));
 
         assertThatThrownBy(() -> builder.captureWithOutcome("run-probe-down", "tenant-caller", "org-acme", 99))
                 .isInstanceOf(IllegalStateException.class)

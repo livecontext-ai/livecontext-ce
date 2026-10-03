@@ -64,6 +64,9 @@ class AgentRemoteExecutionServiceBridgeHeartbeatTest {
 
     @BeforeEach
     void setUp() {
+        // A bridge run resolves its budget server-side (LC-056); none by default here.
+        org.mockito.Mockito.lenient().when(guardChainFactory.bridgeBudget(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(new com.apimarketplace.agent.service.budget.GuardChainFactory.BridgeBudget(null, null, null));
         service = new AgentRemoteExecutionService(
             agentLoopService, new ObjectMapper(), redisStreamingCallback,
             conversationRedisStreamingCallback, coreToolsCache, agentActivityPublisher,

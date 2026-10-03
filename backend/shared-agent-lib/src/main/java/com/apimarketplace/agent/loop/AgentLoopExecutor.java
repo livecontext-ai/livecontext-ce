@@ -12,6 +12,8 @@ import com.apimarketplace.agent.tools.authz.ToolAuthorizationGuard;
 import com.apimarketplace.agent.tools.authz.ToolAuthorizationPolicy;
 import com.apimarketplace.agent.tools.authz.ToolAuthorizationScope;
 import com.apimarketplace.agent.tools.common.ToolMediaMetadata;
+import com.apimarketplace.common.classification.DataSensitivity;
+import com.apimarketplace.common.classification.RestrictedDataPolicy;
 import com.apimarketplace.common.web.TenantResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
@@ -142,6 +144,18 @@ public class AgentLoopExecutor {
             } else {
                 log.debug("[ITERATION {}] Single-iteration agent reached its only iteration (maxIterations=1) - by contract", state.getIterations());
             }
+        }
+
+        // LC-004 restricted-data gate. The execution may already carry Gmail / Drive content
+        // (tagged by the conversation or the workflow run through the credentials). Such content
+        // only goes to an allow-listed provider; any other is refused before a byte is sent.
+        if (!state.isRestrictedData()
+                && DataSensitivity.fromCredentials(context.credentials()).isRestricted()) {
+            state.setRestrictedData(true);
+        }
+        if (state.isRestrictedData() && !RestrictedDataPolicy.mayReceiveRestricted(provider.getProviderName())) {
+            log.warn("[RESTRICTED DATA] Refusing to send restricted content to provider {}", provider.getProviderName());
+            return IterationResult.error(RestrictedDataPolicy.refusalMessage(provider.getProviderName()));
         }
 
         // Build and send completion request
@@ -281,7 +295,7 @@ public class AgentLoopExecutor {
         // against Anthropic's API validation).
         state.getMessages().add(Message.assistantWithToolCalls(
             response.content() != null ? response.content() : "", pendingToolCalls));
-        addToolResultMessages(state, toolResults, provider.supportsImageAttachments());
+        addToolResultMessages(state, toolResults, provider.supportsImageAttachments(), provider.getProviderName());
 
         // F1.2 - STOP during tool execution: persist results we got, bail out.
         // Sequential loop already breaks early; parallel branch lets in-flight
@@ -564,7 +578,7 @@ public class AgentLoopExecutor {
             agentLogger.logToolCallStart(state.getRunId(), toolCall);
             long start = System.currentTimeMillis();
 
-            ToolResult result = executeSingleToolCall(toolCall, tools, context);
+            ToolResult result = executeSingleToolCall(toolCall, tools, context, state.isRestrictedData());
 
             agentLogger.logToolCallEnd(state.getRunId(), toolCall, result, System.currentTimeMillis() - start);
             results.add(result);
@@ -612,7 +626,7 @@ public class AgentLoopExecutor {
             agentLogger.logToolCallStart(state.getRunId(), toolCall);
             long start = System.currentTimeMillis();
 
-            ToolResult result = executeSingleToolCall(toolCall, tools, context);
+            ToolResult result = executeSingleToolCall(toolCall, tools, context, state.isRestrictedData());
 
             agentLogger.logToolCallEnd(state.getRunId(), toolCall, result, System.currentTimeMillis() - start);
             results[idx] = result;
@@ -631,7 +645,7 @@ public class AgentLoopExecutor {
                 ToolCall toolCall = toolCalls.get(idx);
                 agentLogger.logToolCallStart(state.getRunId(), toolCall);
                 long start = System.currentTimeMillis();
-                ToolResult result = executeSingleToolCall(toolCall, tools, context);
+                ToolResult result = executeSingleToolCall(toolCall, tools, context, state.isRestrictedData());
                 agentLogger.logToolCallEnd(state.getRunId(), toolCall, result, System.currentTimeMillis() - start);
                 results[idx] = result;
             }
@@ -671,7 +685,7 @@ public class AgentLoopExecutor {
                 long timeout = effectiveTimeoutMs(toolCall, toolDef, context.credentials());
 
                 futures[i] = CompletableFuture.supplyAsync(
-                    () -> executeSingleToolCall(toolCall, tools, context), toolExecutor
+                    () -> executeSingleToolCall(toolCall, tools, context, state.isRestrictedData()), toolExecutor
                 ).orTimeout(timeout, TimeUnit.MILLISECONDS).exceptionally(ex -> {
                     String errorMsg = ex instanceof TimeoutException
                         ? "Tool '" + toolCall.toolName() + "' timed out after " + timeout + "ms"
@@ -743,6 +757,16 @@ public class AgentLoopExecutor {
     // binding an approval park to this loop's own budget, and a park outliving that budget
     // returns a result nobody collects.
     ToolResult executeSingleToolCall(ToolCall toolCall, List<ToolDefinition> tools, AgentLoopContext context) {
+        return executeSingleToolCall(toolCall, tools, context, false);
+    }
+
+    /**
+     * @param restrictedData true once this execution holds Google restricted-scope data: the tag is
+     *                       written on the tool call's credentials so a sub-agent spawned from here
+     *                       (which copies it) and every tool see the execution as restricted (LC-004).
+     */
+    ToolResult executeSingleToolCall(ToolCall toolCall, List<ToolDefinition> tools, AgentLoopContext context,
+                                     boolean restrictedData) {
         if (toolExecutionService == null) {
             return ToolResult.failure(toolCall, "Tool execution service not configured");
         }
@@ -761,6 +785,9 @@ public class AgentLoopExecutor {
         }
 
         Map<String, Object> credentials = enrichCredentials(context);
+        if (restrictedData) {
+            credentials.put(DataSensitivity.CREDENTIAL_KEY, DataSensitivity.RESTRICTED.name());
+        }
         long timeout = effectiveTimeoutMs(toolCall, toolDef, credentials);
         credentials.put(TOOL_DEADLINE_CREDENTIAL, startTime + timeout);
         credentials.put(TOOL_EXECUTION_RESERVE_CREDENTIAL,
@@ -928,8 +955,8 @@ public class AgentLoopExecutor {
         return enriched;
     }
 
-    private void addToolResultMessages(LoopExecutionState state, List<ToolResult> toolResults,
-                                       boolean providerSupportsImages) {
+    void addToolResultMessages(LoopExecutionState state, List<ToolResult> toolResults,
+                                       boolean providerSupportsImages, String providerName) {
         int total = toolResults.size();
         int index = 0;
 
@@ -940,6 +967,18 @@ public class AgentLoopExecutor {
 
         for (ToolResult result : toolResults) {
             String content = result.success() ? result.content() : "Error: " + result.error();
+            // LC-004: a Gmail / Drive result (the catalog stamps the integration in the metadata)
+            // enters the model context only for an allow-listed provider. For any other, the
+            // model receives the refusal instead of the content, and can tell the user to switch.
+            boolean restrictedResult = RestrictedDataPolicy.fromToolMetadata(result.metadata()).isRestricted();
+            boolean withheld = restrictedResult && !RestrictedDataPolicy.mayReceiveRestricted(providerName);
+            if (withheld) {
+                log.warn("[RESTRICTED DATA] Withholding a restricted tool result ({}) from provider {}",
+                    result.toolCall() != null ? result.toolCall().toolName() : "?", providerName);
+                content = "Error: " + RestrictedDataPolicy.refusalMessage(providerName);
+            } else if (restrictedResult) {
+                state.setRestrictedData(true);
+            }
             boolean isRecent = (total - index) <= 2;
             content = truncateIfNeeded(content, isRecent);
 
@@ -949,7 +988,7 @@ public class AgentLoopExecutor {
                 content
             ));
 
-            if (result.success()) {
+            if (result.success() && !withheld) {
                 visionImages.addAll(ToolMediaMetadata.toImageAttachments(result.metadata()));
             }
             index++;

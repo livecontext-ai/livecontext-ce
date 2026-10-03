@@ -1,4 +1,4 @@
-import { SITE_URL } from './siteUrl';
+import { SITE_URL, ogAlternateLocales, ogLocale } from './siteUrl';
 
 /**
  * The Open Graph and Twitter card for a public page that is not the landing.
@@ -15,8 +15,9 @@ import { SITE_URL } from './siteUrl';
  * drift: a share that points somewhere other than the canonical is two instructions about
  * the same page that disagree.
  *
- * <p>The landing does NOT use this: it is localised, so it builds its own card per locale
- * with `og:locale` and the five alternates. This is the plain, single-language case.
+ * <p>The landing does NOT use this: it builds its own card per locale. A page with one URL per
+ * language outside the landing (`/partners`) passes its `locale`, which adds `og:locale` and the
+ * other languages as alternates; without one it is the plain, single-language case.
  */
 
 /**
@@ -28,7 +29,7 @@ function socialTitle(title: string) {
   return title.includes('LiveContext') ? title : `${title} - LiveContext`;
 }
 
-export function socialCard({ title, description, path }: { title: string; description: string; path: string }) {
+export function socialCard({ title, description, path, locale }: { title: string; description: string; path: string; locale?: string }) {
   const resolved = socialTitle(title);
   const url = `${SITE_URL.replace(/\/$/, '')}${path}`;
   return {
@@ -36,6 +37,7 @@ export function socialCard({ title, description, path }: { title: string; descri
       type: 'website' as const,
       siteName: 'LiveContext',
       url,
+      ...(locale ? { locale: ogLocale(locale), alternateLocale: ogAlternateLocales(locale) } : {}),
       title: resolved,
       description,
       images: [{ url: '/og-image.jpg', width: 1200, height: 630, alt: resolved }],

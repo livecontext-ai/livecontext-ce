@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { urlEnum, useUrlSearchState, useUrlState } from '@/hooks/useUrlState';
 import {
   DndContext,
   closestCenter,
@@ -180,10 +181,15 @@ export default function MarketplaceHighlightsPage() {
   const t = useTranslations('settings.marketplaceHighlights');
   const { hasRole, isLoading: authLoading } = useAuth();
 
-  const [activeMode, setActiveMode] = useState<HighlightDisplayMode>('APPLICATION');
+  // The bucket being curated and the candidate search live in the address, so a reload
+  // reopens the same list.
+  const [activeMode, setActiveMode] = useUrlState<HighlightDisplayMode>('mode', 'APPLICATION', {
+    codec: urlEnum(DISPLAY_MODES),
+    history: 'push',
+  });
   const [highlighted, setHighlighted] = useState<HighlightedRow[]>([]);
   const [candidates, setCandidates] = useState<WorkflowPublication[]>([]);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useUrlSearchState('q');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

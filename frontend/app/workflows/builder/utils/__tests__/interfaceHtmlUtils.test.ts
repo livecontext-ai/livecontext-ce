@@ -90,6 +90,11 @@ describe('removeScriptTags', () => {
 
 // =============================================================================
 // sanitizeHtml
+//
+// This file runs in the repo-default `node` environment, where DOMParser does not exist, so
+// these cases exercise sanitizeHtml's DOM-FREE fallback path (the one that also runs during
+// Next.js server rendering). Its DOM allow-list pass, which is what strips javascript: URLs and
+// drops <iframe>/<object>/<base>, is covered in interfaceHtmlUtils.security.test.ts under jsdom.
 // =============================================================================
 describe('sanitizeHtml', () => {
   it('should return empty string for empty input', () => {
@@ -1320,9 +1325,13 @@ describe('renderInterfaceTemplate', () => {
     expect(result).toContain('postMessage');
   });
 
-  it('should inject user JS when jsTemplate is provided', () => {
+  // `removeScripts` is explicit here because it defaults to TRUE and now gates `jsTemplate` as
+  // well: publisher JS handed in beside the HTML is publisher JS all the same. The gating itself
+  // is asserted in both directions in interfaceHtmlUtils.security.test.ts (LC-077 residuals).
+  it('should inject user JS when jsTemplate is provided and scripts are kept', () => {
     const result = renderInterfaceTemplate('<div>Hi</div>', {
       mode: 'edit',
+      removeScripts: false,
       jsTemplate: 'console.log("injected")',
     });
     expect(result).toContain('console.log("injected")');

@@ -63,17 +63,14 @@ public class AgentPublicationService {
             List.of("workflows", "tables", "interfaces", "agents", "applications");
 
     /**
-     * Snapshot size guards. A publication embeds an explicit resource selection;
-     * these caps turn a runaway selection (huge tables, dozens of heavy resources)
-     * into an explicit 422 with a per-resource breakdown instead of an unbounded
-     * JSONB row + OOM-prone build. Field defaults apply to plain unit-test
-     * constructions; Spring overrides from properties.
+     * Snapshot size budget (rows per table, total bytes), shared with every listing type. A
+     * publication embeds an explicit resource selection; the budget turns a runaway selection
+     * (huge tables, dozens of heavy resources) into an explicit 422 with a per-resource breakdown
+     * instead of an unbounded JSONB row + OOM-prone build. Field-injected; null in plain unit
+     * constructions, which then get the default limits (see {@link #snapshotBudget()}).
      */
-    @org.springframework.beans.factory.annotation.Value("${publication.agent-snapshot.max-bytes:15728640}")
-    long agentSnapshotMaxBytes = 15L * 1024 * 1024;
-
-    @org.springframework.beans.factory.annotation.Value("${publication.agent-snapshot.max-table-rows:5000}")
-    int agentSnapshotMaxTableRows = 5000;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    PublicationSnapshotBudget snapshotBudget;
 
     private final WorkflowPublicationRepository publicationRepository;
     private final PublicationReceiptRepository receiptRepository;
@@ -333,7 +330,9 @@ public class AgentPublicationService {
         // Build the recursive agent snapshot
         Set<UUID> visitedAgentIds = new HashSet<>();
         Set<UUID> visitedWorkflowIds = new HashSet<>();
-        Map<String, Object> agentSnapshot = buildAgentSnapshot(agentConfigId, tenantId, organizationId, visitedAgentIds, visitedWorkflowIds, 0);
+        // Every table it copies, embedded workflows' included, is refused with the agent's code.
+        Map<String, Object> agentSnapshot = PublicationTableCopies.forListing(PublicationSnapshotBudget.Listing.AGENT,
+                () -> buildAgentSnapshot(agentConfigId, tenantId, organizationId, visitedAgentIds, visitedWorkflowIds, 0));
         if (agentSnapshot == null) {
             throw new IllegalStateException("Failed to build agent snapshot for " + agentConfigId);
         }
@@ -353,7 +352,7 @@ public class AgentPublicationService {
 
         // Size guard AFTER the full snapshot (incl. landing interface) is assembled,
         // BEFORE anything is persisted - a refused publish must leave no state behind.
-        enforceSnapshotSizeCap(agentSnapshot);
+        snapshotBudget().assertWithinBudget(agentSnapshot, PublicationSnapshotBudget.Listing.AGENT);
 
         publication.setShowcaseInterfaceId(landingInterfaceId);
         publication.setAgentSnapshot(agentSnapshot);
@@ -694,18 +693,10 @@ public class AgentPublicationService {
 
                     // Include items - capped: a published table ships as inline snapshot
                     // rows, so an oversized table must fail loudly (never truncate silently).
-                    List<DataSourceItemDto> items = dataSourceClient.getAllItems(dsId, tenantId, organizationId);
-                    if (items.size() > agentSnapshotMaxTableRows) {
-                        throw new PublicationValidationException(
-                                PublicationValidationException.AGENT_SNAPSHOT_TOO_LARGE,
-                                "Table '" + ds.name() + "' has " + items.size() + " rows (max "
-                                        + agentSnapshotMaxTableRows + " rows per published table). "
-                                        + "Remove it from the agent's resource selection or reduce its content.",
-                                Map.of(
-                                        "maxTableRows", agentSnapshotMaxTableRows,
-                                        "breakdown", List.of(
-                                                breakdownEntry("datasource", dsIdStr, ds.name(), items.size(), null))));
-                    }
+                    // Checked here, per table, so an oversized one fails before the rest is built;
+                    // a copy that failed refuses the publish (retryable) instead of shipping empty.
+                    List<DataSourceItemDto> items = PublicationTableCopies.copy(dataSourceClient, snapshotBudget,
+                            PublicationSnapshotBudget.Listing.AGENT, dsId, ds.name(), tenantId, organizationId);
                     if (!items.isEmpty()) {
                         List<Map<String, Object>> itemSnapshots = items.stream()
                                 .map(item -> {
@@ -1019,96 +1010,12 @@ public class AgentPublicationService {
     }
 
     // ========================================================================
-    // Snapshot size guard
+    // Snapshot size budget
     // ========================================================================
 
-    /**
-     * Refuse a snapshot whose serialized size exceeds the configured cap, with a
-     * heaviest-first per-resource breakdown so the publisher immediately sees what
-     * to trim. Serialization failures are ignored here (this is only a size guard;
-     * a truly unserializable snapshot fails at persistence with its own error).
-     */
-    void enforceSnapshotSizeCap(Map<String, Object> snapshot) {
-        long size;
-        try {
-            size = objectMapper.writeValueAsBytes(snapshot).length;
-        } catch (Exception e) {
-            logger.warn("Snapshot size guard skipped (serialization failed): {}", e.getMessage());
-            return;
-        }
-        if (size <= agentSnapshotMaxBytes) {
-            return;
-        }
-        Map<String, Object> details = new LinkedHashMap<>();
-        details.put("sizeBytes", size);
-        details.put("maxBytes", agentSnapshotMaxBytes);
-        details.put("breakdown", computeSnapshotBreakdown(snapshot));
-        throw new PublicationValidationException(
-                PublicationValidationException.AGENT_SNAPSHOT_TOO_LARGE,
-                "Publication snapshot is " + toMb(size) + " MB (max " + toMb(agentSnapshotMaxBytes)
-                        + " MB). Remove the heaviest resources from the agent's selection or reduce their content.",
-                details);
-    }
-
-    /**
-     * Per-resource serialized weight, heaviest first (top 8). Sections walked:
-     * workflows / interfaces / datasources / subAgents / landingInterface.
-     */
-    @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> computeSnapshotBreakdown(Map<String, Object> snapshot) {
-        List<Map<String, Object>> entries = new ArrayList<>();
-        for (Map.Entry<String, String> section : Map.of(
-                "workflows", "workflow",
-                "interfaces", "interface",
-                "datasources", "datasource",
-                "subAgents", "agent").entrySet()) {
-            Object raw = snapshot.get(section.getKey());
-            if (!(raw instanceof Map<?, ?> map)) continue;
-            for (Map.Entry<?, ?> e : map.entrySet()) {
-                Object value = e.getValue();
-                String name = null;
-                Integer items = null;
-                if (value instanceof Map<?, ?> vm) {
-                    Object n = vm.get("name");
-                    if (n == null && vm.get("agent") instanceof Map<?, ?> am) n = am.get("name");
-                    name = n != null ? n.toString() : null;
-                    if (vm.get("items") instanceof List<?> l) items = l.size();
-                }
-                entries.add(breakdownEntry(section.getValue(),
-                        String.valueOf(e.getKey()), name, items, approxBytes(value)));
-            }
-        }
-        Object landing = snapshot.get("landingInterface");
-        if (landing != null) {
-            entries.add(breakdownEntry("landingInterface", null, null, null, approxBytes(landing)));
-        }
-        entries.sort((a, b) -> Long.compare(
-                ((Number) b.getOrDefault("approxBytes", 0L)).longValue(),
-                ((Number) a.getOrDefault("approxBytes", 0L)).longValue()));
-        return entries.size() > 8 ? new ArrayList<>(entries.subList(0, 8)) : entries;
-    }
-
-    private long approxBytes(Object value) {
-        try {
-            return value != null ? objectMapper.writeValueAsBytes(value).length : 0L;
-        } catch (Exception e) {
-            return 0L;
-        }
-    }
-
-    private static Map<String, Object> breakdownEntry(String type, String id, String name,
-                                                       Integer items, Long approxBytes) {
-        Map<String, Object> entry = new LinkedHashMap<>();
-        entry.put("type", type);
-        if (id != null) entry.put("id", id);
-        if (name != null) entry.put("name", name);
-        if (items != null) entry.put("items", items);
-        if (approxBytes != null) entry.put("approxBytes", approxBytes);
-        return entry;
-    }
-
-    private static String toMb(long bytes) {
-        return String.valueOf(Math.round(bytes / (1024.0 * 1024.0) * 10.0) / 10.0);
+    /** The shared budget, or the default limits when built without Spring (unit tests). */
+    PublicationSnapshotBudget snapshotBudget() {
+        return snapshotBudget != null ? snapshotBudget : PublicationSnapshotBudget.defaults(objectMapper);
     }
 
     /**

@@ -50,6 +50,23 @@ public class MessageDto {
     private String executionId;
 
     /**
+     * Internal classification (NORMAL / RESTRICTED), copied to the entity by MessageMapper.
+     * Never serialized: it is not part of the chat API.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String dataSensitivity;
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public String getDataSensitivity() {
+        return dataSensitivity;
+    }
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public void setDataSensitivity(String dataSensitivity) {
+        this.dataSensitivity = dataSensitivity;
+    }
+
+    /**
      * User feedback: 1 (thumbs up), -1 (thumbs down), null (no feedback).
      */
     private Integer feedback;

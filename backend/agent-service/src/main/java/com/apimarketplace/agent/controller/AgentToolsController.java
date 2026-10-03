@@ -43,8 +43,7 @@ public class AgentToolsController {
 
     /**
      * Stores the caller's platform role set (X-User-Roles, injected by the gateway
-     * from JWT claims; falls back to the request-body {@code userRoles} field for
-     * callers that forward it there) into the credentials map under
+     * from JWT claims, or set as a header by the internal caller) into the credentials map under
      * {@code __userRoles__}. Tool modules that run in the service layer - e.g.
      * {@code AgentHelpModule}, which hides admin-only CLI-bridge models from
      * non-admin agents - read it from there without needing an HttpServletRequest.
@@ -52,10 +51,10 @@ public class AgentToolsController {
     private void applyUserRoles(Map<String, Object> credentials,
                                 HttpServletRequest httpRequest,
                                 Map<String, Object> request) {
+        // CASA LC-013: roles come from the X-User-Roles HEADER only. The old request-body
+        // "userRoles" fallback let any caller of this endpoint assert ADMIN in the body; no
+        // internal caller sends it (the conversation relay forwards X-User-Roles as a header).
         String roles = httpRequest.getHeader("X-User-Roles");
-        if ((roles == null || roles.isBlank()) && request.get("userRoles") instanceof String body) {
-            roles = body;
-        }
         if (roles != null && !roles.isBlank()) {
             credentials.put("__userRoles__", roles);
         }
@@ -116,6 +115,9 @@ public class AgentToolsController {
                 credentials.put(accessModeKey, request.get(accessModeKey));
             }
         }
+        // Restricted-data tag forwarded by the calling service (Gmail / Drive content in the caller's
+        // context). Only RESTRICTED is honoured: a body can tighten what a tool does, never relax it.
+        com.apimarketplace.common.classification.DataSensitivity.restoreForwardedTag(request, credentials);
 
         return credentials;
     }
@@ -342,7 +344,11 @@ public class AgentToolsController {
         // Extract org context from headers (injected by Gateway) or from request body (forwarded by conversation-service)
         String orgId = httpRequest.getHeader("X-Organization-ID");
         String orgRole = httpRequest.getHeader("X-Organization-Role");
-        if (orgId == null) orgId = (String) request.get("orgId");
+        // CASA LC-013: the workspace comes from the X-Organization-ID HEADER only (gateway-injected,
+        // or set by the internal caller next to the signed X-User-ID). The body "orgId" fallback let
+        // a caller whose gateway resolved no active org name any workspace. Every internal caller
+        // (RemoteToolExecutionService, RemoteToolGateway, the conversation relay) already sends the
+        // header from the same value it puts in the body.
         // The ROLE is never taken from the request body. This endpoint is gateway-routed, and the
         // gateway strips the caller's own identity HEADERS but not the body, so a user whose
         // gateway resolved no active org could name a workspace AND assert OWNER in it in one
@@ -357,10 +363,6 @@ public class AgentToolsController {
         // OWNER did not merely avoid the VIEWER refusal, it bypassed that workspace's whole
         // restricted-resource list. Do not re-read this as "the role only ever refuses" and
         // restore the fallback.
-        //
-        // orgId is STILL read from the body, and that is a compatibility decision, not a safety
-        // one: it is forgeable by the same route. Closing it needs the internal callers to name
-        // the workspace by header first, which is a separate change.
 
         ToolsProvider.ToolExecutionContext context = new ToolsProvider.ToolExecutionContext(
             tenantId,
@@ -423,7 +425,11 @@ public class AgentToolsController {
 
         String orgId = httpRequest.getHeader("X-Organization-ID");
         String orgRole = httpRequest.getHeader("X-Organization-Role");
-        if (orgId == null) orgId = (String) request.get("orgId");
+        // CASA LC-013: the workspace comes from the X-Organization-ID HEADER only (gateway-injected,
+        // or set by the internal caller next to the signed X-User-ID). The body "orgId" fallback let
+        // a caller whose gateway resolved no active org name any workspace. Every internal caller
+        // (RemoteToolExecutionService, RemoteToolGateway, the conversation relay) already sends the
+        // header from the same value it puts in the body.
         // The ROLE is never taken from the request body. This endpoint is gateway-routed, and the
         // gateway strips the caller's own identity HEADERS but not the body, so a user whose
         // gateway resolved no active org could name a workspace AND assert OWNER in it in one
@@ -438,10 +444,6 @@ public class AgentToolsController {
         // OWNER did not merely avoid the VIEWER refusal, it bypassed that workspace's whole
         // restricted-resource list. Do not re-read this as "the role only ever refuses" and
         // restore the fallback.
-        //
-        // orgId is STILL read from the body, and that is a compatibility decision, not a safety
-        // one: it is forgeable by the same route. Closing it needs the internal callers to name
-        // the workspace by header first, which is a separate change.
 
         ToolsProvider.ToolExecutionContext context = new ToolsProvider.ToolExecutionContext(
             tenantId, credentials, Map.of(), approvedServices, viewingWorkflowId, viewingWorkflowName, orgId, orgRole
@@ -468,7 +470,7 @@ public class AgentToolsController {
             // vision bytes), but the log line must NOT dump multi-MB base64 - strip it first.
             log.info("Tool {} execution success - data keys: {}, metadata: {}", toolName,
                 data instanceof Map ? ((Map<?, ?>)data).keySet() : "not a map",
-                ToolMediaMetadata.withoutHeavyMedia(result.metadata()));
+                com.apimarketplace.common.logging.PayloadLogSafety.describeAny(ToolMediaMetadata.withoutHeavyMedia(result.metadata())));
             return ResponseEntity.ok(response);
         } else {
             response.put("error", result.error() != null ? result.error() : "Unknown error");

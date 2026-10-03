@@ -67,7 +67,10 @@ vi.mock('@/components/app/RealtimeConnectionNotice', () => ({ default: nothing }
 
 async function renderLayout() {
   vi.resetModules();
-  const { default: AppLayout } = await import('../layout');
+  // The client half of the /app layout (LC-027: layout.tsx is now a thin Server Component that
+  // wraps it for the per-request nonce, see AppLayout.nonceSplit.test.tsx). The providers, the
+  // modals and the reporter all live here.
+  const { default: AppLayout } = await import('../AppLayoutClient');
   render(
     <AppLayout>
       <p>app page</p>

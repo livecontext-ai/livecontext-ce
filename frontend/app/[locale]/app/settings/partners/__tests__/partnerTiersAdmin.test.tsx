@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextIntlClientProvider } from 'next-intl';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import enMessages from '@/messages/en.json';
+import { SITE_URL } from '@/lib/seo/siteUrl';
 
 const overview = vi.fn();
 const grantFounder = vi.fn();
@@ -85,6 +86,18 @@ describe('Admin > Partners: tiers and founders', () => {
     expect(within(screen.getByTestId('partner-code-tier')).getByText('Gold')).toBeTruthy();
     // The code was created at 30%, the Gold tier lifts it to 40%.
     expect(screen.getByText('10,000 credits per new user, 40% for 12 months')).toBeTruthy();
+  });
+
+  it('the copied partner link is on the public site, whatever address the admin page is open on', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy link' }));
+
+    // jsdom runs on localhost: the link must not be built from it.
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(`${SITE_URL}/?lc_ref=AGENCY`));
+    expect(writeText.mock.calls[0][0]).not.toContain(window.location.host);
   });
 
   it('granting the founder tier takes two clicks: the first only asks to confirm', async () => {

@@ -245,10 +245,19 @@ keycloak:
     username: ""
     password: ""
 
-# CORS: disable credentials so @CrossOrigin(origins="*") on controllers is valid
+# CORS: never credentialed. The browser reaches CE same-origin through the Next proxy, and the
+# "*" only serves the public widget embed; auth is a Bearer header, never an ambient cookie.
+#
+# CASA LC-032: CORS was "*" for the entire monolith, which combined with the (now removed)
+# loopback X-User-ID trust was the exploitable half of that finding. Nothing in this app calls the
+# backend cross-origin from browser JS except the public widget (see WebConfig, scoped separately
+# to /api/internal/widget/** and still credential-less): the frontend proxies every authenticated
+# call server-side (AGENTS.md "Never call backend directly"), so "/**" only ever needs to answer
+# THIS install's own origins. CORS_ALLOWED_ORIGINS overrides for a deployment that genuinely needs
+# more (e.g. a frontend on a separate domain from APP_PUBLIC_URL/APP_BASE_URL).
 cors:
   allow-credentials: false
-  allowed-origins: "*"
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:${app.public-url},${app.base-url}}
 
 # CE monolith worker sizing. Cloud defaults start 16 blocking Redis queue
 # workers across agent/classify/guardrail pools, which is excessive for the
@@ -282,6 +291,8 @@ auth:
   mode: embedded
   jwt:
     issuer: ${AUTH_JWT_ISSUER:livecontext}
+    # CASA LC-083: aud of every CE access token; MonolithSecurityFilter requires it (and iss).
+    audience: ${AUTH_JWT_AUDIENCE:livecontext-ce}
     keys-path: ${AUTH_JWT_KEYS_PATH:./data/keys}
 
 # S3/MinIO file storage
@@ -648,6 +659,14 @@ conversation:
   bridge:
     enabled: ${BRIDGE_ENABLED:true}
     url: ${BRIDGE_SERVICE_URL:http://host.docker.internal:8093}
+    # LC-022: when true, a run requested by a PLATFORM ADMIN (ADMIN in X-User-Roles) is signed
+    # UNRESTRICTED (native host tools, source checkout, repo/shell MCP tools) unless it is in
+    # restricted "API mode". Every other run is restricted whatever this says. Off by default.
+    host-tools-enabled: ${CONVERSATION_BRIDGE_HOST_TOOLS_ENABLED:false}
+    # LC-001: per-install secret shared with the bridge container. ce-entrypoint.sh generates it on
+    # the keys volume and exports BRIDGE_SHARED_SECRET; the bridge reads the same file
+    # (BRIDGE_SHARED_SECRET_FILE) and enforces the signature whenever it is present.
+    shared-secret: ${BRIDGE_SHARED_SECRET:}
   # COLD-summary compaction. The monolith does not load conversation-service's
   # application.yml, so the trigger knobs are restated here or a self-hosted
   # operator has no way to reach them. Same three modes as cloud: turns
@@ -672,6 +691,15 @@ credential:
   encryption:
     password: ${CREDENTIAL_ENCRYPTION_PASSWORD:}
     salt: ${CREDENTIAL_ENCRYPTION_SALT:}
+    # One process, so no mixed-version window: write the authenticated v2 envelope (and the
+    # HKDF-keyed lookup HMAC) right away; the startup sweep re-encrypts v1 rows. Cloud services
+    # default to 1 until every service runs the v2 reader (CredentialEncryptionService doc).
+    write-version: ${CREDENTIAL_ENCRYPTION_WRITE_VERSION:2}
+    # Set by ce-entrypoint.sh only when an old volume still carries a published default key, so
+    # the install keeps reading the rows written under it instead of refusing to start.
+    allow-weak-material: ${CREDENTIAL_ENCRYPTION_ALLOW_WEAK_MATERIAL:false}
+    # allow = count + warn (credential.plaintext.read metric); deny = refuse plaintext reads.
+    plaintext-reads: ${CREDENTIAL_ENCRYPTION_PLAINTEXT_READS:allow}
 
 # ============================================================
 # Logging
@@ -898,3 +926,14 @@ ai:
 # in the compose env turns it off for the whole install: no modal, no sidebar entry, no dot.
 changelog:
   enabled: ${CHANGELOG_ENABLED:true}
+
+# Google restricted-scope data (Gmail, Drive) controls - CASA LC-004 / LC-011 / LC-066.
+# On a self-hosted install the Google OAuth client is the operator's own and the operator is
+# the data controller, so the managed-cloud defaults are relaxed: the LLM allow-list is not
+# enforced (RestrictedDataPolicyConfig already defaults it off for auth.mode=embedded) and the
+# 30-day purge of restricted content is off. Rows are still tagged, so either can be turned on.
+data-classification:
+  restricted:
+    enforce-llm-allowlist: ${DATA_CLASSIFICATION_ENFORCE_LLM_ALLOWLIST:false}
+    sweep:
+      enabled: ${DATA_CLASSIFICATION_RESTRICTED_SWEEP_ENABLED:false}

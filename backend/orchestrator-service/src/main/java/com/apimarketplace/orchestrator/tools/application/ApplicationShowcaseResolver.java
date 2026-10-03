@@ -5,7 +5,8 @@ import com.apimarketplace.orchestrator.domain.workflow.InterfaceDef;
 import com.apimarketplace.orchestrator.domain.workflow.RunStatus;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
-import lombok.RequiredArgsConstructor;
+import com.apimarketplace.orchestrator.services.persistence.StepPayloadService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
@@ -27,10 +28,22 @@ import java.util.UUID;
  * nothing. Centralizing the logic here is the single source of truth both call.
  */
 @Component
-@RequiredArgsConstructor
 public class ApplicationShowcaseResolver {
 
     private final WorkflowRunRepository workflowRunRepository;
+    /** Null only where no payload service exists (unit tests): no restricted-run preference then. */
+    private final StepPayloadService stepPayloadService;
+
+    @Autowired
+    public ApplicationShowcaseResolver(WorkflowRunRepository workflowRunRepository,
+                                       StepPayloadService stepPayloadService) {
+        this.workflowRunRepository = workflowRunRepository;
+        this.stepPayloadService = stepPayloadService;
+    }
+
+    public ApplicationShowcaseResolver(WorkflowRunRepository workflowRunRepository) {
+        this(workflowRunRepository, null);
+    }
 
     /**
      * Run statuses that may be showcased - MUST mirror the publish pipeline's source of truth
@@ -75,17 +88,30 @@ public class ApplicationShowcaseResolver {
      * The {@code run_id_public} of the latest showcaseable run for the workflow (newest first),
      * or empty when none exists yet. Scans the most recent 50 runs - the same window the
      * application-create path uses.
+     *
+     * <p>LC-066: a run holding Gmail or Google Drive data (RESTRICTED) is published without a
+     * preview (the showcase capture withholds it), so the newest showcaseable run WITHOUT such
+     * data is preferred. When every candidate is restricted, the newest one is still returned:
+     * the publication goes through, without a preview, instead of failing for want of a run.
      */
     public Optional<String> resolveLatestShowcaseRunId(UUID workflowId) {
         if (workflowId == null) return Optional.empty();
         List<WorkflowRunEntity> runs = workflowRunRepository
             .findByWorkflowIdOrderByStartedAtDescPageable(workflowId, PageRequest.of(0, 50))
             .getContent();
+        String newestRestricted = null;
         for (WorkflowRunEntity run : runs) {
-            if (isShowcaseableRun(run)) {
-                return Optional.of(run.getRunIdPublic());
+            if (!isShowcaseableRun(run)) {
+                continue;
             }
+            if (stepPayloadService != null && stepPayloadService.isRunRestricted(run.getRunIdPublic())) {
+                if (newestRestricted == null) {
+                    newestRestricted = run.getRunIdPublic();
+                }
+                continue;
+            }
+            return Optional.of(run.getRunIdPublic());
         }
-        return Optional.empty();
+        return Optional.ofNullable(newestRestricted);
     }
 }

@@ -24,7 +24,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code gateway.filter.hmac-required-paths}. Runs the real {@link GatewayAuthenticationFilter}
  * on auth-service's own YAML: unsigned or mis-bound calls are refused 401, a signed call bound
  * to the X-User-ID / X-Organization-ID it sends passes, and the sibling member-ids endpoint
- * (other callers, unsigned) is untouched.
+ * is untouched while the staged {@code AUTH_INTERNAL_HMAC_REQUIRED_PATH} switch is disarmed (see
+ * {@code InternalAuthAndVariablesHmacGateTest}).
  */
 @DisplayName("auth-service: /api/internal/auth/member-role/ is HMAC-required")
 class MemberRoleHmacGateTest {
@@ -101,7 +102,7 @@ class MemberRoleHmacGateTest {
     }
 
     @Test
-    @DisplayName("the sibling /organizations/{id}/member-ids stays public (its callers do not sign)")
+    @DisplayName("the sibling /organizations/{id}/member-ids stays public until AUTH_INTERNAL_HMAC_REQUIRED_PATH arms the prefix")
     void memberIdsStaysPublic() throws Exception {
         run(new MockHttpServletRequest("GET", "/api/internal/auth/organizations/org-1/member-ids"));
 

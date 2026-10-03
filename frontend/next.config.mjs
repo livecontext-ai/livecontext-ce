@@ -1,4 +1,5 @@
 import createNextIntlPlugin from 'next-intl/plugin';
+import { securityHeaderRules } from './lib/security/securityHeaders.mjs';
 
 const withNextIntl = createNextIntlPlugin('./i18n/request.ts');
 
@@ -6,12 +7,20 @@ const withNextIntl = createNextIntlPlugin('./i18n/request.ts');
 const nextConfig = {
   output: 'standalone',
   compress: false,
+  // No `X-Powered-By: Next.js` banner: framework fingerprinting for a scanner, nothing for a user.
+  poweredByHeader: false,
 
   // Increase body size limit for file uploads
   experimental: {
     serverActions: {
       bodySizeLimit: '50mb',
     },
+    // Next 16.3 switched the build type-check to the `tsc` CLI by default, which checks
+    // test files too; the compiler-API path it replaced (16.2) skips __tests__/ and
+    // *.test.* diagnostics. Tests import repo-root scripts (lib/seo/__tests__/indexNow)
+    // that are outside the Docker build context, so the CLI path fails every image build.
+    // Keep the 16.2 behaviour: production code is type-checked, tests are not the build's job.
+    useTypeScriptCli: false,
   },
 
   // Disable React Strict Mode (optional)
@@ -124,11 +133,17 @@ const nextConfig = {
   // response, so the header is pinned here per request-header condition.
   async headers() {
     const noStore = [{ key: 'Cache-Control', value: 'private, no-store' }];
-    return ['rsc', 'next-router-prefetch', 'next-router-segment-prefetch'].map((header) => ({
+    const rscNoStore = ['rsc', 'next-router-prefetch', 'next-router-segment-prefetch'].map((header) => ({
       source: '/:path*',
       has: [{ type: 'header', key: header }],
       headers: noStore,
     }));
+    // Security response headers (LC-027): HSTS/nosniff everywhere, document policy (CSP,
+    // frame-ancestors, Referrer-Policy, Permissions-Policy, COOP) per path. See the module.
+    return [...rscNoStore, ...securityHeaderRules({
+      edition: process.env.NEXT_PUBLIC_APP_EDITION,
+      serviceUrls: [process.env.NEXT_PUBLIC_KEYCLOAK_URL, process.env.NEXT_PUBLIC_GATEWAY_WS_URL],
+    })];
   },
 
   // Redirects configuration

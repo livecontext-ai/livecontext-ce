@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.controllers.internal;
 
+import com.apimarketplace.common.publication.ShowcaseCaptureContract;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
@@ -164,6 +165,41 @@ public class InternalPublicationSupportController {
             log.error("[FullSnapshot] capture failed for run={} tenant={} org={} epoch={}: {}",
                     runIdPublic, tenantId, organizationId, epochFilter, e.getMessage(), e);
             return ResponseEntity.internalServerError().body(Map.of("error", "Capture failed"));
+        }
+    }
+
+    /**
+     * LC-066: whether a run holds Gmail or Google Drive data (RESTRICTED). publication-service asks
+     * it once for each showcase snapshot stored before the capture checked it, and stops serving
+     * the snapshot when the answer is true. The answer is {@code {"runExists": true, "restricted":
+     * bool}}, or {@code {"runExists": false}} for a deleted run (its restricted payloads went with
+     * it, so "not restricted" would mean nothing). A restricted run also says WHEN its first
+     * restricted payload was written ({@code "firstRestrictedAt"}, ISO-8601), when a row says so:
+     * a snapshot captured before that moment holds none of it. A lookup failure is a 500, never
+     * {@code false}: the caller keeps the snapshot hidden until it gets a definite answer.
+     *
+     * <p>Internal-only like every {@code /api/internal/**} path: the gateway never routes the
+     * prefix and the CE monolith answers 404 to any non-loopback caller.
+     */
+    @GetMapping("/runs/{runId}/restricted")
+    public ResponseEntity<?> isRunRestricted(@PathVariable("runId") String runIdPublic) {
+        try {
+            if (!showcaseSnapshotBuilder.sourceRunExists(runIdPublic)) {
+                return ResponseEntity.ok(Map.of(ShowcaseCaptureContract.RUN_EXISTS_KEY, false));
+            }
+            boolean restricted = showcaseSnapshotBuilder.isSourceRunRestricted(runIdPublic);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put(ShowcaseCaptureContract.RUN_EXISTS_KEY, true);
+            body.put(ShowcaseCaptureContract.RUN_RESTRICTED_KEY, restricted);
+            if (restricted) {
+                // When it became restricted: a snapshot captured before holds none of it.
+                showcaseSnapshotBuilder.sourceRunFirstRestrictedAt(runIdPublic).ifPresent(first ->
+                        body.put(ShowcaseCaptureContract.FIRST_RESTRICTED_AT_KEY, first.toString()));
+            }
+            return ResponseEntity.ok(body);
+        } catch (Exception e) {
+            log.warn("[RunRestricted] lookup failed for run={}: {}", runIdPublic, e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", "Restriction lookup failed"));
         }
     }
 

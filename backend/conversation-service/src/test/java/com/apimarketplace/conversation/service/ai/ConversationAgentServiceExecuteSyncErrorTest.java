@@ -110,7 +110,7 @@ class ConversationAgentServiceExecuteSyncErrorTest {
             .credentials(credentials)
             .tenantId("user-1").build();
         when(contextBuilder.build(any(ChatRequest.class), anyString(), anyString(), any())).thenReturn(context);
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class))).thenReturn(null);
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any())).thenReturn(null);
 
         Map<String, Object> result = service.executeSync(request, "conv-1");
 
@@ -151,7 +151,7 @@ class ConversationAgentServiceExecuteSyncErrorTest {
             .credentials(credentials)
             .tenantId("user-1").build();
         when(contextBuilder.build(any(ChatRequest.class), anyString(), anyString(), any())).thenReturn(context);
-        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class))).thenReturn(null);
+        when(bridgeClient.executeViaBridge(any(AgentExecutionRequestDto.class), any())).thenReturn(null);
 
         service.executeSync(request, "conv-1");
 

@@ -1,0 +1,81 @@
+# Direct runtime dependencies of websearch-service: the file a human edits.
+# requirements.txt is GENERATED from it (every package, transitive ones
+# included, pinned to one version with its sha256 hashes) by:
+#   bash scripts/lock-requirements.sh
+# Never edit requirements.txt by hand; edit this file, re-lock, commit both.
+#
+# Versions were checked against the OSV database on 2026-10-01: no known
+# advisory. FastAPI 0.133.0 is the first release that accepts Starlette 1.x,
+# and Starlette 1.3.1 is the first release free of every published Starlette
+# advisory (CVE-2025-54121, CVE-2025-62727, CVE-2026-48710, CVE-2026-48817,
+# CVE-2026-48818, CVE-2026-54282, CVE-2026-54283). Starlette is pinned
+# explicitly so it cannot float with FastAPI's open-ended range.
+fastapi==0.142.2
+starlette==1.7.0
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+pydantic==2.13.3
+pydantic-settings==2.7.1
+redis==8.1.0
+Pillow==12.3.0
+nodriver==0.50.3
+minio==7.2.20
+# 8.x is the first major that supports Starlette 1.x (7.x requires starlette<1.0).
+prometheus-fastapi-instrumentator==8.1.0
+# Used by routers/cdp.py for the live bidirectional CDP WebSocket proxy.
+# uvicorn[standard] also pulls a websockets impl, but the proxy needs the
+# `websockets` library client API explicitly. 16.x: google-genai 1.65.0 requires
+# websockets<17.
+websockets==16.1.1
+# Security floors for transitive dependencies that no direct pin above controls
+# (anyio: CVE-2026-63374 critical, CVE-2026-64847; urllib3: CVE-2026-44431,
+# CVE-2026-44432, CVE-2026-97687..97689; protobuf: CVE-2026-0994). The lock
+# pins the exact version resolved above each floor.
+anyio>=4.14.2
+urllib3>=2.8.0
+protobuf>=6.33.5
+# browser-use 0.12.6 itself is NOT resolved here: its requires_dist hard-pins
+# versions this service must NOT run, either because they carry advisories
+# (aiohttp==3.13.3, pillow==12.1.1, requests==2.32.5, mcp==1.26.0) or because
+# they would downgrade a FastAPI-side pin (pydantic==2.12.5). Every installer
+# (Dockerfile, deploy.yml, deploy-direct.sh, vps3-websearch.sh, CI) installs
+# requirements.txt, then layers browser-use on top with
+# `pip install --no-deps --require-hashes -r requirements-browser-use.txt`
+# (its own hashed lock, written by the lock script from BROWSER_USE_PIN).
+#
+# So the transitives browser-use imports at runtime are listed here instead,
+# or `from browser_use import Agent` fails one module at a time (bubus, psutil,
+# then, via browser.session and agent.service, cdp_use, posthog, the LLM SDKs,
+# the doc/markdown helpers ...). The ONLY dep deliberately excluded is `mcp`
+# (the browser Agent does not need it, and 1.26.0 carries
+# CVE-2026-52869/52870/59950). Versions match 0.12.6's requires_dist for API
+# parity, except the security bumps: aiohttp 3.13.3 -> 3.14.3, pypdf 6.9.1 ->
+# 6.19.0, python-dotenv 1.2.1 -> 1.2.2, requests 2.32.5 -> 2.34.2 (all the same
+# or newer than browser-use 0.13.x's own pins).
+bubus==1.5.6
+browser-use-sdk==2.0.15
+inquirerpy==0.3.4
+ollama==0.6.1
+uuid7==0.1.0
+psutil==7.2.2
+cdp-use==1.4.5
+posthog==7.7.0
+openai==2.16.0
+anthropic==0.76.0
+groq==1.0.0
+google-genai==1.65.0
+google-api-core==2.29.0
+google-api-python-client==2.188.0
+google-auth==2.48.0
+google-auth-oauthlib==1.2.4
+markdownify==1.2.2
+pypdf==6.19.0
+python-docx==1.2.0
+python-dotenv==1.2.2
+reportlab==4.4.9
+requests==2.34.2
+rich==14.3.1
+screeninfo==0.8.1
+pyotp==2.9.0
+aiohttp==3.14.3
+cloudpickle==3.1.2

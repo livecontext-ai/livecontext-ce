@@ -15,6 +15,7 @@ import { storageGrowth, daysUntilFull } from '../storageInsights';
 import { STORAGE_CATEGORY_HEX } from '@/lib/api';
 import { formatCalendarDate } from '@/lib/utils/dateFormatters';
 import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
+import { urlEnum, useUrlState } from '@/hooks/useUrlState';
 
 /** Order categories by typical size (largest first) */
 const CATEGORY_ORDER: StorageCategory[] = [
@@ -74,7 +75,8 @@ export default function StorageBreakdownChart({ className, currentBreakdown = []
   const isAll = !!allWorkspaceIds && allWorkspaceIds.length > 0;
   // Stable primitive for the dep lists (the array ref changes each render).
   const allWorkspaceIdsKey = (allWorkspaceIds ?? []).join(',');
-  const [period, setPeriod] = useState('30');
+  // In the address, so a reload keeps the selected period.
+  const [period, setPeriod] = useUrlState<string>('period', '30', { codec: urlEnum(['7', '30', '90']) });
   const [history, setHistory] = useState<StorageHistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const requestSeqRef = useRef(0);

@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Brain, Plus, Pin, Trash2, Pencil, Bot, Users, Eye, EyeOff, AlertTriangle } from 'lucide-react';
 import { BulkDeleteModal } from '@/components/ui/BulkDeleteModal';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { urlEnum, useUrlSearchState, useUrlState } from '@/hooks/useUrlState';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { SearchField } from '@/components/ui/search-field';
@@ -41,8 +42,11 @@ export function MemoryTab({ className = '' }: { className?: string }) {
   const canMutate = useCanMutateInCurrentOrg();
   const currentOrgId = useCurrentOrgStore((s) => s.currentOrgId);
 
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState<MemoryType | 'all'>('all');
+  // The search and the type filter live in the address, so a reload reopens the list as it was.
+  const [search, setSearch] = useUrlSearchState('q');
+  const [typeFilter, setTypeFilter] = useUrlState<MemoryType | 'all'>('type', 'all', {
+    codec: urlEnum(TYPE_FILTERS),
+  });
   const [editing, setEditing] = useState<Memory | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);

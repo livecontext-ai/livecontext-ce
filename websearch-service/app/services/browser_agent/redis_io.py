@@ -37,6 +37,28 @@ def steps_key(run_id: str, node_id: str) -> str:
     return STEPS_KEY_FMT.format(run_id=run_id, node_id=node_id)
 
 
+def xread_entries(resp: Any) -> list[tuple[Any, Any]]:
+    """Flatten an XREAD reply into [(entry_id, fields), ...] whatever its shape.
+
+    redis-py 8 returns three shapes for the same reply (measured against a
+    real server): RESP2 with legacy responses (the default today, protocol
+    unset) gives ``[[stream, [(id, fields), ...]], ...]``; any client with
+    ``legacy_responses=False`` gives ``{stream: [(id, fields), ...]}``; and
+    RESP3 with legacy responses gives ``{stream: [[(id, fields), ...]]}``.
+    A reader written for the first shape silently misreads the other two
+    (it unpacks the stream NAME), so every XREAD consumer goes through here.
+    """
+    if not resp:
+        return []
+    streams = resp.values() if isinstance(resp, dict) else (item[1] for item in resp)
+    flat: list[tuple[Any, Any]] = []
+    for entries in streams:
+        if entries and isinstance(entries[0], list):
+            entries = [entry for batch in entries for entry in batch]
+        flat.extend((entry[0], entry[1]) for entry in entries)
+    return flat
+
+
 def control_key(run_id: str, node_id: str) -> str:
     return CONTROL_KEY_FMT.format(run_id=run_id, node_id=node_id)
 

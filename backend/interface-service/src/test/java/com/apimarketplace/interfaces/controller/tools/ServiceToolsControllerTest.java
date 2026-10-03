@@ -201,6 +201,45 @@ class ServiceToolsControllerTest {
         assertThat(ctx.getValue().orgRole())
             .as("a body-supplied role must never reach the execution context")
             .isNull();
-        assertThat(ctx.getValue().orgId()).isEqualTo("victim-org");
+        // LC-013: the workspace is no longer read from the body either (header only).
+        assertThat(ctx.getValue().orgId()).isNull();
+    }
+
+    @Test
+    @DisplayName("regression (LC-066): the forwarded RESTRICTED tag reaches the execution credentials")
+    void forwardedRestrictedTagReachesCredentials() {
+        when(toolsProvider.execute(any(), any(), any()))
+            .thenReturn(ToolExecutionResult.success(Map.of()));
+
+        Map<String, Object> request = new HashMap<>();
+        request.put("tool", "interface");
+        request.put("parameters", Map.of("action", "publish"));
+        request.put(com.apimarketplace.common.classification.DataSensitivity.REQUEST_FIELD, "RESTRICTED");
+
+        controller.executeTool(createRequest("tenant-1"), request);
+
+        ArgumentCaptor<ToolExecutionContext> ctx = ArgumentCaptor.forClass(ToolExecutionContext.class);
+        verify(toolsProvider).execute(any(), any(), ctx.capture());
+        assertThat(com.apimarketplace.common.classification.DataSensitivity
+                .fromCredentials(ctx.getValue().credentials()).isRestricted()).isTrue();
+    }
+
+    @Test
+    @DisplayName("a body cannot relax the tag: NORMAL or absent leaves the call unrestricted")
+    void forwardedNormalTagIsNotRestricted() {
+        when(toolsProvider.execute(any(), any(), any()))
+            .thenReturn(ToolExecutionResult.success(Map.of()));
+
+        Map<String, Object> request = new HashMap<>();
+        request.put("tool", "interface");
+        request.put("parameters", Map.of("action", "publish"));
+        request.put(com.apimarketplace.common.classification.DataSensitivity.REQUEST_FIELD, "NORMAL");
+
+        controller.executeTool(createRequest("tenant-1"), request);
+
+        ArgumentCaptor<ToolExecutionContext> ctx = ArgumentCaptor.forClass(ToolExecutionContext.class);
+        verify(toolsProvider).execute(any(), any(), ctx.capture());
+        assertThat(ctx.getValue().credentials())
+            .doesNotContainKey(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY);
     }
 }

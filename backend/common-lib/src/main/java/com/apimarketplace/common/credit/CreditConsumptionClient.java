@@ -144,6 +144,9 @@ public class CreditConsumptionClient {
             this.restTemplate = new RestTemplateBuilder()
                     .connectTimeout(CONNECT_TIMEOUT)
                     .readTimeout(READ_TIMEOUT)
+                    // CASA LC-035: v2 gateway signature added at send time.
+                    .additionalInterceptors(new com.apimarketplace.common.web.GatewaySignatureV2Interceptor(
+                            () -> gatewaySecretKey))
                     .build();
         } else {
             this.restTemplate = null;

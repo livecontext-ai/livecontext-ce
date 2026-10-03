@@ -50,7 +50,7 @@ class InternalCredentialLookupControllerTest {
         Credential cred = cred(242L, OWNER, ORG, "twitter", CredentialStatus.active, true);
         when(credentialRepository.findById(242L)).thenReturn(Optional.of(cred));
 
-        ResponseEntity<Credential> resp = controller.getCredentialById(242L, OWNER, ORG);
+        ResponseEntity<Credential> resp = controller.getCredentialById(242L, OWNER, ORG, OWNER);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isEqualTo(cred);
@@ -63,7 +63,7 @@ class InternalCredentialLookupControllerTest {
         Credential cred = cred(242L, OWNER, ORG, "twitter", CredentialStatus.active, true);
         when(credentialRepository.findById(242L)).thenReturn(Optional.of(cred));
 
-        ResponseEntity<Credential> resp = controller.getCredentialById(242L, OTHER_MEMBER, ORG);
+        ResponseEntity<Credential> resp = controller.getCredentialById(242L, OTHER_MEMBER, ORG, OTHER_MEMBER);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isEqualTo(cred);
@@ -75,7 +75,7 @@ class InternalCredentialLookupControllerTest {
         Credential cred = cred(242L, OWNER, "other-org", "twitter", CredentialStatus.active, true);
         when(credentialRepository.findById(242L)).thenReturn(Optional.of(cred));
 
-        ResponseEntity<Credential> resp = controller.getCredentialById(242L, OTHER_MEMBER, ORG);
+        ResponseEntity<Credential> resp = controller.getCredentialById(242L, OTHER_MEMBER, ORG, OTHER_MEMBER);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
@@ -89,7 +89,7 @@ class InternalCredentialLookupControllerTest {
         when(credentialRepository.findDefaultByTenantIdAndIntegration(OTHER_MEMBER, "twitter"))
                 .thenReturn(Optional.of(own));
 
-        ResponseEntity<Credential> resp = controller.getDefaultCredential(OTHER_MEMBER, "twitter", ORG);
+        ResponseEntity<Credential> resp = controller.getDefaultCredential(OTHER_MEMBER, "twitter", ORG, OTHER_MEMBER);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isEqualTo(own);
@@ -105,7 +105,7 @@ class InternalCredentialLookupControllerTest {
         when(credentialRepository.findByScopeAndIntegration(OTHER_MEMBER, ORG, "twitter"))
                 .thenReturn(List.of(shared));
 
-        ResponseEntity<Credential> resp = controller.getDefaultCredential(OTHER_MEMBER, "twitter", ORG);
+        ResponseEntity<Credential> resp = controller.getDefaultCredential(OTHER_MEMBER, "twitter", ORG, OTHER_MEMBER);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isEqualTo(shared);
@@ -120,7 +120,7 @@ class InternalCredentialLookupControllerTest {
         when(credentialRepository.findByScopeAndIntegration(OTHER_MEMBER, ORG, "twitter"))
                 .thenReturn(List.of(inactive));
 
-        ResponseEntity<Credential> resp = controller.getDefaultCredential(OTHER_MEMBER, "twitter", ORG);
+        ResponseEntity<Credential> resp = controller.getDefaultCredential(OTHER_MEMBER, "twitter", ORG, OTHER_MEMBER);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
@@ -131,7 +131,7 @@ class InternalCredentialLookupControllerTest {
         when(credentialRepository.findDefaultByTenantIdAndIntegration(OTHER_MEMBER, "twitter"))
                 .thenReturn(Optional.empty());
 
-        ResponseEntity<Credential> resp = controller.getDefaultCredential(OTHER_MEMBER, "twitter", null);
+        ResponseEntity<Credential> resp = controller.getDefaultCredential(OTHER_MEMBER, "twitter", null, OTHER_MEMBER);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         verify(credentialRepository, never()).findByScopeAndIntegration(OTHER_MEMBER, null, "twitter");
@@ -147,7 +147,7 @@ class InternalCredentialLookupControllerTest {
         when(credentialRepository.findByOrganizationIdStrict(ORG, 1, 10_000))
                 .thenReturn(List.of(a, b));
 
-        ResponseEntity<List<Credential>> resp = controller.getAllCredentials(OTHER_MEMBER, ORG);
+        ResponseEntity<List<Credential>> resp = controller.getAllCredentials(OTHER_MEMBER, ORG, OTHER_MEMBER);
 
         assertThat(resp.getBody()).containsExactly(a, b);
         verify(credentialRepository, never()).findAllByTenantId(OTHER_MEMBER);
@@ -159,7 +159,7 @@ class InternalCredentialLookupControllerTest {
         Credential a = cred(1L, OTHER_MEMBER, ORG, "twitter", CredentialStatus.active, true);
         when(credentialRepository.findAllByTenantId(OTHER_MEMBER)).thenReturn(List.of(a));
 
-        ResponseEntity<List<Credential>> resp = controller.getAllCredentials(OTHER_MEMBER, null);
+        ResponseEntity<List<Credential>> resp = controller.getAllCredentials(OTHER_MEMBER, null, OTHER_MEMBER);
 
         assertThat(resp.getBody()).containsExactly(a);
         verify(credentialRepository, never()).findByOrganizationIdStrict(ORG, 1, 10_000);
@@ -178,7 +178,7 @@ class InternalCredentialLookupControllerTest {
                 .thenReturn(List.of(cred(10L, OWNER, null, "instagram", CredentialStatus.active, true)));
 
         ResponseEntity<List<InternalCredentialLookupController.CredentialIdentity>> response =
-                controller.getCredentialIdentities(OWNER, null);
+                controller.getCredentialIdentities(OWNER, null, OWNER);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).hasSize(1);
@@ -216,7 +216,7 @@ class InternalCredentialLookupControllerTest {
                         List.of("https://www.googleapis.com/auth/gmail.send"))));
 
         InternalCredentialLookupController.CredentialIdentity identity =
-                controller.getCredentialIdentities(OWNER, null).getBody().get(0);
+                controller.getCredentialIdentities(OWNER, null, OWNER).getBody().get(0);
 
         assertThat(identity.scopes())
                 .containsExactly("https://www.googleapis.com/auth/gmail.send");
@@ -233,7 +233,7 @@ class InternalCredentialLookupControllerTest {
                 .thenReturn(List.of(cred(30L, OWNER, null, "gmail", CredentialStatus.active, true)));
 
         String json = new com.fasterxml.jackson.databind.ObjectMapper()
-                .writeValueAsString(controller.getCredentialIdentities(OWNER, null).getBody().get(0));
+                .writeValueAsString(controller.getCredentialIdentities(OWNER, null, OWNER).getBody().get(0));
 
         assertThat(json).contains("\"is_default\":true").doesNotContain("\"isDefault\"");
     }
@@ -246,7 +246,7 @@ class InternalCredentialLookupControllerTest {
         when(credentialRepository.findAllByTenantId(OWNER))
                 .thenReturn(List.of(credWithScopes(21L, OWNER, "stripe", null)));
 
-        assertThat(controller.getCredentialIdentities(OWNER, null).getBody().get(0).scopes())
+        assertThat(controller.getCredentialIdentities(OWNER, null, OWNER).getBody().get(0).scopes())
                 .isNotNull()
                 .isEmpty();
     }
@@ -260,7 +260,7 @@ class InternalCredentialLookupControllerTest {
                 .thenReturn(List.of(cred(11L, OTHER_MEMBER, ORG, "instagram", CredentialStatus.active, false)));
 
         ResponseEntity<List<InternalCredentialLookupController.CredentialIdentity>> response =
-                controller.getCredentialIdentities(OWNER, ORG);
+                controller.getCredentialIdentities(OWNER, ORG, OWNER);
 
         assertThat(response.getBody()).extracting(InternalCredentialLookupController.CredentialIdentity::id)
                 .containsExactly(11L);

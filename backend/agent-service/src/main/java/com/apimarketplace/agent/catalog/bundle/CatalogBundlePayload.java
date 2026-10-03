@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.catalog.bundle;
 
+import com.apimarketplace.agent.domain.ModelCategory;
 import com.apimarketplace.agent.domain.ModelCategorySettingsEntity;
 import com.apimarketplace.agent.domain.ModelConfigOverrideEntity;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -86,6 +87,10 @@ public final class CatalogBundlePayload {
         Map<Long, Map<String, ModelCategorySettingsEntity>> bySource = new HashMap<>();
         for (ModelCategorySettingsEntity s : categorySettings) {
             if (s.getModelConfigId() == null || s.getCategory() == null) continue;
+            // The free-tier ranking is the cloud's own business: a self-hosted install has
+            // no free tier, and shipping it would cut a new bundle for every install each
+            // time a cloud admin reorders it.
+            if (ModelCategory.ranksOnly(s.getCategory())) continue;
             bySource.computeIfAbsent(s.getModelConfigId(), k -> new HashMap<>())
                     .put(s.getCategory(), s);
         }

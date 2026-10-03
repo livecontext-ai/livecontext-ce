@@ -47,6 +47,7 @@ class CloudLinkServiceHeartbeatTest {
                 "test-encryption-key-for-unit-tests",
                 CLOUD_API, "1.4.0-test", new ObjectMapper(),
                 restTemplate);
+        CloudLinkTokenColumnsFake.backByStubbedEntity(cloudLinkRepository);
     }
 
     private CeCloudLinkEntity registeredLink() {

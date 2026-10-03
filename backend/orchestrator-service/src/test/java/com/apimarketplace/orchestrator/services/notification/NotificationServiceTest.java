@@ -727,6 +727,48 @@ class NotificationServiceTest {
     }
 
     @Test
+    @DisplayName("USER row (new subscriber) surfaces profileHandle from payload - bell links to the subscriber's profile")
+    void userRowSurfacesProfileHandle() throws Exception {
+        UUID subjectId = UUID.randomUUID();
+        when(readStateRepository.findByUserId(TENANT_ID)).thenReturn(Optional.empty());
+        when(nativeQuery.getResultList()).thenReturn(Arrays.asList((Object) new Object[]{
+                "USER", subjectId, "CREATOR_FOLLOWED", null, "info", Timestamp.from(Instant.now()), null, null, null, "bob"}));
+        SubjectNameResolver userResolver = new SubjectNameResolver() {
+            @Override public String subjectType() { return SubjectNameResolver.USER; }
+            @Override public java.util.Map<UUID, String> resolveNames(java.util.Set<UUID> ids) {
+                java.util.Map<UUID, String> out = new java.util.HashMap<>();
+                ids.forEach(id -> out.put(id, "Bob B."));
+                return out;
+            }
+        };
+        NotificationService svc = new NotificationService(readStateRepository, workflowRunRepository,
+                java.util.List.<SubjectNameResolver>of(workflowResolver, userResolver));
+        Field emField = NotificationService.class.getDeclaredField("entityManager");
+        emField.setAccessible(true);
+        emField.set(svc, entityManager);
+
+        NotificationItem item = svc.getNotifications(TENANT_ID, TENANT_ID).items().get(0);
+
+        assertThat(item.subjectType()).isEqualTo("USER");
+        assertThat(item.subjectName()).isEqualTo("Bob B.");
+        assertThat(item.profileHandle()).isEqualTo("bob");
+        assertThat(item.triggerKind()).isNull();
+    }
+
+    @Test
+    @DisplayName("A row from the 9-column shape (no profile_handle) keeps profileHandle null instead of failing")
+    void legacyRowShapeHasNoProfileHandle() throws Exception {
+        UUID triggerId = UUID.randomUUID();
+        when(readStateRepository.findByUserId(TENANT_ID)).thenReturn(Optional.empty());
+        when(nativeQuery.getResultList()).thenReturn(Arrays.asList(
+                (Object) triggerRow(triggerId, "WEBHOOK_TRIGGER_DISABLED", "warning", Instant.now(), "schedule")));
+
+        NotificationItem item = serviceWithTriggerResolver().getNotifications(TENANT_ID, TENANT_ID).items().get(0);
+
+        assertThat(item.profileHandle()).isNull();
+    }
+
+    @Test
     @DisplayName("TRIGGER row surfaces triggerKind from payload - bell uses it for icon + tab deep-link on /app/settings/public-access")
     void triggerRowSurfacesTriggerKindForDeepLink() throws Exception {
         // Closes the prod UX bug where the user clicked "1 disabled cron" in

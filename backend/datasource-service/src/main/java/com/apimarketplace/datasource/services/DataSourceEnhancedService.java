@@ -310,11 +310,12 @@ public class DataSourceEnhancedService {
 
         // Capture pre-patch snapshot for trigger event `previous_row`
         Map<String, Object> beforeSnapshot = findFlattenedById(dataSourceId, effectiveTenantId, itemId);
+        String sensitivity = sensitivitiesOf(dataSourceId, effectiveTenantId, List.of(itemId)).get(itemId);
 
         // 🇫🇷 Application des patches JSONB
         DataSourceItemRow updated = repositories.applyJsonPatch(dataSourceId, effectiveTenantId, itemId, patches);
 
-        publishUpdatedEvent(dataSourceId, effectiveTenantId, updated, beforeSnapshot);
+        publishUpdatedEvent(dataSourceId, effectiveTenantId, updated, beforeSnapshot, sensitivity);
         return updated;
     }
     
@@ -343,6 +344,7 @@ public class DataSourceEnhancedService {
 
         // Capture last-known snapshot BEFORE delete so row_deleted exposes `row`
         Map<String, Object> lastKnown = findFlattenedById(dataSourceId, effectiveTenantId, itemId);
+        String sensitivity = sensitivitiesOf(dataSourceId, effectiveTenantId, List.of(itemId)).get(itemId);
 
         // 🇫🇷 Suppression de l'item
         repositories.deleteItem(dataSourceId, effectiveTenantId, itemId);
@@ -350,7 +352,7 @@ public class DataSourceEnhancedService {
         if (rowEventPublisher != null && lastKnown != null) {
             try {
                 rowEventPublisher.publishDeleted(dataSourceId, itemId, effectiveTenantId,
-                        orgIdOf(dataSourceForEvent(dataSourceId)), lastKnown);
+                        orgIdOf(dataSourceForEvent(dataSourceId)), lastKnown, sensitivity);
             } catch (Exception e) {
                 log.warn("Failed to publish row_deleted for datasource={} row={}: {}",
                         dataSourceId, itemId, e.getMessage());
@@ -399,11 +401,12 @@ public class DataSourceEnhancedService {
         // rows were actually touched (the op name is only known here), so we snapshot
         // the full id list and match post-op state row by row for accurate events.
         Map<Long, Map<String, Object>> beforeSnapshots = snapshotFlattenedByIds(dataSourceId, effectiveTenantId, request.ids());
+        Map<Long, String> sensitivities = sensitivitiesOf(dataSourceId, effectiveTenantId, request.ids());
 
         // 🇫🇷 Execution de l'operation bulk
         BulkOperationResult result = repositories.executeBulkOperation(dataSourceId, effectiveTenantId, request);
 
-        publishBulkEvents(dataSourceId, effectiveTenantId, request, beforeSnapshots);
+        publishBulkEvents(dataSourceId, effectiveTenantId, request, beforeSnapshots, sensitivities);
         return result;
     }
     
@@ -716,6 +719,22 @@ public class DataSourceEnhancedService {
                 dataSource != null ? dataSource.mappingSpec() : null);
     }
 
+    /**
+     * The row's stored classification (CASA LC-066), carried with its row events: a table trigger
+     * fired by editing or deleting a Gmail-derived row in the table UI must restrict the run it
+     * feeds, as the same edit made by a tool does. A failed read leaves the rows untagged (read as
+     * NORMAL) rather than failing the user's edit.
+     */
+    private Map<Long, String> sensitivitiesOf(Long dataSourceId, String tenantId, List<Long> itemIds) {
+        try {
+            Map<Long, String> byId = repositories.sensitivityByIds(dataSourceId, tenantId, itemIds);
+            return byId != null ? byId : Map.of();
+        } catch (Exception e) {
+            log.warn("Could not read the sensitivity of datasource={} rows={}: {}", dataSourceId, itemIds, e.getMessage());
+            return Map.of();
+        }
+    }
+
     private static String orgIdOf(DataSourceModels.DataSource dataSource) {
         return dataSource != null ? dataSource.organizationId() : null;
     }
@@ -772,12 +791,13 @@ public class DataSourceEnhancedService {
     }
 
     private void publishUpdatedEvent(Long dataSourceId, String tenantId,
-                                     DataSourceItemRow updated, Map<String, Object> before) {
+                                     DataSourceItemRow updated, Map<String, Object> before,
+                                     String sensitivity) {
         if (rowEventPublisher == null || updated == null) return;
         try {
             DataSourceModels.DataSource dataSource = dataSourceForEvent(dataSourceId);
             rowEventPublisher.publishUpdated(dataSourceId, updated.id(), tenantId,
-                    orgIdOf(dataSource), flattenItemRowForEvent(dataSource, updated), before);
+                    orgIdOf(dataSource), flattenItemRowForEvent(dataSource, updated), before, sensitivity);
         } catch (Exception e) {
             log.warn("Failed to publish row_updated for datasource={} row={}: {}",
                     dataSourceId, updated.id(), e.getMessage());
@@ -786,7 +806,8 @@ public class DataSourceEnhancedService {
 
     private void publishBulkEvents(Long dataSourceId, String tenantId,
                                    BulkOperationRequest request,
-                                   Map<Long, Map<String, Object>> beforeSnapshots) {
+                                   Map<Long, Map<String, Object>> beforeSnapshots,
+                                   Map<Long, String> sensitivities) {
         if (rowEventPublisher == null) return;
         // Resolve org once for the whole bulk batch to avoid one lookup per row.
         String orgId = orgIdOf(dataSourceForEvent(dataSourceId));
@@ -796,7 +817,7 @@ public class DataSourceEnhancedService {
                 Map<String, Object> row = beforeSnapshots.get(id);
                 if (row == null) continue; // id wasn't visible pre-op - skip
                 try {
-                    rowEventPublisher.publishDeleted(dataSourceId, id, tenantId, orgId, row);
+                    rowEventPublisher.publishDeleted(dataSourceId, id, tenantId, orgId, row, sensitivities.get(id));
                 } catch (Exception e) {
                     log.warn("Failed to publish row_deleted for datasource={} row={}: {}",
                             dataSourceId, id, e.getMessage());
@@ -811,7 +832,7 @@ public class DataSourceEnhancedService {
             if (after == null) continue;
             Map<String, Object> before = beforeSnapshots.get(id);
             try {
-                rowEventPublisher.publishUpdated(dataSourceId, id, tenantId, orgId, after, before);
+                rowEventPublisher.publishUpdated(dataSourceId, id, tenantId, orgId, after, before, sensitivities.get(id));
             } catch (Exception e) {
                 log.warn("Failed to publish row_updated for datasource={} row={}: {}",
                         dataSourceId, id, e.getMessage());

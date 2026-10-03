@@ -171,3 +171,70 @@ describe('DataSourceTable - visibility filter + sort re-query the server', () =>
     expect(mocks.getResourcePublicationStatus).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The list's view lives in the address, so a reload reopens it as it was. The defect this
+ * pins: "go back to the first page when a filter changes" was a plain effect, which also runs
+ * on mount, so a list reloaded on page 3 fetched page 3 and then immediately page 1.
+ */
+describe('DataSourceTable - the view is restored from, and recorded in, the address', () => {
+  const PATH = '/en/app/list';
+
+  it('requests the search, sort, visibility, page and page size the address carries, and stays there', async () => {
+    fakeFolderRouter.navigate(`${PATH}?q=inv&sort=name&visibility=private&page=3&size=50`, 'replace');
+    mocks.getDataSourcesPage.mockResolvedValue({ ...page([ds('10', 'Invoices')]), totalCount: 500 });
+
+    render(<DataSourceTable />);
+    await waitFor(() => expect(screen.getByText('Invoices')).toBeInTheDocument());
+
+    for (const [options] of mocks.getDataSourcesPage.mock.calls) {
+      expect(options).toMatchObject({ page: 2, size: 50, q: 'inv', sort: 'name', visibility: 'private' });
+    }
+    expect((screen.getByPlaceholderText('data.searchPlaceholder') as HTMLInputElement).value).toBe('inv');
+    expect(fakeFolderRouter.search()).toBe('q=inv&sort=name&visibility=private&page=3&size=50');
+  });
+
+  it('records a filter change in the address and goes back to the first page', async () => {
+    fakeFolderRouter.navigate(`${PATH}?page=3`, 'replace');
+    mocks.getDataSourcesPage.mockResolvedValue({ ...page([ds('10', 'Invoices')]), totalCount: 500 });
+
+    render(<DataSourceTable />);
+    await waitFor(() => expect(screen.getByText('Invoices')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('common.filterByVisibility'), { target: { value: 'public' } });
+
+    await waitFor(() => expect(fakeFolderRouter.search()).toBe('visibility=public'));
+    await waitFor(() => {
+      const [last] = mocks.getDataSourcesPage.mock.calls[mocks.getDataSourcesPage.mock.calls.length - 1];
+      expect(last).toMatchObject({ page: 0, visibility: 'public' });
+    });
+  });
+
+  it('falls back to the defaults on values it does not offer', async () => {
+    fakeFolderRouter.navigate(`${PATH}?sort=runCount&visibility=secret&page=0&size=9999`, 'replace');
+    mocks.getDataSourcesPage.mockResolvedValue(page([ds('10', 'Invoices')]));
+
+    render(<DataSourceTable />);
+    await waitFor(() => expect(screen.getByText('Invoices')).toBeInTheDocument());
+
+    const [first] = mocks.getDataSourcesPage.mock.calls[0];
+    expect(first).toMatchObject({ page: 0, size: 20, sort: 'lastModified', visibility: 'all' });
+  });
+
+  it('keeps the page in the address when the load fails, so the next reload comes back to it', async () => {
+    // The case the feature exists for: the connection drops, the page shell loads and the
+    // list request does not. A count of 0 from a failure is not "the list is empty".
+    fakeFolderRouter.navigate(`${PATH}?page=3`, 'replace');
+    mocks.getDataSourcesPage.mockRejectedValue(new Error('network down'));
+
+    render(<DataSourceTable />);
+    await waitFor(() => expect(mocks.getDataSourcesPage).toHaveBeenCalled());
+    // Let the failure settle and every effect that reacts to it run.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(fakeFolderRouter.search()).toBe('page=3');
+    for (const [options] of mocks.getDataSourcesPage.mock.calls) {
+      expect(options).toMatchObject({ page: 2 });
+    }
+  });
+});

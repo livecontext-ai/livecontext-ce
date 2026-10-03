@@ -132,6 +132,7 @@ export function RewardCodeInline({
               : hasOffer && offerStatus === 'EXPIRED' ? tOffer('errors.expired')
               : hasOffer && offerStatus === 'DISABLED' ? tOffer('errors.unavailable')
               : hasOffer && offerStatus === 'CONFLICT' ? tOffer('errors.conflict')
+              : hasOffer && offerStatus === 'CHECKOUT_CREATING' ? tOffer('errors.checkoutActive')
               : hasOffer && expiresAt ? tOffer('appliedUntil', { date: formatUtcDateTime(expiresAt, { locale }) })
               : hasOffer ? tOffer('applied')
               : personalReady ? tOffer('checking')

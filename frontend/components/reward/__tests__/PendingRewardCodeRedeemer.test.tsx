@@ -74,6 +74,16 @@ describe('PendingRewardCodeRedeemer', () => {
     expect(localStorage.getItem(PENDING_REWARD_CODE_KEY)).toBeNull();
   });
 
+  it('a partner following another partner\'s link is told why (409 PARTNER_ACCOUNT), and the code is dropped', async () => {
+    storeCode('TECHDOX');
+    redeem.mockRejectedValue(new ApiError('partner', 409, 'PARTNER_ACCOUNT'));
+
+    renderIt();
+
+    expect(await screen.findByText('errors.partnerAccount')).toBeInTheDocument();
+    expect(localStorage.getItem(PENDING_REWARD_CODE_KEY)).toBeNull();
+  });
+
   it('no token yet / network / 5xx keeps the code for the next page load and shows nothing', async () => {
     storeCode('TECHDOX');
     redeem.mockRejectedValue(new ApiError('No authentication token available', 401, 'NO_TOKEN'));

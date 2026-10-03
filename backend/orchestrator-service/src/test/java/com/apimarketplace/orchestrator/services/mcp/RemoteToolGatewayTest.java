@@ -170,6 +170,89 @@ class RemoteToolGatewayTest {
         assertThat(sent).containsEntry("orgRole", "ADMIN");
     }
 
+    /**
+     * LC-055 (security audit 2026-08-13, third pass). The receiving
+     * {@code /api/agent-tools/execute} rebuilds its credentials map key by key from the
+     * request BODY, and every tool module reads an absent {@code <category>AccessMode} as
+     * UNRESTRICTED. Before this, the body carried no mode at all, so a read-only API key kept
+     * full write authority inside every tool the orchestrator does not host locally.
+     */
+    @Test
+    @DisplayName("the derived access modes travel in the request body, at the root")
+    void requestBodyCarriesTheDerivedAccessModes() {
+        when(catalog.serviceUrlFor("table")).thenReturn(CATALOG_URL);
+        when(restTemplate.exchange(eq(EXECUTE), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("success", true, "data", Map.of())));
+
+        gateway().execute("table", Map.of("action", "list"), "tenant-7", "org-7", "ADMIN",
+                Map.of("tableAccessMode", "read"));
+
+        Map<String, Object> sent = capturedBody();
+        assertThat(sent)
+                .as("a mode nested under 'parameters' would reach the tool as a caller-supplied "
+                        + "argument, not as an access-control decision")
+                .containsEntry("tableAccessMode", "read");
+        assertThat(sent).containsEntry("parameters", Map.of("action", "list"));
+    }
+
+    @Test
+    @DisplayName("a full-access caller sends no mode, which is what unrestricted means")
+    void emptyRestrictionsSendNoModeKeys() {
+        when(catalog.serviceUrlFor("table")).thenReturn(CATALOG_URL);
+        when(restTemplate.exchange(eq(EXECUTE), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("success", true, "data", Map.of())));
+
+        gateway().execute("table", Map.of(), "t1", null, null, Map.of());
+
+        assertThat(capturedBody().keySet()).noneMatch(k -> k.endsWith("AccessMode"));
+    }
+
+    @Test
+    @DisplayName("a restriction key that is not a mode cannot overwrite the request's own fields")
+    void nonModeKeysAreNotCopiedIntoTheBody() {
+        // The category half of every mode key comes from the API key's own scope strings, so
+        // the map's key set is caller-influenced. Copying it blindly would let a scope named
+        // "tool" or "tenantId" rewrite the call itself.
+        when(catalog.serviceUrlFor("table")).thenReturn(CATALOG_URL);
+        when(restTemplate.exchange(eq(EXECUTE), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("success", true, "data", Map.of())));
+
+        java.util.Map<String, Object> hostile = new java.util.LinkedHashMap<>();
+        hostile.put("tool", "workflow");
+        hostile.put("tenantId", "someone-else");
+        hostile.put("AccessMode", "write");
+        hostile.put("tableAccessMode", "read");
+
+        gateway().execute("table", Map.of(), "tenant-7", null, null, hostile);
+
+        Map<String, Object> sent = capturedBody();
+        assertThat(sent).containsEntry("tool", "table");
+        assertThat(sent).containsEntry("tenantId", "tenant-7");
+        assertThat(sent).doesNotContainKey("AccessMode");
+        assertThat(sent).containsEntry("tableAccessMode", "read");
+    }
+
+    @Test
+    @DisplayName("the unrestricted overload keeps working for callers that carry no modes")
+    void legacyOverloadStillWorks() {
+        when(catalog.serviceUrlFor("table")).thenReturn(CATALOG_URL);
+        when(restTemplate.exchange(eq(EXECUTE), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("success", true, "data", Map.of())));
+
+        ToolExecutionResult result = gateway().execute("table", Map.of(), "t1", null, null);
+
+        assertThat(result.success()).isTrue();
+        assertThat(capturedBody().keySet()).noneMatch(k -> k.endsWith("AccessMode"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> capturedBody() {
+        ArgumentCaptor<HttpEntity<Map<String, Object>>> captor = ArgumentCaptor.forClass(HttpEntity.class);
+        org.mockito.Mockito.verify(restTemplate)
+                .exchange(eq(EXECUTE), eq(HttpMethod.POST), captor.capture(), eq(Map.class));
+        return captor.getValue().getBody();
+    }
+
     @Test
     @DisplayName("a transport failure is mapped to an EXECUTION_FAILED result, not thrown")
     void transportFailureMapped() {

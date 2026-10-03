@@ -138,6 +138,14 @@ public class RewardCode {
                 && (validUntil == null || !now.isAfter(validUntil));
     }
 
+    /**
+     * A partner program code a new account can still use: redeemable now and not capped out. What a
+     * partner link, the public code read or an offer page may promise.
+     */
+    public boolean isLivePartnerCode(Instant now) {
+        return program == RewardProgram.PARTNER && isRedeemableAt(now) && !isExhausted();
+    }
+
     /** True iff a GLOBAL cap exists and is reached (a soft or absent cap never exhausts). */
     public boolean isExhausted() {
         return capScope == CapScope.GLOBAL && capLimit != null && currentRedemptions >= capLimit;

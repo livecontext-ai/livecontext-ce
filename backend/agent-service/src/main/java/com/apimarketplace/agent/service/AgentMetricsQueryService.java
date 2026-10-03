@@ -224,7 +224,9 @@ public class AgentMetricsQueryService {
      * {@code tenantsCalling} is what separates the two: a tool failing for every
      * tenant that calls it is a catalog defect; one failing for a single tenant out
      * of twelve is a credential. {@code sampleError} carries the provider's own
-     * words so the reader does not have to open an execution to guess.
+     * words so the reader does not have to open an execution to guess, except for calls
+     * touching Gmail / Drive data, whose error text is never shown (see
+     * {@link #globalToolHealthSql}).
      *
      * <p>{@code minCalls} exists because a 100% failure rate over two calls is
      * noise, and ranking on rate alone would put it above a tool failing 4,000
@@ -237,37 +239,7 @@ public class AgentMetricsQueryService {
      */
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> getGlobalToolHealth(int minCalls, int sinceDays, int limit) {
-        // tool_name alone is too coarse to act on. Verified in production: the 48
-        // distinct values are the MCP meta-tools (catalog, workflow, table, ...) and
-        // the CLI bridge's own tools, never a catalog endpoint. A broken Gmail
-        // endpoint therefore shows up as "catalog failed", pooled with everything
-        // else the agent did. The endpoint identity lives in the call arguments, so
-        // it is surfaced as a second grouping key: production then names the actual
-        // offenders (gmail list_messages, 92 failures out of 120, all 3 tenants).
-        //
-        // The ref is returned RAW rather than joined to catalog.api_tools: this
-        // service may only query its own schema, and resolving a tool id belongs to
-        // catalog-service.
-        StringBuilder sql = new StringBuilder(
-            "SELECT tc.tool_name, " +
-            "COALESCE(tc.arguments->>'api', tc.arguments->>'api_id', tc.arguments->>'tool_id') AS tool_ref, " +
-            "COUNT(*) AS total_calls, " +
-            "COUNT(*) FILTER (WHERE NOT tc.success) AS failure_count, " +
-            "CASE WHEN COUNT(*) > 0 THEN ROUND(COUNT(*) FILTER (WHERE NOT tc.success) * 100.0 / COUNT(*), 2) ELSE 0 END AS failure_rate_pct, " +
-            "COUNT(DISTINCT tc.tenant_id) AS tenants_calling, " +
-            "COUNT(DISTINCT tc.tenant_id) FILTER (WHERE NOT tc.success) AS tenants_affected, " +
-            "MAX(tc.created_at) AS last_used_at, " +
-            "(ARRAY_AGG(tc.error_message ORDER BY tc.created_at DESC) " +
-            "   FILTER (WHERE NOT tc.success AND tc.error_message IS NOT NULL))[1] AS sample_error " +
-            "FROM agent_execution_tool_calls tc ");
-        if (sinceDays > 0) {
-            sql.append("WHERE tc.created_at >= NOW() - CAST(:sinceDays || ' days' AS INTERVAL) ");
-        }
-        sql.append("GROUP BY tc.tool_name, COALESCE(tc.arguments->>'api', tc.arguments->>'api_id', tc.arguments->>'tool_id') ")
-           .append("HAVING COUNT(*) >= :minCalls AND COUNT(*) FILTER (WHERE NOT tc.success) > 0 ")
-           .append("ORDER BY COUNT(*) FILTER (WHERE NOT tc.success) DESC");
-
-        Query query = entityManager.createNativeQuery(sql.toString());
+        Query query = entityManager.createNativeQuery(globalToolHealthSql(sinceDays > 0));
         if (sinceDays > 0) {
             query.setParameter("sinceDays", String.valueOf(sinceDays));
         }
@@ -296,6 +268,54 @@ public class AgentMetricsQueryService {
             stats.add(stat);
         }
         return stats;
+    }
+
+    /**
+     * SQL of {@link #getGlobalToolHealth}. Named parameters: {@code :minCalls}, plus
+     * {@code :sinceDays} when {@code windowed}. Package-visible so a real-Postgres test runs it.
+     *
+     * <p>{@code sample_error} is drawn only from calls whose row AND execution are
+     * {@code NORMAL}. This view crosses tenants and is read by platform staff, so it must never
+     * show text from Google restricted-scope data (Limited Use: no human access to it). A provider
+     * error can quote what it was handed (a Gmail search, a message id, a subject), and a later
+     * call in a restricted execution can quote the email it read even when the call itself is
+     * tagged NORMAL, so a RESTRICTED (or already REDACTED) execution withholds the error text of
+     * every one of its calls. The counts still include those calls: they carry no content.
+     */
+    static String globalToolHealthSql(boolean windowed) {
+        // tool_name alone is too coarse to act on. Verified in production: the 48
+        // distinct values are the MCP meta-tools (catalog, workflow, table, ...) and
+        // the CLI bridge's own tools, never a catalog endpoint. A broken Gmail
+        // endpoint therefore shows up as "catalog failed", pooled with everything
+        // else the agent did. The endpoint identity lives in the call arguments, so
+        // it is surfaced as a second grouping key: production then names the actual
+        // offenders (gmail list_messages, 92 failures out of 120, all 3 tenants).
+        //
+        // The ref is returned RAW rather than joined to catalog.api_tools: this
+        // service may only query its own schema, and resolving a tool id belongs to
+        // catalog-service.
+        StringBuilder sql = new StringBuilder(
+            "SELECT tc.tool_name, " +
+            "COALESCE(tc.arguments->>'api', tc.arguments->>'api_id', tc.arguments->>'tool_id') AS tool_ref, " +
+            "COUNT(*) AS total_calls, " +
+            "COUNT(*) FILTER (WHERE NOT tc.success) AS failure_count, " +
+            "CASE WHEN COUNT(*) > 0 THEN ROUND(COUNT(*) FILTER (WHERE NOT tc.success) * 100.0 / COUNT(*), 2) ELSE 0 END AS failure_rate_pct, " +
+            "COUNT(DISTINCT tc.tenant_id) AS tenants_calling, " +
+            "COUNT(DISTINCT tc.tenant_id) FILTER (WHERE NOT tc.success) AS tenants_affected, " +
+            "MAX(tc.created_at) AS last_used_at, " +
+            "(ARRAY_AGG(tc.error_message ORDER BY tc.created_at DESC) " +
+            "   FILTER (WHERE NOT tc.success AND tc.error_message IS NOT NULL " +
+            "           AND tc.data_sensitivity = 'NORMAL' " +
+            "           AND COALESCE(ae.data_sensitivity, 'NORMAL') = 'NORMAL'))[1] AS sample_error " +
+            "FROM agent_execution_tool_calls tc " +
+            "LEFT JOIN agent_executions ae ON ae.id = tc.execution_id ");
+        if (windowed) {
+            sql.append("WHERE tc.created_at >= NOW() - CAST(:sinceDays || ' days' AS INTERVAL) ");
+        }
+        sql.append("GROUP BY tc.tool_name, COALESCE(tc.arguments->>'api', tc.arguments->>'api_id', tc.arguments->>'tool_id') ")
+           .append("HAVING COUNT(*) >= :minCalls AND COUNT(*) FILTER (WHERE NOT tc.success) > 0 ")
+           .append("ORDER BY COUNT(*) FILTER (WHERE NOT tc.success) DESC");
+        return sql.toString();
     }
 
     /**

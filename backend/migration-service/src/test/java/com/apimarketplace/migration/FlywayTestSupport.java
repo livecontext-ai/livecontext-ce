@@ -14,6 +14,23 @@ final class FlywayTestSupport {
     }
 
     /**
+     * Mirrors the production Flyway config ({@code migration-service/application.yml}):
+     * {@code mixed=true} lets one migration interleave transactional DDL/DML with a
+     * non-transactional {@code executeInTransaction=false} CONCURRENTLY script, and
+     * {@code postgresql.transactional.lock=false} makes Flyway take its own coordination
+     * lock at the SESSION level instead of holding it open inside a transaction. Without
+     * the second setting, Flyway's default transactional lock is itself an open
+     * transaction for the whole {@code migrate()} call, and {@code CREATE INDEX
+     * CONCURRENTLY} must wait for every open transaction to end before it can proceed -
+     * including Flyway's own, which never will until the migration finishes. That is a
+     * self-deadlock: replaying V535/V536 through this harness with the default hung
+     * indefinitely until this was set, matching the flyway/flyway#3854 upstream issue.
+     */
+    private static final java.util.Map<String, String> FLYWAY_PROPERTIES = java.util.Map.of(
+            "flyway.mixed", "true",
+            "flyway.postgresql.transactional.lock", "false");
+
+    /**
      * A Postgres to replay migrations against: the one CI hands over through
      * {@code MIGRATION_TEST_PG_URL}, else a testcontainer.
      *
@@ -64,6 +81,7 @@ final class FlywayTestSupport {
             Flyway.configure()
                     .dataSource(jdbcUrl(databaseName), username, password)
                     .locations("filesystem:" + migrations.toAbsolutePath())
+                    .configuration(FLYWAY_PROPERTIES)
                     .load()
                     .migrate();
         }

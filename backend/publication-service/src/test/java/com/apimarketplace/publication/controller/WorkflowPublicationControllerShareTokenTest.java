@@ -205,6 +205,46 @@ class WorkflowPublicationControllerShareTokenTest {
         verify(publicationService, never()).findApplicationWorkflow(PUBLICATION_ID, OWNER_ID, ORG_ID);
     }
 
+    // ===== CASA LC-037 round-3: getMyReview (X-User-ID resolves to the OWNER under a share
+    // token, so this must not leak the owner's review on an unrelated publication) =====
+
+    @Test
+    @DisplayName("pre-fix regression: a share token cannot read the owner's review on a DIFFERENT "
+            + "publication than the one actually shared - closes an owner-impersonation review leak")
+    void mismatchedShareTokenCannotReadMyReviewOnSiblingPublication() {
+        UUID otherPublicationId = UUID.randomUUID();
+
+        ResponseEntity<?> response = controller.getMyReview(OWNER_ID, PUBLICATION_ID.toString(), "true", "APPLICATION", otherPublicationId.toString());
+
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+        verify(reviewService, never()).getMyReview(PUBLICATION_ID, OWNER_ID);
+    }
+
+    @Test
+    @DisplayName("Matching APPLICATION ShareToken can read the owner's review on the shared publication itself")
+    void matchingShareTokenCanReadMyReviewOnSharedPublication() {
+        when(reviewService.getMyReview(PUBLICATION_ID, OWNER_ID)).thenReturn(Optional.empty());
+
+        ResponseEntity<?> response = controller.getMyReview(OWNER_ID, PUBLICATION_ID.toString(), "true", "APPLICATION", PUBLICATION_ID.toString());
+
+        // No review exists yet, so the endpoint's own 404 fires AFTER the binding check passed -
+        // what matters here is that the lookup was reached at all (proven by the verify below),
+        // unlike the mismatched-id case above which never calls the service.
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+        verify(reviewService).getMyReview(PUBLICATION_ID, OWNER_ID);
+    }
+
+    @Test
+    @DisplayName("A non-share (authenticated) caller reading their own review is unaffected by the gate")
+    void nonShareCallerReadsOwnReviewUnaffected() {
+        when(reviewService.getMyReview(PUBLICATION_ID, OWNER_ID)).thenReturn(Optional.empty());
+
+        ResponseEntity<?> response = controller.getMyReview(OWNER_ID, PUBLICATION_ID.toString(), null, null, null);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+        verify(reviewService).getMyReview(PUBLICATION_ID, OWNER_ID);
+    }
+
     private WorkflowPublicationEntity privateOrgApplication() {
         WorkflowPublicationEntity pub = new WorkflowPublicationEntity();
         pub.setId(PUBLICATION_ID);

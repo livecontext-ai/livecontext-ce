@@ -56,7 +56,8 @@ export const metadata: Metadata = {
   },
   // Self-hosted deployments never index marketing pages. `follow: false` like
   // every neighbouring one (/marketplace, /compare, /about, /changelog, /models).
-  robots: IS_CE ? { index: false, follow: false } : undefined,
+  // Only on CE: on the cloud an explicit 'robots: undefined' wiped the root layout's directives.
+  ...(IS_CE ? { robots: { index: false, follow: false } } : {}),
 };
 
 export default async function VideosPage() {

@@ -1786,7 +1786,12 @@ export function ApplicationTabContent({ config, runId, workflowId, runSurfaceId,
       jsTemplate={(renderData as any)?.jsTemplate || (interfaceDetails as any)?.jsTemplate || undefined}
       className={sizing.className}
       style={sizing.style}
-      sandbox="allow-same-origin allow-scripts allow-forms"
+      // NEVER add allow-same-origin here. A srcdoc document inherits the embedder's origin,
+      // so with that flag the publisher-authored HTML/JS in this frame could read
+      // parent.localStorage (the OIDC user object, refresh token included) and take over
+      // the viewer's account (LC-003). The postMessage bridge matches on event.source, so it
+      // works across an opaque origin, and file URLs are emitted as data: URIs for this reason.
+      sandbox="allow-scripts allow-forms"
       actionMapping={config.actionMapping}
       triggerData={triggerData}
       prefillTriggerData={templateValues ?? undefined}

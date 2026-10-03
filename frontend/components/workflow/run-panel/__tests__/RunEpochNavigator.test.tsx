@@ -17,6 +17,16 @@ vi.mock('next-intl', () => ({
     values ? `${key}(${Object.values(values).join(',')})` : key,
 }));
 
+// The hover card is a portalled popper in the app; here it renders in place and reports its side.
+vi.mock('@/components/ui/tooltip', () => ({
+  TooltipProvider: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children, side }: { children?: React.ReactNode; side?: string }) => (
+    <div data-epoch-nav-card data-side={side}>{children}</div>
+  ),
+}));
+
 import {
   EPOCH_NAV_GAPLESS_FROM,
   EPOCH_NAV_KEY_COMMIT_MS,
@@ -96,7 +106,7 @@ function sizeTimeline() {
 
 describe('buildEpochBars', () => {
   const point = (n: number, tone: 'ok' | 'failed' | 'running' | 'stopped' | 'none', durationMs: number | null) =>
-    ({ epoch: n, startedAt: '', status: null, tone, durationMs });
+    ({ epoch: n, startedAt: '', endedAt: null, status: null, tone, durationMs });
 
   it('draws one bar per epoch, as tall as its duration against the longest', () => {
     const bars = buildEpochBars([point(1, 'ok', 500), point(2, 'ok', 1_000)]);
@@ -240,6 +250,92 @@ describe('RunEpochNavigator', () => {
     fireEvent.pointerLeave(timeline());
     expect(detail()).not.toContain('epochTooltip.epoch(3)');
     expect(onSelectEpoch).not.toHaveBeenCalled();
+  });
+
+  it('opens the epoch card below the hovered bar, with the start and end dates, and closes it on leave', () => {
+    const { onSelectEpoch } = renderNav({ runStatus: 'COMPLETED' });
+    sizeTimeline();
+    const card = () => document.querySelector('[data-epoch-nav-card]') as HTMLElement | null;
+    expect(card()).toBeNull();
+
+    fireEvent.pointerMove(timeline(), { clientX: 50 });
+
+    expect(card()!.getAttribute('data-side')).toBe('bottom');
+    expect(card()!.querySelector('[data-epoch-details]')!.getAttribute('data-epoch-details')).toBe('3');
+    const started = card()!.querySelector('[data-epoch-details-started]')!.textContent!;
+    const ended = card()!.querySelector('[data-epoch-details-ended]')!.textContent!;
+    // A full date, not the bare time the line under the bars shows.
+    expect(started).toMatch(/2026/);
+    expect(ended).toMatch(/2026/);
+    expect(started).not.toBe(ended);
+    // Anchored under the middle of the 3rd of 5 bars.
+    expect((document.querySelector('[data-epoch-nav-card-anchor]') as HTMLElement).style.left).toBe('50%');
+
+    fireEvent.pointerLeave(timeline());
+    expect(card()).toBeNull();
+    expect(onSelectEpoch).not.toHaveBeenCalled();
+  });
+
+  it('says a live epoch in the card is still running rather than giving it an end date', () => {
+    renderNav();
+    sizeTimeline();
+
+    fireEvent.pointerMove(timeline(), { clientX: 90 });
+
+    expect(document.querySelector('[data-epoch-details-ended]')!.textContent).toBe('workflow.runSteps.epochTooltip.stillRunning');
+  });
+
+  it('keeps the card of a key step open once that step commits, until the timeline loses focus', () => {
+    vi.useFakeTimers();
+    const { onSelectEpoch, rerender } = renderNav({ selectedEpoch: 2, runStatus: 'COMPLETED' });
+    const card = () => document.querySelector('[data-epoch-details]');
+
+    fireEvent.keyDown(timeline(), { key: 'ArrowRight' });
+    expect(card()!.getAttribute('data-epoch-details')).toBe('3');
+
+    act(() => { vi.advanceTimersByTime(EPOCH_NAV_KEY_COMMIT_MS); });
+    expect(onSelectEpoch).toHaveBeenCalledWith(3);
+    rerender(
+      <RunEpochNavigator epochTimestamps={FIVE} selectedEpoch={3} runStatus="COMPLETED" onSelectEpoch={onSelectEpoch} />,
+    );
+    // The commit cleared the preview; the card stays on the epoch now on screen.
+    expect(card()!.getAttribute('data-epoch-details')).toBe('3');
+
+    fireEvent.blur(timeline());
+    expect(card()).toBeNull();
+  });
+
+  it('keeps the card while dragging and closes it on Escape', () => {
+    renderNav({ selectedEpoch: 1, runStatus: 'COMPLETED' });
+    sizeTimeline();
+
+    fireEvent.pointerDown(timeline(), { clientX: 10, button: 0 });
+    fireEvent.pointerMove(timeline(), { clientX: 70 });
+    // A drag outlives the pointer leaving the timeline.
+    fireEvent.pointerLeave(timeline());
+    expect(document.querySelector('[data-epoch-details]')!.getAttribute('data-epoch-details')).toBe('4');
+
+    fireEvent.keyDown(timeline(), { key: 'Escape' });
+    expect(document.querySelector('[data-epoch-nav-card]')).toBeNull();
+  });
+
+  it('on a grouped timeline, hangs the card under the bar holding the hovered epoch and names that epoch', () => {
+    // 250 epochs -> groups of 3 -> 84 bars.
+    const many = Array.from({ length: 250 }, (_, i) => epoch(i + 1, 'COMPLETED', 1_000));
+    renderNav({ epochTimestamps: many, runStatus: 'COMPLETED' });
+    sizeTimeline();
+
+    fireEvent.pointerMove(timeline(), { clientX: 99 });
+
+    expect(document.querySelector('[data-epoch-details]')!.getAttribute('data-epoch-details')).toBe('250');
+    const left = parseFloat((document.querySelector('[data-epoch-nav-card-anchor]') as HTMLElement).style.left);
+    expect(left).toBeCloseTo((83.5 / 84) * 100, 5);
+  });
+
+  it('shows no card for the selected epoch alone: only a hover or a key step opens it', () => {
+    renderNav({ selectedEpoch: 2 });
+
+    expect(document.querySelector('[data-epoch-nav-card]')).toBeNull();
   });
 
   it('commits a single epoch after a burst of arrow keys, once the keys are let go', () => {

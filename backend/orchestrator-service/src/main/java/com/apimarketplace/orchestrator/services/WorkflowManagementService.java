@@ -71,6 +71,10 @@ public class WorkflowManagementService implements WorkflowCrud {
     @Autowired
     private TriggerClient triggerClient;
 
+    /** Optional: without it a stopped workflow's incident closes by itself after a week, as before. */
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.notification.delivery.NotificationDeliveryService notificationDelivery;
+
     @Autowired
     private PublicationClient publicationClient;
 
@@ -877,6 +881,8 @@ public class WorkflowManagementService implements WorkflowCrud {
         catch (Exception e) { logger.warn("Archive form endpoints failed for workflow {}: {}", workflowId, e.getMessage()); }
         logger.info("Archived triggers for workflow {}: schedules={}, webhooks={}, chats={}, forms={}",
                 workflowId, s, w, c, f);
+        // A deleted workflow can no longer fail: no "still failing" reminder about it.
+        if (notificationDelivery != null) notificationDelivery.onWorkflowStopped(workflowId);
 
         // Remove datasource trigger subscriptions (fan-out registry in trigger-service)
         try {

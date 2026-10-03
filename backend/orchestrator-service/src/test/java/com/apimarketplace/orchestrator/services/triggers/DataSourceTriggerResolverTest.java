@@ -2,7 +2,10 @@ package com.apimarketplace.orchestrator.services.triggers;
 
 import com.apimarketplace.datasource.client.DataSourceClient;
 import com.apimarketplace.datasource.client.dto.DataSourceDto;
+import com.apimarketplace.common.classification.DataSensitivity;
+import com.apimarketplace.common.classification.RestrictedDataPolicy;
 import com.apimarketplace.datasource.client.dto.DataSourceItemDto;
+import com.apimarketplace.datasource.client.dto.DataSourceItemsPage;
 import com.apimarketplace.orchestrator.config.WorkflowExecutionConfig;
 import com.apimarketplace.orchestrator.domain.workflow.Trigger;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,12 +55,60 @@ class DataSourceTriggerResolverTest {
                         null, null, null, null,
                         null, null, null, null, null,
                         null, null, null, null));
-        lenient().when(dataSourceClient.getItems(anyLong(), anyString(), anyInt(), anyInt()))
-                .thenReturn(List.of(new DataSourceItemDto(
-                        131L, 19L, "t-1",
-                        Map.of("status", "paid", "amount", 999),
-                        0, Instant.parse("2026-04-17T20:00:00Z"))));
+        lenient().when(dataSourceClient.getItemsPage(anyLong(), anyString(), anyInt(), anyInt()))
+                .thenReturn(page(false));
         lenient().when(dataSourceClient.getItemsCount(anyLong(), anyString())).thenReturn(1);
+    }
+
+    private static DataSourceItemsPage page(boolean restricted) {
+        return new DataSourceItemsPage(List.of(new DataSourceItemDto(
+                131L, 19L, "t-1",
+                Map.of("status", "paid", "amount", 999),
+                0, Instant.parse("2026-04-17T20:00:00Z"))), restricted);
+    }
+
+    @Nested
+    @DisplayName("LC-066: a table holding Gmail / Drive rows restricts the run that loads it")
+    class RestrictedRows {
+
+        @Test
+        @DisplayName("regression: a page with a RESTRICTED row tags the trigger output and every loaded row")
+        void restrictedPageTagsThePayloadAndItsRows() {
+            when(dataSourceClient.getItemsPage(anyLong(), anyString(), anyInt(), anyInt())).thenReturn(page(true));
+
+            Map<String, Object> payload = resolver.resolve(datasourceTrigger(), "t-1", Map.of());
+
+            // Stored as this trigger's output, the tag classifies it RESTRICTED, which marks the run.
+            assertEquals("RESTRICTED", payload.get(DataSensitivity.CREDENTIAL_KEY));
+            assertTrue(RestrictedDataPolicy.fromToolMetadata(payload).isRestricted());
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) payload.get("data");
+            // A per-item path stores one row as the trigger's output: each row carries the tag too.
+            assertTrue(rows.stream().allMatch(row -> RestrictedDataPolicy.fromToolMetadata(row).isRestricted()));
+        }
+
+        @Test
+        @DisplayName("an ordinary table adds no tag anywhere")
+        void ordinaryPageAddsNoTag() {
+            Map<String, Object> payload = resolver.resolve(datasourceTrigger(), "t-1", Map.of());
+
+            assertFalse(payload.containsKey(DataSensitivity.CREDENTIAL_KEY));
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) payload.get("data");
+            assertFalse(rows.get(0).containsKey(DataSensitivity.CREDENTIAL_KEY));
+        }
+
+        @Test
+        @DisplayName("auto-pagination: a RESTRICTED row on a later page still flags the whole load")
+        void laterRestrictedPageFlagsTheAggregate() {
+            lenient().when(config.getTriggerBatchSize()).thenReturn(1);
+            lenient().when(config.getMaxDatasourceItems()).thenReturn(10);
+            when(dataSourceClient.getItemsCount(anyLong(), anyString())).thenReturn(2);
+            when(dataSourceClient.getItemsPage(anyLong(), anyString(), anyInt(), anyInt()))
+                    .thenReturn(page(false), page(true));
+
+            assertTrue(resolver.resolveDatasourceWithAutoPagination(datasourceTrigger(), "t-1").restrictedData());
+        }
     }
 
     private Trigger datasourceTrigger() {

@@ -71,7 +71,8 @@ export const metadata = {
     'Live availability of the LiveContext platform: current state per component, ongoing incidents and 90 days of measured uptime.',
   alternates: { canonical: '/status' },
   ...socialCard({ title: 'Status', description: 'Live availability of the LiveContext platform: current state per component, ongoing incidents and 90 days of measured uptime.', path: '/status' }),
-  robots: IS_CE ? { index: false, follow: false } : undefined,
+  // Only on CE: on the cloud an explicit 'robots: undefined' wiped the root layout's directives.
+  ...(IS_CE ? { robots: { index: false, follow: false } } : {}),
 };
 
 export default async function StatusPage() {

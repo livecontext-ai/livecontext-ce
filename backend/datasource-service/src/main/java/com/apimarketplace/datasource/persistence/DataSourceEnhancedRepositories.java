@@ -80,6 +80,11 @@ public class DataSourceEnhancedRepositories {
         return queryRepository.findByIds(dataSourceId, tenantId, ids);
     }
 
+    /** Stored data_sensitivity of each row, keyed by id. */
+    public Map<Long, String> sensitivityByIds(Long dataSourceId, String tenantId, List<Long> ids) {
+        return queryRepository.sensitivityByIds(dataSourceId, tenantId, ids);
+    }
+
     // ========== Column Operations (delegated to DataSourceColumnRepository) ==========
 
     /**

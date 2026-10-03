@@ -90,9 +90,13 @@ public record ChatAgentObservabilityRequest(
     // response's metrics by conversation-service); null = not reported.
     Boolean modelReplaced,
     // The disabled model id the turn was configured with; sent only when modelReplaced is true.
-    String replacedModel
+    String replacedModel,
+
+    // LC-066: RESTRICTED when the conversation holds Gmail / Drive data (set by
+    // conversation-service); null = NORMAL.
+    String dataSensitivity
 ) {
-    /** V506 shape (key route, no model replacement report). */
+    /** V506 shape (key route, no model replacement report, no sensitivity). */
     public ChatAgentObservabilityRequest(
             String agentEntityId, String provider, String model, Double temperature,
             Integer maxTokens, Integer maxIterations, boolean success, String stopReason,
@@ -114,7 +118,57 @@ public record ChatAgentObservabilityRequest(
                 toolSequence, distinctTools, loopDetected, loopType, loopToolName, systemPrompt, userPrompt,
                 conversationId, source, taskId, executionId, toolResults, conversationHistory,
                 usagePerIteration, iterationDurations, finishReasonsPerIteration, toolCallsPerIteration,
-                keyRoute, null, null);
+                keyRoute, null, null, null);
+    }
+
+    /** Model-replacement shape (key route + replacement report, no sensitivity = NORMAL). */
+    public ChatAgentObservabilityRequest(
+            String agentEntityId, String provider, String model, Double temperature,
+            Integer maxTokens, Integer maxIterations, boolean success, String stopReason,
+            String budgetScope, String errorMessage, long durationMs, int iterationCount,
+            int totalToolCalls, int successfulToolCalls, int failedToolCalls, int messageCount,
+            int totalPromptTokens, int totalCompletionTokens, int totalTokens,
+            Integer totalCacheCreationTokens, Integer totalCacheReadTokens, Integer totalCachedTokens,
+            Integer totalReasoningTokens, String toolSequence, List<String> distinctTools,
+            boolean loopDetected, String loopType, String loopToolName, String systemPrompt,
+            String userPrompt, String conversationId, String source, String taskId, String executionId,
+            List<ToolResultDto> toolResults, List<MessageDto> conversationHistory,
+            List<UsageInfoDto> usagePerIteration, List<Long> iterationDurations,
+            List<String> finishReasonsPerIteration, List<Integer> toolCallsPerIteration,
+            String keyRoute, Boolean modelReplaced, String replacedModel) {
+        this(agentEntityId, provider, model, temperature, maxTokens, maxIterations, success, stopReason,
+                budgetScope, errorMessage, durationMs, iterationCount, totalToolCalls, successfulToolCalls,
+                failedToolCalls, messageCount, totalPromptTokens, totalCompletionTokens, totalTokens,
+                totalCacheCreationTokens, totalCacheReadTokens, totalCachedTokens, totalReasoningTokens,
+                toolSequence, distinctTools, loopDetected, loopType, loopToolName, systemPrompt, userPrompt,
+                conversationId, source, taskId, executionId, toolResults, conversationHistory,
+                usagePerIteration, iterationDurations, finishReasonsPerIteration, toolCallsPerIteration,
+                keyRoute, modelReplaced, replacedModel, null);
+    }
+
+    /** Classification shape (key route + sensitivity, no model replacement report). */
+    public ChatAgentObservabilityRequest(
+            String agentEntityId, String provider, String model, Double temperature,
+            Integer maxTokens, Integer maxIterations, boolean success, String stopReason,
+            String budgetScope, String errorMessage, long durationMs, int iterationCount,
+            int totalToolCalls, int successfulToolCalls, int failedToolCalls, int messageCount,
+            int totalPromptTokens, int totalCompletionTokens, int totalTokens,
+            Integer totalCacheCreationTokens, Integer totalCacheReadTokens, Integer totalCachedTokens,
+            Integer totalReasoningTokens, String toolSequence, List<String> distinctTools,
+            boolean loopDetected, String loopType, String loopToolName, String systemPrompt,
+            String userPrompt, String conversationId, String source, String taskId, String executionId,
+            List<ToolResultDto> toolResults, List<MessageDto> conversationHistory,
+            List<UsageInfoDto> usagePerIteration, List<Long> iterationDurations,
+            List<String> finishReasonsPerIteration, List<Integer> toolCallsPerIteration,
+            String keyRoute, String dataSensitivity) {
+        this(agentEntityId, provider, model, temperature, maxTokens, maxIterations, success, stopReason,
+                budgetScope, errorMessage, durationMs, iterationCount, totalToolCalls, successfulToolCalls,
+                failedToolCalls, messageCount, totalPromptTokens, totalCompletionTokens, totalTokens,
+                totalCacheCreationTokens, totalCacheReadTokens, totalCachedTokens, totalReasoningTokens,
+                toolSequence, distinctTools, loopDetected, loopType, loopToolName, systemPrompt, userPrompt,
+                conversationId, source, taskId, executionId, toolResults, conversationHistory,
+                usagePerIteration, iterationDurations, finishReasonsPerIteration, toolCallsPerIteration,
+                keyRoute, null, null, dataSensitivity);
     }
 
     /** Pre-V506 shape (no key route = unpinned). */
@@ -150,7 +204,8 @@ public record ChatAgentObservabilityRequest(
                 totalCachedTokens, totalReasoningTokens, toolSequence, distinctTools, loopDetected, loopType,
                 loopToolName, systemPrompt, userPrompt, conversationId, source, taskId, executionId,
                 toolResults, conversationHistory, usagePerIteration, iterationDurations,
-                finishReasonsPerIteration, toolCallsPerIteration, keyRoute, modelReplaced, replacedModel);
+                finishReasonsPerIteration, toolCallsPerIteration, keyRoute, modelReplaced, replacedModel,
+                dataSensitivity);
     }
 
     public record ToolResultDto(

@@ -42,6 +42,12 @@ class BrowserAgentSession:
     llm_calls: int = 0
     paused: bool = False
     aborted: bool = False
+    # Reason the SSRF request guard refused a TOP-LEVEL navigation; the
+    # runner stops the session with DOMAIN_BLOCKED at the next step boundary.
+    navigation_blocked: str = ""
+    # Refused frame navigations (frame id -> reason) not yet known to be
+    # top-level; a refused iframe never stops the run.
+    blocked_frame_navigations: dict = field(default_factory=dict)
     pending_hint: Optional[str] = None
     # Set by the runner so control endpoints can poke it without holding
     # cross-task references.

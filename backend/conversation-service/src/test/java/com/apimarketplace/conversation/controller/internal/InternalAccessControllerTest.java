@@ -1,5 +1,6 @@
 package com.apimarketplace.conversation.controller.internal;
 
+import com.apimarketplace.conversation.domain.stream.StreamEvent;
 import com.apimarketplace.conversation.entity.Conversation;
 import com.apimarketplace.conversation.repository.ConversationRepository;
 import com.apimarketplace.conversation.service.StreamService;
@@ -20,7 +21,9 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -345,6 +348,80 @@ class InternalAccessControllerTest {
             ResponseEntity<Void> response = controller.finalizeStream("stream-1", Map.of("state", "INTERRUPTED"));
 
             assertThat(response.getStatusCode().value()).isEqualTo(200);
+        }
+    }
+
+    @Nested
+    @DisplayName("triggerSnapshot() on an active stream")
+    class ActiveStreamReplayTests {
+
+        private final java.util.List<String> published = new java.util.concurrent.CopyOnWriteArrayList<>();
+        private final java.util.concurrent.CountDownLatch replayDone = new java.util.concurrent.CountDownLatch(1);
+
+        private void activeStreamWithToolEvents(String... toolEventJsons) {
+            com.apimarketplace.conversation.streaming.StreamMetadata metadata =
+                    com.apimarketplace.conversation.streaming.StreamMetadata.create(
+                            "s1", "user-1", "conv-1", "claude-code", "claude-code");
+            when(streamStateService.getByConversationId("conv-1")).thenReturn(Mono.just(metadata));
+            when(streamStateService.getToolEvents("s1"))
+                    .thenReturn(reactor.core.publisher.Flux.just(toolEventJsons));
+            when(streamStateService.getFullContent("s1")).thenReturn(Mono.just("partial answer"));
+            when(streamPubSubService.publishReplayContent("s1", "partial answer"))
+                    .thenReturn(Mono.fromSupplier(() -> {
+                        published.add("content");
+                        replayDone.countDown();
+                        return 1L;
+                    }));
+        }
+
+        @Test
+        @DisplayName("regression: tool events are replayed in buffered order, a slow call still before its result")
+        void replaysToolEventsInBufferedOrder() throws Exception {
+            StreamEvent.ToolCall call = StreamEvent.toolCall("s1", "workflow", "call-1", Map.of("action", "help"));
+            StreamEvent.ToolResult result = StreamEvent.toolResult("s1", "call-1", "workflow", true, 12L,
+                    null, null, null, null, null, null, null);
+            activeStreamWithToolEvents("call-json", "result-json");
+            when(streamPubSubService.deserializeEvent("call-json")).thenReturn(call);
+            when(streamPubSubService.deserializeEvent("result-json")).thenReturn(result);
+            when(streamPubSubService.publish(eq("s1"), any(StreamEvent.class))).thenAnswer(invocation -> {
+                StreamEvent event = invocation.getArgument(1);
+                if (event instanceof StreamEvent.StreamStarted) {
+                    return Mono.fromSupplier(() -> { published.add("started"); return 1L; });
+                }
+                if (event instanceof StreamEvent.ToolCall) {
+                    // The call is the slow one: an unordered replay lets the result overtake it.
+                    return Mono.delay(java.time.Duration.ofMillis(150))
+                            .map(tick -> { published.add("call"); return 1L; });
+                }
+                return Mono.fromSupplier(() -> { published.add("result"); return 1L; });
+            });
+
+            controller.triggerSnapshot("conv-1");
+
+            assertThat(replayDone.await(3, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            assertThat(published).containsExactly("started", "call", "result", "content");
+        }
+
+        @Test
+        @DisplayName("an undecodable tool event is skipped, the rest of the replay still goes out")
+        void skipsAnUndecodableToolEventAndKeepsReplaying() throws Exception {
+            StreamEvent.ToolCall call = StreamEvent.toolCall("s1", "workflow", "call-1", Map.of());
+            activeStreamWithToolEvents("broken-json", "call-json");
+            when(streamPubSubService.deserializeEvent("broken-json"))
+                    .thenThrow(new com.fasterxml.jackson.core.JsonParseException(null, "broken"));
+            when(streamPubSubService.deserializeEvent("call-json")).thenReturn(call);
+            when(streamPubSubService.publish(eq("s1"), any(StreamEvent.class))).thenAnswer(invocation -> {
+                StreamEvent event = invocation.getArgument(1);
+                return Mono.fromSupplier(() -> {
+                    published.add(event instanceof StreamEvent.ToolCall ? "call" : "started");
+                    return 1L;
+                });
+            });
+
+            controller.triggerSnapshot("conv-1");
+
+            assertThat(replayDone.await(3, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            assertThat(published).containsExactly("started", "call", "content");
         }
     }
 }

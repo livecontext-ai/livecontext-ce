@@ -6,6 +6,7 @@ import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.agent.tools.common.ToolModule;
+import com.apimarketplace.common.classification.DataSensitivity;
 import com.apimarketplace.datasource.crud.domain.CrudResult;
 import com.apimarketplace.datasource.crud.dto.CreateRowRequest;
 import com.apimarketplace.datasource.crud.dto.DeleteRowRequest;
@@ -78,9 +79,9 @@ public class DataSourceRowModule implements ToolModule {
         // the table CRUD module already gates get/update/delete this way; row data must not bypass it.
         var notAllowed = TableToolAccess.denyIfNotAllowed(context, getTableId(parameters));
         if (notAllowed.isPresent()) return notAllowed;
-        var restricted = TableToolAccess.denyIfMemberRestricted(dataSourceService, context, tenantId,
+        var memberDenied = TableToolAccess.denyIfMemberRestricted(dataSourceService, context, tenantId,
                 getTableId(parameters), !"query_rows".equals(action));
-        if (restricted.isPresent()) return restricted;
+        if (memberDenied.isPresent()) return memberDenied;
 
         // Thread the caller's org workspace through to the CRUD executor so the
         // strict-scope check in verifyDataSourceAccess matches the org id that
@@ -88,16 +89,24 @@ public class DataSourceRowModule implements ToolModule {
         // users get a spurious "DataSource not found" on every row operation
         // (create stores organizationId=context.orgId(), row ops passed null).
         String orgId = context != null ? context.orgId() : null;
+        // LC-066/LC-011 re-audit item 2: this is the MCP "table" tool's own execution path -
+        // no orchestrator run, so there is no StepPayloadService.isRunRestricted to consult.
+        // Instead read the SAME tag RestrictedDataTransferGuard already stamps on the execution
+        // credentials for a chat turn whose conversation holds Gmail/Drive content (see its
+        // javadoc: "the whole execution [is] restricted"), the established convention every
+        // other tool-classification decision in a chat turn already reads.
+        boolean restricted = context != null && DataSensitivity.fromCredentials(context.credentials()).isRestricted();
         return Optional.of(switch (action) {
-            case "query_rows" -> executeQueryRows(parameters, tenantId, orgId);
-            case "insert_rows" -> executeInsertRows(parameters, tenantId, orgId);
-            case "update_rows" -> executeUpdateRows(parameters, tenantId, orgId);
+            case "query_rows" -> executeQueryRows(parameters, tenantId, orgId, restricted);
+            case "insert_rows" -> executeInsertRows(parameters, tenantId, orgId, restricted);
+            case "update_rows" -> executeUpdateRows(parameters, tenantId, orgId, restricted);
             case "delete_rows" -> executeDeleteRows(parameters, tenantId, orgId);
             default -> ToolExecutionResult.failure(ToolErrorCode.TOOL_NOT_FOUND, "Unknown action: " + action);
         });
     }
 
-    private ToolExecutionResult executeQueryRows(Map<String, Object> parameters, String tenantId, String orgId) {
+    private ToolExecutionResult executeQueryRows(Map<String, Object> parameters, String tenantId, String orgId,
+                                                  boolean restricted) {
         Long datasourceId = getTableId(parameters);
         if (datasourceId == null) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, MISSING_TABLE_ID_HINT);
@@ -113,6 +122,7 @@ public class DataSourceRowModule implements ToolModule {
             ReadRowRequest request = new ReadRowRequest();
             request.setDataSourceId(datasourceId);
             request.setLimit(limit);
+            request.setRestricted(restricted);
 
             @SuppressWarnings("unchecked")
             Map<String, Object> whereMap = (Map<String, Object>) parameters.get("where");
@@ -169,20 +179,31 @@ public class DataSourceRowModule implements ToolModule {
             // Truncate vector columns for agent consumption - raw embeddings waste LLM tokens
             List<Map<String, Object>> agentRows = truncateVectorColumns(rows, datasourceId);
 
+            // LC-066/LC-011 re-audit item 2: mirrors datasource-service's own read-side interim
+            // guard - RESTRICTED when a returned row's own stored tag says so, OR the calling
+            // conversation is itself restricted (request.setRestricted above). Stamped in the
+            // tool result METADATA (not data), the same channel ToolResultService already reads
+            // (RestrictedDataPolicy.fromToolMetadata) to set conversation.tool_results.data_sensitivity.
+            Map<String, Object> metadata = DataSensitivity.parse(
+                    result.data() != null ? result.data().dataSensitivity() : null).isRestricted()
+                    ? Map.of(DataSensitivity.CREDENTIAL_KEY, DataSensitivity.RESTRICTED.name())
+                    : Map.of();
+
             return ToolExecutionResult.success(Map.of(
                 "datasourceId", datasourceId,
                 "rowCount", agentRows.size(),
                 "rows", agentRows,
                 "status", "OK",
                 "message", "Found " + agentRows.size() + " rows in datasource " + datasourceId + "."
-            ));
+            ), metadata);
         } catch (Exception e) {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to query rows: " + e.getMessage());
         }
     }
 
     @SuppressWarnings("unchecked")
-    private ToolExecutionResult executeInsertRows(Map<String, Object> parameters, String tenantId, String orgId) {
+    private ToolExecutionResult executeInsertRows(Map<String, Object> parameters, String tenantId, String orgId,
+                                                   boolean restricted) {
         Long datasourceId = getTableId(parameters);
         if (datasourceId == null) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, MISSING_TABLE_ID_HINT);
@@ -218,6 +239,7 @@ public class DataSourceRowModule implements ToolModule {
             CreateRowRequest request = new CreateRowRequest();
             request.setDataSourceId(datasourceId);
             request.setRows(crudRows);
+            request.setRestricted(restricted);
 
             CrudResult result = crudExecutorService.execute(request, tenantId, orgId);
 
@@ -243,7 +265,8 @@ public class DataSourceRowModule implements ToolModule {
         }
     }
 
-    private ToolExecutionResult executeUpdateRows(Map<String, Object> parameters, String tenantId, String orgId) {
+    private ToolExecutionResult executeUpdateRows(Map<String, Object> parameters, String tenantId, String orgId,
+                                                   boolean restricted) {
         Long datasourceId = getTableId(parameters);
         if (datasourceId == null) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, MISSING_TABLE_ID_HINT);
@@ -276,6 +299,7 @@ public class DataSourceRowModule implements ToolModule {
                 whereMap.get("value")
             ));
             request.setSet(sanitizedSet);
+            request.setRestricted(restricted);
 
             CrudResult result = crudExecutorService.execute(request, tenantId, orgId);
 

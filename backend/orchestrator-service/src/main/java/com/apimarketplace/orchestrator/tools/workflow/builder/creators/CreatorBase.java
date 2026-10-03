@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
 import com.apimarketplace.agent.tools.ToolErrorCode;
+import com.apimarketplace.orchestrator.utils.LabelNormalizer;
 
 /**
  * Base class containing shared methods for node creators (TriggerCreator, McpCreator, etc.).
@@ -71,6 +72,7 @@ public abstract class CreatorBase {
         SFTP("core", "add_sftp"),                              // SFTP - file operations on remote servers via SFTP
         DATABASE("core", "add_database"),                      // Database - execute SQL queries (PostgreSQL, MySQL, MSSQL)
         TABLE("table", "add_table"),                            // Table CRUD operations (insert_row, read_rows, etc.)
+        NOTE("note", "add_note"),                               // Sticky note: canvas annotation, never executed
         INTERFACE("interface", "add_interface");  // Visual interface: display data, interactive app, or multi-page navigation
 
         private final String prefix;
@@ -181,13 +183,13 @@ public abstract class CreatorBase {
             for (String key : List.of("text", "value", "name", "content", "label", "prompt")) {
                 Object extracted = map.get(key);
                 if (extracted instanceof String) {
-                    log.warn("Extracted '{}' from Map instead of String: {}", key, extracted);
+                    log.warn("Extracted '{}' from Map instead of String: {}", key, com.apimarketplace.common.logging.PayloadLogSafety.describeText((String) extracted, 80));
                     result = (String) extracted;
                     return sanitizeString(result);
                 }
             }
             // Fallback: convert to JSON-like string
-            log.warn("Converting Map to String: {}", map);
+            log.warn("Converting Map to String: {}", com.apimarketplace.common.logging.PayloadLogSafety.describeAny(map));
             result = map.toString();
         } else {
             // For other types, use String.valueOf
@@ -435,6 +437,11 @@ public abstract class CreatorBase {
         String[] portSplit = EdgeRefParser.splitPort(resolvedId);
         String baseNodeId = portSplit[0];
         String port = portSplit[1];
+
+        if (LabelNormalizer.isNoteKey(baseNodeId)) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, "connect_after '" + connectAfter
+                + "' is a note: a note never runs, so nothing can follow it. Use the node it explains.");
+        }
 
         // Check if base node exists in session
         List<String> allNodeIds = session.getAllNodeIds();

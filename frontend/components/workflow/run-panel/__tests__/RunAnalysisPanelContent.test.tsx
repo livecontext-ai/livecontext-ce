@@ -19,6 +19,8 @@ const setRunId = vi.hoisted(() => vi.fn());
 const restoreEpoch = vi.hoisted(() => vi.fn());
 /** What the mode provider exposes. Empty = the no-provider stub (workflowId undefined): picks stay local. */
 const mode = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+/** What the chart last drew and the props its tooltip got, to render that tooltip for a column. */
+const chart = vi.hoisted(() => ({ data: [] as Array<Record<string, unknown>>, tooltip: null as null | Record<string, any> }));
 
 vi.mock('@/lib/api', () => ({ orchestratorApi: api }));
 vi.mock('next-intl', () => ({
@@ -56,7 +58,9 @@ vi.mock('recharts', () => {
       children?: React.ReactNode;
       data: Array<{ epoch: number; durationMs: number | null }>;
       onClick?: (state: { activeIndex?: number; activeLabel?: number }) => void;
-    }) => (
+    }) => {
+      chart.data = data;
+      return (
       <div data-testid="chart">
         {data.map((d, i) => (
           <button
@@ -70,7 +74,8 @@ vi.mock('recharts', () => {
         ))}
         {children}
       </div>
-    ),
+      );
+    },
     Bar: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
     Cell: (props: { 'data-epoch-chart-bar'?: number; fillOpacity?: number }) => (
       <span data-chart-cell={props['data-epoch-chart-bar']} data-opacity={String(props.fillOpacity)} />
@@ -81,7 +86,7 @@ vi.mock('recharts', () => {
       <span data-y-axis={props.yAxisId} data-width={String(props.width)} data-ticks={JSON.stringify(props.ticks ?? null)} />
     ),
     CartesianGrid: () => null,
-    Tooltip: () => null,
+    Tooltip: (props: Record<string, unknown>) => { chart.tooltip = props; return null; },
   };
 });
 
@@ -217,6 +222,78 @@ describe('RunAnalysisPanelContent', () => {
 
     const headers = document.querySelectorAll('[data-run-analysis-compare] thead [data-compare-epoch]');
     expect([...headers].map(h => h.getAttribute('data-compare-epoch'))).toEqual(['2', '1']);
+  });
+
+  it('hovering a chart column shows the epoch card below the chart: dates, outcome, duration and cost', async () => {
+    renderPanel();
+    await screen.findByTestId('chart');
+
+    // Below the chart, never over the bars: y is pinned past its bottom and allowed out of it.
+    const chartHeight = parseFloat((document.querySelector('[data-run-analysis-chart]') as HTMLElement).style.height);
+    expect(chart.tooltip!.position.y).toBeGreaterThan(chartHeight);
+    expect(chart.tooltip!.allowEscapeViewBox).toEqual({ x: false, y: true });
+
+    const column = chart.data.find(d => d.epoch === 2)!;
+    render(<>{chart.tooltip!.content({ active: true, payload: [{ payload: column }] })}</>);
+
+    const card = document.querySelector('[data-epoch-details="2"]') as HTMLElement;
+    expect(card.querySelector('[data-epoch-details-started]')!.textContent).toMatch(/2026/);
+    expect(card.querySelector('[data-epoch-details-ended]')!.textContent).toMatch(/2026/);
+    expect(card.textContent).toContain('status.failed');
+    expect(card.textContent).toContain('4.0s');
+    expect(card.textContent).toContain('workflow.runAnalysis.chart.cost');
+    expect(card.textContent).toContain('c3');
+  });
+
+  it('gives an epoch without a recorded cost a "-" cost, and a run without any cost no cost row', async () => {
+    api.getRunAnalysis.mockResolvedValue({
+      ...ANALYSIS,
+      epochs: [ANALYSIS.epochs[0], { ...ANALYSIS.epochs[1], costCredits: null }],
+    });
+    renderPanel();
+    await screen.findByTestId('chart');
+    const { unmount } = render(<>{chart.tooltip!.content({ active: true, payload: [{ payload: chart.data.find(d => d.epoch === 2) }] })}</>);
+    const costRow = [...document.querySelectorAll('[data-epoch-details="2"] > div')].find(r => r.textContent!.includes('chart.cost'))!;
+    expect(costRow.lastElementChild!.textContent).toBe('-');
+    unmount();
+    cleanup();
+
+    api.getRunAnalysis.mockResolvedValue({
+      ...ANALYSIS,
+      epochs: ANALYSIS.epochs.map(e => ({ ...e, costCredits: null })),
+    });
+    renderPanel();
+    await screen.findByTestId('chart');
+    render(<>{chart.tooltip!.content({ active: true, payload: [{ payload: chart.data.find(d => d.epoch === 2) }] })}</>);
+    expect(document.querySelector('[data-epoch-details="2"]')!.textContent).not.toContain('chart.cost');
+  });
+
+  it('shows no chart card when the pointer is off the columns', async () => {
+    renderPanel();
+    await screen.findByTestId('chart');
+
+    expect(chart.tooltip!.content({ active: false, payload: [] })).toBeNull();
+  });
+
+  it('selects a node on the canvas when its label is clicked in the comparison, as in the grid', async () => {
+    const focused: string[] = [];
+    const listener = (e: Event) => focused.push((e as CustomEvent<{ stepAlias: string }>).detail.stepAlias);
+    window.addEventListener('workflowFocusNode', listener);
+    try {
+      renderPanel();
+      const label = await waitFor(() => {
+        const el = document.querySelector('[data-run-analysis-compare] [data-compare-node="mcp:send"]') as HTMLButtonElement;
+        expect(el).not.toBeNull();
+        return el;
+      });
+      expect(label.tagName).toBe('BUTTON');
+
+      fireEvent.click(label);
+
+      expect(focused).toEqual(['mcp:send']);
+    } finally {
+      window.removeEventListener('workflowFocusNode', listener);
+    }
   });
 
   it('lets both compared epochs be chosen, the reference one included', async () => {

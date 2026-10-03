@@ -7,6 +7,7 @@
 
 import { isFileRef, fileRefToUrl, normalizeFileRef, type FileRef } from '@/lib/api/orchestrator/file.service';
 import { assetDisplayUrl } from '@/lib/datatable/assetValue';
+import DOMPurify from 'dompurify';
 
 // =============================================================================
 // HTML Processing
@@ -34,23 +35,485 @@ body {
 `.trim();
 
 /**
- * Remove script tags from HTML for security
+ * Elements whose CONTENT the HTML tokenizer reads as text rather than markup (RCDATA for
+ * {@code textarea} and {@code title}, RAWTEXT for the rest). A literal {@code <script>} written
+ * between their tags is inert, exactly like one written inside a comment.
+ *
+ * <p>{@code plaintext} is deliberately absent: it has no end tag at all (the tokenizer stays in
+ * the PLAINTEXT state until EOF), so it is handled as "nothing after this point is an opener".</p>
  */
-export function removeScriptTags(html: string): string {
-  if (!html) return '';
-  return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+const RAWTEXT_ELEMENTS = new Set([
+  'textarea', 'title', 'style', 'xmp', 'iframe', 'noembed', 'noframes',
+]);
+
+/**
+ * Roots of a foreign (SVG / MathML) subtree, where the rule above does NOT hold: inside foreign
+ * content a start tag is inserted as a foreign element and the tokenizer is never switched to
+ * RAWTEXT, so {@code <svg><style><script>alert(1)} carries a REAL script and must still truncate.
+ */
+const FOREIGN_CONTENT_ROOTS = new Set(['svg', 'math']);
+
+/**
+ * Index just past the end tag that closes the RAWTEXT/RCDATA element whose content starts at
+ * {@code from}, or {@code -1} when it is never closed (its content then runs to EOF, so nothing
+ * after it is an opener either).
+ *
+ * @param tagName always a member of {@link RAWTEXT_ELEMENTS}, i.e. a literal we own, never
+ *                caller-controlled text that could reach the pattern
+ */
+function findRawtextEnd(html: string, from: number, tagName: string): number {
+  const closer = new RegExp(`</${tagName}(?=[\\s/>]|$)`, 'gi');
+  closer.lastIndex = from;
+  const match = closer.exec(html);
+  if (!match) return -1;
+  // An end tag may carry (ignored) attributes, so its ">" is not necessarily the next character.
+  const gt = html.indexOf('>', match.index + match[0].length);
+  return gt < 0 ? -1 : gt + 1;
+}
+
+/** HTML tokenizer whitespace (tab, LF, FF, CR, space). CR is normalized to LF before parsing. */
+const TAG_WHITESPACE = /[\t\n\f\r ]/;
+
+/**
+ * Where a tag that starts at {@code tagStart} ends, and whether it self-closes.
+ *
+ * <p>A miniature of the HTML tokenizer's tag states, because the two questions it answers cannot
+ * be answered by looking for characters. Both were wrong when read naively:</p>
+ * <ul>
+ *   <li><b>the end of the tag.</b> A {@code "} or {@code '} only opens a quoted value when the
+ *       tokenizer is waiting for one. In {@code <div data-x=a'b>} the quote is an ordinary
+ *       character of the UNQUOTED value, so the tag ends at the {@code >} right after it. Treating
+ *       the quote as an opener made the scan swallow the rest of the document and report "no
+ *       opener", which is a truncation this function exists to prevent from being skipped;</li>
+ *   <li><b>self-closing.</b> In an unquoted value the tokenizer APPENDS a solidus to the value:
+ *       {@code <svg data-x=a/>} carries {@code data-x="a/"} and does NOT self-close. Reading the
+ *       character before {@code >} said it did, so the SVG subtree was believed closed at once and
+ *       the RAWTEXT skip stayed enabled inside foreign content, where {@code <style>} is a plain
+ *       element: {@code <svg data-x=a/><style><script>alert(1)} survived untouched.</li>
+ * </ul>
+ *
+ * @param tagStart index of the {@code <}
+ * @returns {@code after} = index just past the tag (or the input length when the tag is never
+ *          closed, since everything left is then part of it), and {@code selfClosing}
+ */
+function scanTag(html: string, tagStart: number): { after: number; selfClosing: boolean } {
+  const len = html.length;
+  // Tokenizer states, named after the spec ones. The tag name starts right after "<" (an end
+  // tag's "/" is consumed by the same walk, which is harmless: a "/" there only leads to the
+  // self-closing state, and self-closing is only ever read for START tags).
+  type State =
+    | 'name' | 'beforeAttrName' | 'attrName' | 'afterAttrName' | 'beforeAttrValue'
+    | 'valueDouble' | 'valueSingle' | 'valueUnquoted' | 'afterValueQuoted' | 'selfClosing';
+  let state: State = 'name';
+
+  for (let i = tagStart + 1; i < len; i++) {
+    const ch = html.charAt(i);
+    const isSpace = TAG_WHITESPACE.test(ch);
+
+    switch (state) {
+      case 'name':
+      case 'attrName':
+        if (isSpace) state = state === 'name' ? 'beforeAttrName' : 'afterAttrName';
+        else if (ch === '/') state = 'selfClosing';
+        else if (ch === '>') return { after: i + 1, selfClosing: false };
+        else if (ch === '=' && state === 'attrName') state = 'beforeAttrValue';
+        break;
+      case 'beforeAttrName':
+      case 'afterAttrName':
+      case 'afterValueQuoted':
+        if (isSpace) break;
+        if (ch === '/') state = 'selfClosing';
+        else if (ch === '>') return { after: i + 1, selfClosing: false };
+        else if (ch === '=' && state === 'afterAttrName') state = 'beforeAttrValue';
+        else state = 'attrName';
+        break;
+      case 'beforeAttrValue':
+        if (isSpace) break;
+        if (ch === '"') state = 'valueDouble';
+        else if (ch === "'") state = 'valueSingle';
+        else if (ch === '>') return { after: i + 1, selfClosing: false };
+        else state = 'valueUnquoted';
+        break;
+      case 'valueDouble':
+        if (ch === '"') state = 'afterValueQuoted';
+        break;
+      case 'valueSingle':
+        if (ch === "'") state = 'afterValueQuoted';
+        break;
+      case 'valueUnquoted':
+        // "/" and the quote characters are ordinary value characters here: only whitespace and
+        // ">" leave this state. That is the whole of the fix.
+        if (isSpace) state = 'beforeAttrName';
+        else if (ch === '>') return { after: i + 1, selfClosing: false };
+        break;
+      case 'selfClosing':
+        if (ch === '>') return { after: i + 1, selfClosing: true };
+        // Anything else is a parse error and is reconsumed before the next attribute name.
+        i--;
+        state = 'beforeAttrName';
+        break;
+    }
+  }
+  // No ">" before EOF: the tag never ends, so nothing after it is markup.
+  return { after: len, selfClosing: false };
 }
 
 /**
- * Sanitize HTML for safe rendering in Shadow DOM.
- * Removes script tags AND inline event handlers (onclick, onerror, onload, etc.)
+ * Index of the first {@code <script} opener that is really an opener, or {@code -1}.
+ *
+ * <p>Scans the markup the way the HTML tokenizer does, and that is exactly what makes the
+ * truncation in {@link removeScriptTags} safe to apply:</p>
+ * <ul>
+ *   <li>a comment ({@code <!-- … -->}) is inert, so a {@code <script>} written INSIDE one is not
+ *       an opener. An UNTERMINATED comment swallows the rest of the input, so nothing after it
+ *       is an opener either;</li>
+ *   <li>the same holds for every RCDATA/RAWTEXT element ({@link RAWTEXT_ELEMENTS}) and for
+ *       {@code <plaintext>}: their content is text, so we skip to the matching end tag (or, when
+ *       there is none, report that the rest of the input holds no opener);</li>
+ *   <li>a {@code <} inside an attribute value is literal text, so {@code <div title="<script>">}
+ *       is not an opener. Which characters delimit that value is decided by {@link scanTag},
+ *       not guessed: a quote inside an UNQUOTED value opens nothing;</li>
+ *   <li>a {@code <} not followed by a tag-name character ({@code a < b}) is literal text;</li>
+ *   <li>a declaration or processing instruction ({@code <!DOCTYPE html>}, {@code <?xml … ?>}) is
+ *       skipped whole.</li>
+ * </ul>
+ *
+ * <p>The RCDATA/RAWTEXT rule is suspended inside a foreign subtree
+ * ({@link FOREIGN_CONTENT_ROOTS}), where those names are plain SVG/MathML elements and a nested
+ * {@code <script>} really is one. The suspension is coarse on purpose: an HTML integration point
+ * ({@code <svg><foreignObject>}) restores HTML parsing rules, and we keep truncating there. That
+ * costs content in a rare shape, which is the safe direction to be wrong in.</p>
+ *
+ * <p>Before this scanner, pass 2 of {@link removeScriptTags} was a bare
+ * {@code /<script\b[\s\S]*$/i}, which truncated to end-of-input on the first TEXTUAL occurrence.
+ * {@code "<!-- <script> --><div>real content</div>"} therefore lost the entire document although
+ * it runs nothing at all, and the loss was silent: the caller got a shorter string, not an error.
+ * {@code "<textarea>paste your <script> here</textarea><div>real content</div>"} lost it in
+ * exactly the same way until the inert contexts above were covered too.</p>
+ */
+function findUnterminatedScriptOpener(html: string): number {
+  const len = html.length;
+  let i = 0;
+  // Depth of the enclosing SVG/MathML subtree, 0 when we are in ordinary HTML content.
+  let foreignDepth = 0;
+  while (i < len) {
+    const lt = html.indexOf('<', i);
+    if (lt < 0) return -1;
+
+    // Comment or bogus comment: inert until "-->" (or, unterminated, until EOF).
+    if (html.startsWith('<!--', lt)) {
+      const end = html.indexOf('-->', lt + 4);
+      if (end < 0) return -1;
+      i = end + 3;
+      continue;
+    }
+    // Declaration (<!DOCTYPE …>) or processing instruction (<?…>): skip to its ">".
+    if (html.startsWith('<!', lt) || html.startsWith('<?', lt)) {
+      const end = html.indexOf('>', lt + 2);
+      if (end < 0) return -1;
+      i = end + 1;
+      continue;
+    }
+    // Not a tag start at all ("a < b"): the "<" is literal text.
+    if (!/^<\/?[a-zA-Z]/.test(html.slice(lt, lt + 3))) {
+      i = lt + 1;
+      continue;
+    }
+    // "<script" followed by a separator, "/", ">" or end of input is the real thing. Checked
+    // before the foreign-content bookkeeping: an SVG <script> executes just like an HTML one.
+    if (/^<script(?=[\s/>]|$)/i.test(html.slice(lt, lt + 8))) {
+      return lt;
+    }
+    // Tag name, from a bounded slice (the longest name we test for is 9 characters). End tags are
+    // named too, so a foreign subtree can be closed again.
+    const isEndTag = html.charAt(lt + 1) === '/';
+    const nameMatch = /^[a-zA-Z][a-zA-Z0-9]*/.exec(html.slice(lt + (isEndTag ? 2 : 1), lt + 13));
+    const tagName = nameMatch ? nameMatch[0].toLowerCase() : '';
+
+    // Any other tag: skip past its ">", the way the tokenizer finds it.
+    const { after: afterTag, selfClosing } = scanTag(html, lt);
+
+    if (isEndTag) {
+      if (foreignDepth > 0 && FOREIGN_CONTENT_ROOTS.has(tagName)) foreignDepth--;
+      i = afterTag;
+      continue;
+    }
+    if (FOREIGN_CONTENT_ROOTS.has(tagName)) {
+      // "<svg/>" self-closes in foreign content, so it opens no subtree. "<svg data-x=a/>" does
+      // NOT: that solidus belongs to the unquoted attribute value (see scanTag).
+      if (!selfClosing) foreignDepth++;
+      i = afterTag;
+      continue;
+    }
+    if (foreignDepth === 0) {
+      // PLAINTEXT never ends: everything from here to EOF is text.
+      if (tagName === 'plaintext') return -1;
+      if (RAWTEXT_ELEMENTS.has(tagName)) {
+        const end = findRawtextEnd(html, afterTag, tagName);
+        if (end < 0) return -1;
+        i = end;
+        continue;
+      }
+    }
+    i = afterTag;
+  }
+  return -1;
+}
+
+/**
+ * Remove script tags from HTML for security.
+ *
+ * <p>Two passes, because a single balanced-pair regex is bypassable:</p>
+ * <ol>
+ *   <li>balanced {@code <script>…</script>} pairs (any attributes, any case, multi-line);</li>
+ *   <li>any REMAINING {@code <script} opener with no closing tag. An HTML parser treats
+ *       everything after an unterminated opener as script source until EOF, so we drop the
+ *       rest of the input. Without this pass {@code <script>alert(1)} survived untouched
+ *       (pass 1 needs the {@code </script>} to match) and executed in every surface that
+ *       relies on this function to neutralise publisher HTML.</li>
+ * </ol>
+ *
+ * <p>Pass 2 truncates, so it must only fire on a REAL opener: it locates one with
+ * {@link findUnterminatedScriptOpener}, which honours comments, quoted attribute values and
+ * declarations, rather than on the first textual {@code <script} anywhere in the input.</p>
+ */
+export function removeScriptTags(html: string): string {
+  if (!html) return '';
+  const withoutPairs = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+  // Unterminated opener: everything from it to the end of the input is script source.
+  const opener = findUnterminatedScriptOpener(withoutPairs);
+  return opener < 0 ? withoutPairs : withoutPairs.slice(0, opener);
+}
+
+/**
+ * Matches an inline event-handler attribute (`onclick=…`, `onerror=…`, …).
+ *
+ * <p>The separator class is {@code [\s/]} and not {@code \s}: HTML allows a solidus between
+ * attributes, so {@code <img/onerror=alert(1)>} carries a live handler while carrying no
+ * whitespace at all, and the previous {@code \s+} form left it intact. {@code \s} already
+ * covers the newline-separated variant ({@code <img\nonerror=…>}), which stays covered here.</p>
+ */
+const INLINE_EVENT_HANDLER_PATTERN = /[\s/]+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi;
+
+/**
+ * Sanitize publisher HTML so that NO publisher JavaScript can run in the surface that renders it.
+ *
+ * <p>Two stages, in this order:</p>
+ * <ol>
+ *   <li><b>Textual pre-pass</b> ({@link removeScriptTags} + {@link INLINE_EVENT_HANDLER_PATTERN}).
+ *       DOM-free, so it is also the WHOLE sanitizer when no DOM exists: the callers are React
+ *       client components, and Next.js renders those on the server too, where {@code DOMParser}
+ *       is undefined. Reaching for it there would throw a {@code ReferenceError} mid-render
+ *       instead of sanitizing.</li>
+ *   <li><b>DOMPurify allow-list pass</b> ({@link sanitizeWithDom}), whenever a DOM is available,
+ *       configured with this module's element allow-list and URL-scheme rules. The regex stage
+ *       alone let {@code <a href="javascript:...">}, {@code <iframe src="javascript:...">} and
+ *       {@code <iframe srcdoc>} through, and the hand-rolled DOM walker that followed it was
+ *       mutation-XSS-able (a {@code <math><style>} whose text re-parsed into a live
+ *       {@code <img onerror>}). DOMPurify is built for exactly that parse/serialize round trip.</li>
+ * </ol>
+ *
+ * <p>The surfaces that call this also render into a sandboxed, opaque-origin iframe, so the
+ * sanitizer is one layer of two rather than the only one.</p>
  */
 export function sanitizeHtml(html: string): string {
   if (!html) return '';
   let sanitized = removeScriptTags(html);
   // Remove all inline event handlers (on* attributes)
-  sanitized = sanitized.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
-  return sanitized;
+  sanitized = sanitized.replace(INLINE_EVENT_HANDLER_PATTERN, '');
+  const instance = getPurifier();
+  if (!instance) return sanitized;
+  return sanitizeWithDom(sanitized, instance);
+}
+
+/**
+ * URL schemes a sanitized navigation attribute ({@code href}, {@code action}, ...) may name.
+ * Everything else with an explicit scheme ({@code javascript:}, {@code vbscript:}, {@code data:},
+ * ...) is removed by {@link sanitizeWithDom}.
+ */
+const OPENABLE_NAVIGATION_PROTOCOLS = new Set(['https:', 'http:', 'mailto:', 'tel:']);
+
+// =============================================================================
+// DOM allow-list sanitizer (see sanitizeHtml)
+// =============================================================================
+
+/**
+ * Elements a sanitized publisher document may keep.
+ *
+ * <p>Allow-list, not deny-list: everything absent is removed. A deny-list has to stay ahead of
+ * every element that can host a URL or a script, and it silently loses that race whenever the
+ * HTML surface grows.</p>
+ */
+const ALLOWED_ELEMENTS = new Set([
+  // Sections and grouping
+  'div', 'span', 'p', 'section', 'article', 'aside', 'header', 'footer', 'main', 'nav',
+  'figure', 'figcaption', 'hr', 'br', 'wbr', 'address', 'blockquote', 'pre', 'details',
+  'summary', 'dialog', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  // Text level
+  'a', 'abbr', 'b', 'bdi', 'bdo', 'cite', 'code', 'data', 'dfn', 'em', 'i', 'kbd', 'mark',
+  'q', 'rp', 'rt', 'ruby', 's', 'samp', 'small', 'strong', 'sub', 'sup', 'time', 'u', 'var',
+  'del', 'ins',
+  // Lists
+  'ul', 'ol', 'li', 'dl', 'dt', 'dd', 'menu',
+  // Tables
+  'table', 'caption', 'colgroup', 'col', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th',
+  // Forms
+  'form', 'fieldset', 'legend', 'label', 'input', 'button', 'select', 'option', 'optgroup',
+  'textarea', 'datalist', 'output', 'progress', 'meter',
+  // Media
+  'img', 'picture', 'source', 'video', 'audio', 'track', 'canvas', 'map', 'area',
+  // Document head (a complete publisher document keeps its own styling and metadata)
+  'title', 'style', 'meta', 'link',
+  // SVG (lowercased: tagName is compared lowercased, so camelCase SVG names appear folded)
+  'svg', 'g', 'defs', 'symbol', 'use', 'path', 'circle', 'ellipse', 'line', 'polyline',
+  'polygon', 'rect', 'text', 'tspan', 'textpath', 'marker', 'mask', 'clippath', 'pattern',
+  'lineargradient', 'radialgradient', 'stop', 'filter', 'desc',
+]);
+
+/**
+ * Elements removed WITH their subtree.
+ *
+ * <p>Everything else that is merely not allow-listed is unwrapped instead (the element goes, its
+ * children stay), so an unknown or custom element costs its tag and nothing else. These ones
+ * cannot be unwrapped: their content is script source, a nested document, or plugin data, and
+ * promoting it to markup or to visible text is worse than dropping it.</p>
+ */
+const DROPPED_SUBTREE_ELEMENTS = new Set([
+  'script', 'iframe', 'object', 'embed', 'applet', 'frame', 'frameset', 'noembed', 'noframes',
+  'noscript', 'template', 'base', 'xmp', 'plaintext', 'portal',
+]);
+
+/**
+ * Attributes whose value is a URL the user NAVIGATES to. They accept only
+ * {@link OPENABLE_NAVIGATION_PROTOCOLS} (or no explicit scheme at all).
+ */
+const NAVIGATION_URL_ATTRIBUTES = new Set(['href', 'action', 'formaction', 'ping', 'xlink:href']);
+
+/**
+ * Attributes whose value is a URL the browser FETCHES as a subresource. Same schemes as
+ * navigation, plus the inert inline forms an {@code <img>}/{@code <video>} needs: run mode
+ * rewrites every FileRef to a {@code data:} URI, and publishers inline small images the same way.
+ */
+const RESOURCE_URL_ATTRIBUTES = new Set(['src', 'poster', 'background', 'data', 'srcset']);
+
+/**
+ * Inline {@code data:} payloads a resource attribute may carry: image (except SVG, which is a
+ * document and can carry script), video, audio, font. {@code data:text/html} and
+ * {@code data:image/svg+xml} are documents, so they stay out.
+ */
+const INERT_DATA_MEDIA_TYPE = /^data:(?:image\/(?!svg)[a-z0-9.+-]+|video\/[a-z0-9.+-]+|audio\/[a-z0-9.+-]+|font\/[a-z0-9.+-]+)[;,]/i;
+
+/** CSS that a browser could once turn into script. Cheap to reject, and never legitimate. */
+const UNSAFE_CSS_PATTERN = /(?:javascript|vbscript)\s*:|expression\s*\(/i;
+
+/**
+ * Whether a URL-valued attribute is safe to keep.
+ *
+ * <p>A value with NO explicit scheme (a relative path, {@code #anchor}, {@code //host}) can never
+ * be {@code javascript:}, so it passes: dropping those would break in-document anchors and every
+ * relative asset. A value WITH an explicit scheme must name an allow-listed one.</p>
+ *
+ * <p>Leading control characters and interior whitespace are stripped BEFORE the scheme is read,
+ * because the HTML parser ignores them too: {@code "jav\tascript:alert(1)"} is a
+ * {@code javascript:} URL to the browser and must be one to us.</p>
+ *
+ * @param rawUrl the attribute value, already entity-decoded by the parser
+ * @param allowInlineMedia true for a subresource attribute, which may also carry an inert
+ *                         {@code data:}/{@code blob:} payload
+ */
+function isSafeAttributeUrl(rawUrl: string, allowInlineMedia: boolean): boolean {
+  const collapsed = rawUrl.replace(/[\u0000-\u0020]/g, '');
+  if (!collapsed) return true;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(collapsed);
+  if (!scheme) return true;
+  const protocol = `${scheme[1].toLowerCase()}:`;
+  if (OPENABLE_NAVIGATION_PROTOCOLS.has(protocol)) return true;
+  if (!allowInlineMedia) return false;
+  if (protocol === 'blob:') return true;
+  return protocol === 'data:' && INERT_DATA_MEDIA_TYPE.test(collapsed);
+}
+
+/**
+ * Attributes DOMPurify's default allow-list lacks but legitimate publisher markup uses. Everything
+ * here is inert: none is an event handler, none takes a URL that is navigated or fetched.
+ */
+const EXTRA_ALLOWED_ATTRIBUTES = [
+  'target', 'content', 'charset', 'form', 'formmethod', 'formnovalidate', 'formtarget',
+  'contenteditable', 'autofocus', 'referrerpolicy', 'xmlns:xlink',
+];
+
+type Purifier = ReturnType<typeof DOMPurify>;
+let purifier: Purifier | null = null;
+
+/**
+ * One DOMPurify instance with this module's policy as hooks. Created lazily (and never at import)
+ * because the module is also evaluated during server rendering, where there is no window.
+ *
+ * <p>DOMPurify does the parsing and the tree walk, which is exactly where the hand-rolled walker
+ * failed: it handles namespace confusion (a {@code <style>} or {@code <title>} under
+ * {@code <math>}/{@code <svg>} whose text re-parses into live markup), DOM clobbering and the
+ * other mutation-XSS classes. The hooks only ADD this module's own rules on top of its defaults,
+ * so every value DOMPurify would reject is still rejected.</p>
+ */
+function getPurifier(): Purifier | null {
+  if (purifier) return purifier;
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return null;
+  const instance = DOMPurify(window);
+  if (!instance.isSupported) return null;
+
+  // A <meta http-equiv="refresh"> redirects the document, and its destination hides inside
+  // `content` where no scheme check reaches it: drop the element.
+  instance.addHook('uponSanitizeElement', (node, data) => {
+    if (data.tagName === 'meta' && (node as Element).hasAttribute?.('http-equiv')) {
+      node.parentNode?.removeChild(node);
+    }
+  });
+
+  instance.addHook('uponSanitizeAttribute', (_node, data) => {
+    const name = data.attrName;
+    if (name === 'style') {
+      if (UNSAFE_CSS_PATTERN.test(data.attrValue)) data.keepAttr = false;
+      return;
+    }
+    const isResource = RESOURCE_URL_ATTRIBUTES.has(name);
+    if (!isResource && !NAVIGATION_URL_ATTRIBUTES.has(name)) return;
+    // srcset is a comma-separated candidate list; each candidate's URL is its first token.
+    const safe = name === 'srcset'
+      ? data.attrValue.split(',').every(candidate => isSafeAttributeUrl(candidate.trim().split(/\s+/)[0] || '', true))
+      : isSafeAttributeUrl(data.attrValue, isResource);
+    if (!safe) {
+      data.keepAttr = false;
+      return;
+    }
+    // DOMPurify's own URI allow-list has no blob:, which run mode and uploads use for media.
+    // isSafeAttributeUrl already accepted it, for a SUBRESOURCE attribute only.
+    if (isResource && /^\s*blob:/i.test(data.attrValue)) data.forceKeepAttr = true;
+  });
+
+  purifier = instance;
+  return purifier;
+}
+
+/**
+ * DOM allow-list pass, PRESERVING the input's shape: a complete document comes back as a
+ * complete document (downstream, {@link isCompleteHtml} decides whether the platform wraps it
+ * and injects base CSS), a fragment as a fragment with its leading {@code <style>} kept
+ * (FORCE_BODY, otherwise the parser hoists it into {@code <head>} and it is lost).
+ */
+function sanitizeWithDom(html: string, instance: Purifier): string {
+  const complete = isCompleteHtml(html);
+  const allowedTags = [...ALLOWED_ELEMENTS];
+  if (complete) allowedTags.push('html', 'head', 'body', '!doctype');
+  const result = instance.sanitize(html, {
+    ALLOWED_TAGS: allowedTags,
+    ADD_ATTR: EXTRA_ALLOWED_ATTRIBUTES,
+    // Script source, nested documents and plugin data go WITH their content (not unwrapped).
+    ADD_FORBID_CONTENTS: [...DROPPED_SUBTREE_ELEMENTS],
+    WHOLE_DOCUMENT: complete,
+    FORCE_BODY: !complete,
+    RETURN_TRUSTED_TYPE: false,
+  });
+  return String(result);
 }
 
 /**
@@ -151,6 +614,28 @@ export function classifyAnchorNavigation(
   // relative path: block it - in srcdoc it would navigate the iframe to the embedding app origin.
   const hasExplicitScheme = /^[a-z][a-z0-9+.-]*:/i.test(href);
   return { action: hasExplicitScheme ? 'allow' : 'block', url: null };
+}
+
+/**
+ * Whether the parent frame may open {@code url} in a new tab on an interface's request (LC-076).
+ *
+ * <p>MUST be evaluated on the PARENT side. {@link classifyAnchorNavigation} runs INSIDE the
+ * sandboxed iframe, so a hostile interface skips it entirely by posting a
+ * {@code navigation-request} of its own; the parent is not sandboxed, so a {@code javascript:}
+ * URL handed to {@code window.open()} there would execute on the app origin. Only absolute
+ * {@code https:}/{@code http:}/{@code mailto:}/{@code tel:} URLs pass (the set the in-frame classifier
+ * gates; none of them executes script); everything else ({@code javascript:}, {@code data:},
+ * {@code blob:}, relative paths, unparseable strings) is rejected.</p>
+ */
+export function isOpenableNavigationUrl(url: unknown): boolean {
+  if (typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  try {
+    return OPENABLE_NAVIGATION_PROTOCOLS.has(new URL(trimmed).protocol.toLowerCase());
+  } catch (err) {
+    return false;
+  }
 }
 
 /**
@@ -449,7 +934,8 @@ export function generateBridgeScript(
           if (!input) { console.log('[BridgePrefill] NO_INPUT for ' + fieldName); return; }
           var tag = input.tagName.toLowerCase();
           var stringValue = String(value);
-          console.log('[BridgePrefill] SET ' + tag + '[name=' + fieldName + '] = ' + stringValue.slice(0, 40));
+          // Length only, never the value: prefill carries what the end user typed (LC-091).
+          console.log('[BridgePrefill] SET ' + tag + '[name=' + fieldName + '] valueLength=' + stringValue.length);
           if (tag === 'textarea') {
             // textareas store their initial value in textContent (the HTML
             // between the tags). Setting .value alone displays the prefill
@@ -514,7 +1000,8 @@ export function generateBridgeScript(
           e.preventDefault();
           console.log('[BridgeScript] __continue ' + evtType + ' fired for:', actionName);
           collectFormDataWithFiles(e.target || el, e.submitter).then(function(data) {
-            console.log('[BridgeScript] Sending postMessage continue:', { actionKey: actionName, data: data });
+            // Field names only, never the submitted values (LC-091).
+            console.log('[BridgeScript] Sending postMessage continue:', { actionKey: actionName, fields: Object.keys(data) });
             window.parent.postMessage({ type: 'continue', actionKey: actionName, data: data }, _targetOrigin);
           });
         });
@@ -761,6 +1248,17 @@ function injectFileProxyUrls(data: Record<string, unknown>, resolveFileUrl?: (ra
 /**
  * Wrap HTML fragment in a complete document structure
  */
+/**
+ * Makes CSS safe to inline in a `<style>` element. Publisher CSS is interpolated AFTER the HTML
+ * sanitizer runs, so a literal `</style>` in it would close the element and inject markup (for
+ * example a script into a `removeScripts` preview). `<` has no meaning in CSS outside strings, and
+ * inside a string the CSS escape `\3c ` renders the same character, so the rewrite keeps the
+ * stylesheet's meaning.
+ */
+export function neutralizeStyleBreakout(css: string): string {
+  return css.replace(/</g, '\\3c ');
+}
+
 export function ensureCompleteHtml(html: string, customCss?: string, autoFit?: boolean, actionMapping?: Record<string, string>, triggerData?: Record<string, Record<string, unknown>>, jsTemplate?: string, resolvedData?: Record<string, unknown>, resolveFileUrl?: (rawUrl: string) => string, muteMedia?: boolean): string {
   if (!html) return '';
 
@@ -776,10 +1274,10 @@ export function ensureCompleteHtml(html: string, customCss?: string, autoFit?: b
   // masking body-margin bleed that the run panel then exposed.
   // Fragments inherit the base theme, with the author's CSS AFTER it so every
   // base rule stays overridable.
-  const combinedCss = (isCompleteHtml(renderedHtml)
+  const combinedCss = neutralizeStyleBreakout((isCompleteHtml(renderedHtml)
     ? [customCss]
     : [BASE_IFRAME_CSS, autoFitStyles, customCss]
-  ).filter(Boolean).join('\n');
+  ).filter(Boolean).join('\n'));
 
   // Generate bridge script if action mapping is provided
   const bridgeScriptHtml = actionMapping ? generateBridgeScript(actionMapping, triggerData) : '';
@@ -1343,10 +1841,9 @@ export function renderInterfaceTemplate(
     muteMedia,
   } = options;
 
-  // Step 1: Remove user-provided scripts if needed (system scripts are added by ensureCompleteHtml)
-  let html = removeScripts ? removeScriptTags(template) : template;
+  let html = template;
 
-  // Step 2: Resolve variables based on mode (in both HTML and CSS)
+  // Step 1: Resolve variables based on mode (in both HTML and CSS)
   let resolvedCss = customCss;
   if (mode === 'run') {
     html = renderForRunMode(html, resolvedData, resolveFileUrl);
@@ -1360,9 +1857,21 @@ export function renderInterfaceTemplate(
     }
   }
 
+  // Step 2: Neutralise publisher-supplied script when asked to (system scripts are added by
+  // ensureCompleteHtml afterwards). sanitizeHtml, not removeScriptTags alone: inline handlers
+  // (<img/onerror=...>), javascript: URLs and srcdoc documents execute just like a <script>, so a
+  // caller relying on removeScripts must get all of them removed (LC-077).
+  // AFTER substitution, not before: a value is HTML-escaped when it is substituted, so it cannot
+  // add markup, but it CAN complete a URL attribute (href="{{link}}" with link =
+  // "javascript:..."). Only the substituted document shows that attribute's real value.
+  if (removeScripts) {
+    html = sanitizeHtml(html);
+  }
+
   // Step 3: Wrap in complete document if needed
   if (wrapInDocument) {
-    html = ensureCompleteHtml(html, resolvedCss, autoFit, actionMapping, triggerData, jsTemplate, mode === 'run' ? resolvedData : undefined, mode === 'run' ? resolveFileUrl : undefined, muteMedia);
+    // removeScripts promises that no publisher JS runs: the js_template is publisher JS too.
+    html = ensureCompleteHtml(html, resolvedCss, autoFit, actionMapping, triggerData, removeScripts ? undefined : jsTemplate, mode === 'run' ? resolvedData : undefined, mode === 'run' ? resolveFileUrl : undefined, muteMedia);
   }
 
   return html;

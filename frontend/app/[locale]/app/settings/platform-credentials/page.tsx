@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { PageHeader } from "@/components/settings/PageHeader";
 import { Shield, Plus, RefreshCw, Search, User, List, Settings, Filter } from "lucide-react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/lib/providers/smart-providers";
@@ -30,6 +31,7 @@ import {
 
 import type { CredentialFieldDef } from "@/lib/api/services/catalog-visibility.service";
 import { IS_CE } from "@/lib/edition";
+import { urlEnum, urlNullable, urlString, useUrlSearchState, useUrlState } from "@/hooks/useUrlState";
 
 /** Merged view combining catalog visibility + orchestrator credential data */
 export interface MergedIntegration {
@@ -70,10 +72,16 @@ export default function PlatformCredentialsPage() {
   const [loading, setLoading] = useState(true);
 
   // UI state
-  const [viewMode, setViewMode] = useState<"configured" | "all">("all");
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedAuthType, setSelectedAuthType] = useState<string>("all");
+  // The view, the category, the search and the auth type live in the address, so a reload
+  // reopens the list as it was.
+  const [viewMode, setViewMode] = useUrlState<"configured" | "all">("view", "all", {
+    codec: urlEnum(["all", "configured"]),
+  });
+  const [selectedCategory, setSelectedCategory] = useUrlState<string | null>("category", null, {
+    codec: urlNullable(urlString),
+  });
+  const [searchQuery, setSearchQuery] = useUrlSearchState("q");
+  const [selectedAuthType, setSelectedAuthType] = useUrlState<string>("type", "all");
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingCredential, setEditingCredential] = useState<PlatformCredential | null>(null);
@@ -288,6 +296,17 @@ export default function PlatformCredentialsPage() {
         name,
         integrationCount: count,
       }));
+
+  // Categories and auth types come from the catalogue, so an address can name one that is
+  // gone. Once the data is in, such a filter is dropped rather than left showing nothing.
+  const categoryIsKnown = selectedCategory === null || categories.length === 0
+    || categories.some((c) => c.slug.toLowerCase() === selectedCategory.toLowerCase());
+  const authTypeIsKnown = selectedAuthType === "all" || loading || selectedCategory !== null
+    || integrations.length === 0 || availableAuthTypes.includes(selectedAuthType.toLowerCase());
+  useEffect(() => {
+    if (!categoryIsKnown) setSelectedCategory(null);
+    if (!authTypeIsKnown) setSelectedAuthType("all");
+  }, [categoryIsKnown, authTypeIsKnown, setSelectedCategory, setSelectedAuthType]);
 
   // Handlers
   const handleConfigure = (
@@ -599,16 +618,8 @@ export default function PlatformCredentialsPage() {
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-theme-secondary rounded-xl flex items-center justify-center">
-            <Shield className="w-5 h-5 text-theme-primary" />
-          </div>
-          <div>
-            <h1 className="text-lg font-semibold text-theme-primary">{t("title")}</h1>
-            <p className="text-sm text-theme-secondary">{t("subtitle")}</p>
-          </div>
-        </div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <PageHeader icon={Shield} title={t("title")} subtitle={t("subtitle")} />
         <div className="flex items-center gap-2">
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs font-medium">
             <Shield className="w-3.5 h-3.5" />

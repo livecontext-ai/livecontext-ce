@@ -184,6 +184,39 @@ class FileControllerSignedTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
+    // LC-016 on the signed proxy, since main's SignedProxyHeaders: an active type (html, svg, xml,
+    // js) is served under a script-free `sandbox` policy instead of being forced to download, so an
+    // HTML report shared by public link still renders but can never run script on the app origin.
+    @Test
+    @DisplayName("LC-016: anonymous signed proxy serves an .html key with nosniff and a script-free sandbox policy")
+    void signedHtmlIsSandboxed() {
+        long exp = Instant.now().getEpochSecond() + 3600;
+        String key = "1/general/x/payload.html";
+        String sig = signer.sign(key, exp, "inline");
+        when(mimeTypeRegistry.resolve("payload.html")).thenReturn("text/html");
+        when(fileStorageService.openStream(key)).thenReturn(Optional.of(stubStream("<script>".getBytes(), 8)));
+
+        ResponseEntity<StreamingResponseBody> response = controller.proxySignedDownload(key, exp, "inline", sig, null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+        assertThat(response.getHeaders().getFirst("Content-Security-Policy")).isEqualTo("sandbox");
+    }
+
+    @Test
+    @DisplayName("LC-016: a signed image still renders inline (showcase <img> previews keep working), with nosniff")
+    void signedImageStaysInline() {
+        long exp = Instant.now().getEpochSecond() + 3600;
+        String key = "1/general/x/pic.png";
+        String sig = signer.sign(key, exp, "inline");
+        when(fileStorageService.openStream(key)).thenReturn(Optional.of(stubStream("png".getBytes(), 3)));
+
+        ResponseEntity<StreamingResponseBody> response = controller.proxySignedDownload(key, exp, "inline", sig, null);
+
+        assertThat(response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION)).startsWith("inline;");
+        assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+    }
+
     /**
      * Interface videos now stream from these links, and a video element asks for byte ranges:
      * Safari/iOS will not play a 200-only source and Chrome cannot seek one.

@@ -112,7 +112,7 @@ public final class FileStorageHelp {
             "Map BOTH the FileRef AND its filename: variable_mapping " +
             "{'href':'{{core:dl.output.file}}','filename':'{{core:dl.output.file.name}}'} → " +
             "<a href=\"{{href}}\" download=\"{{filename}}\">Download</a>. Why this works: " +
-            "the FileRef is rewritten to an opaque `/api/proxy/files/by-id/{id}/raw?disposition=inline&token=…` " +
+            "the FileRef is rewritten to an opaque `/api/proxy/files/by-id/{id}/raw?disposition=inline` " +
             "URL (no tenant id / s3 key; or the HMAC-signed equivalent for marketplace/share preview), and the HTML " +
             "`download` attribute on `<a>` forces the browser to save the bytes instead of " +
             "navigating - same-origin URLs honour it even when the server returns " +

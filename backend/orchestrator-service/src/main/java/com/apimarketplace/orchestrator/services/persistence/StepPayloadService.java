@@ -1,5 +1,7 @@
 package com.apimarketplace.orchestrator.services.persistence;
 
+import com.apimarketplace.common.classification.DataSensitivity;
+import com.apimarketplace.common.classification.RestrictedDataPolicy;
 import com.apimarketplace.common.storage.exception.QuotaExceededException;
 import com.apimarketplace.common.storage.exception.StorageSerializationException;
 import com.apimarketplace.common.storage.service.StorageService;
@@ -12,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -201,6 +204,43 @@ public class StepPayloadService {
         String stepKey = buildStepKey(stepId, stepAliasOrId);
         String runId = execution.getRunId();
 
+        // LC-066: a step whose catalog tool reads Google restricted-scope data (Gmail, Drive)
+        // is tagged RESTRICTED, which bounds its retention (StorageService) and makes it
+        // subject to the hard-delete sweep. The output metadata names the integration
+        // (iconSlug, stamped per API by the catalog); the tool reference is a second witness.
+        //
+        // Run-level taint: once a run holds restricted data, every later payload of that run is
+        // restricted too. A transform, code or agent step downstream of a Gmail step carries the
+        // same content under a different node type, and following individual values through
+        // templates is not something this layer can do reliably. Over-classifying costs a
+        // shorter retention; under-classifying leaves Gmail content outside every control.
+        DataSensitivity sensitivity = isTriggerStepId(stepId) || isTriggerStepId(result.stepId())
+                ? classifyTriggerOutput(result)
+                : classify(result, toolIdOpt.orElse(stepId));
+        if (!sensitivity.isRestricted() && isRunRestricted(runId)) {
+            sensitivity = DataSensitivity.RESTRICTED;
+        }
+        if (sensitivity.isRestricted()) {
+            rememberRestrictedRun(runId);
+            StepPayloadResult stored = saveWithRetry(stepId, runId, () -> storageService.saveJsonWithContext(
+                    execution.getPlan().getTenantId(),
+                    payload,
+                    ExecutionConstants.CONTENT_TYPE_JSON,
+                    null,
+                    toolUuid,
+                    runId,
+                    stepKey,
+                    itemIndex != null ? itemIndex : 0,
+                    epoch,
+                    spawn,
+                    execution.getPlan().getId(),
+                    "STEP_OUTPUT",
+                    DataSensitivity.RESTRICTED
+            ));
+            markProducedFilesRestricted(execution.getPlan().getTenantId(), result, stepId);
+            return stored;
+        }
+
         return saveWithRetry(stepId, runId, () -> storageService.saveJsonWithContext(
                 execution.getPlan().getTenantId(),
                 payload,
@@ -215,6 +255,179 @@ public class StepPayloadService {
                 execution.getPlan().getId(),
                 "STEP_OUTPUT"
         ));
+    }
+
+    /** Runs known to hold restricted data. Positive-only: a run never becomes un-restricted. */
+    private final Map<String, Boolean> restrictedRuns = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<>(256, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > 10_000;
+                }
+            });
+
+    /**
+     * Marks a run as holding restricted data before any of its payloads is written: a fire that
+     * forwards restricted data from elsewhere (a child workflow fired by a restricted parent, a
+     * fire carrying {@code ReusableTriggerService.RESTRICTED_DATA_MARKER}) must be tagged from
+     * its first payload on. Held in this JVM only, so it must be called on the JVM that runs the
+     * fire; its first payload then lands tagged and the durable lookup answers for every pod.
+     */
+    public void markRunRestricted(String runId) {
+        rememberRestrictedRun(runId);
+    }
+
+    private void rememberRestrictedRun(String runId) {
+        if (runId != null) {
+            restrictedRuns.put(runId, Boolean.TRUE);
+        }
+    }
+
+    /**
+     * True when an earlier payload of this run was tagged RESTRICTED. Answered from the partial
+     * index on storage rows (V536), cached positively. A lookup failure answers false: the
+     * direct classification of the step itself still applies.
+     */
+    public boolean isRunRestricted(String runId) {
+        try {
+            return isRunRestrictedStrict(runId);
+        } catch (Exception e) {
+            logger.warn("Could not check whether run {} holds restricted data: {}", runId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Same answer as {@link #isRunRestricted(String)}, but a lookup failure propagates instead of
+     * answering false. For callers that copy a run's content out of its retention bounds (the
+     * marketplace showcase): there, an unknown answer must not read as "not restricted".
+     */
+    public boolean isRunRestrictedStrict(String runId) {
+        if (runId == null || runId.isBlank()) {
+            return false;
+        }
+        if (restrictedRuns.containsKey(runId)) {
+            return true;
+        }
+        // LC-066: the durable "restricted since" (V564) answers once the purge has deleted every
+        // restricted row of the run: the run still held restricted data.
+        if (storageService.runHoldsRestrictedData(runId) || storageService.runHasRecordedRestriction(runId)) {
+            rememberRestrictedRun(runId);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * LC-066: {@link #isRunRestrictedStrict}, scoped to one epoch (the showcase of a chosen epoch).
+     * The taint is run-level and only moves forward (every payload written after the run's first
+     * restricted one is restricted, whatever its epoch), so an epoch whose rows are all NORMAL was
+     * built before the run held any restricted data. Rows stored under epoch 0 count for every
+     * epoch: 0 is also the column's default, used by writes that do not know their epoch. A run
+     * known restricted by this JVM's marker but with no restricted row yet (its first restricted
+     * payload is being written) cannot be scoped and answers true. A lookup failure propagates.
+     */
+    public boolean isRunEpochRestrictedStrict(String runId, int epoch) {
+        if (runId == null || runId.isBlank()) {
+            return false;
+        }
+        java.util.Set<Integer> epochs = epoch == 0 ? java.util.Set.of(0) : java.util.Set.of(epoch, 0);
+        if (storageService.runEpochsHoldRestrictedData(runId, epochs)) {
+            return true;
+        }
+        // A run whose restricted rows were purged has a durable record (V564): its epochs are then
+        // judged by their own rows like any other, not as "first payload being written".
+        return restrictedRuns.containsKey(runId) && !storageService.runHoldsRestrictedData(runId)
+                && !storageService.runHasRecordedRestriction(runId);
+    }
+
+    /**
+     * LC-066: when this run first held restricted data: the earlier of its durable "restricted
+     * since" (V564, kept after the purge) and its oldest RESTRICTED row still present. Empty when
+     * neither exists (a run restricted only by this JVM's marker has none yet): unknown, never
+     * "clean". A lookup failure propagates.
+     */
+    public Optional<Instant> firstRestrictedPayloadAt(String runId) {
+        if (runId == null || runId.isBlank()) {
+            return Optional.empty();
+        }
+        return storageService.firstRestrictedDataAt(runId);
+    }
+
+    /**
+     * Sensitivity of a TRIGGER's output: only the tag the platform itself sets on it (a table load
+     * holding restricted rows). A trigger's other keys are its caller's payload - a public webhook,
+     * a form - so reading integration names from them ({@code "iconSlug": "gmail"}), or a tag the
+     * caller wrote, would let anyone restrict a production run for good. Forwarded restricted data
+     * reaches a run through {@code ReusableTriggerService.RESTRICTED_DATA_MARKER} instead, and
+     * inbound payloads are stripped of both.
+     */
+    static DataSensitivity classifyTriggerOutput(StepExecutionResult result) {
+        return result != null && result.output() != null
+                ? DataSensitivity.parse(result.output().get(DataSensitivity.CREDENTIAL_KEY))
+                : DataSensitivity.NORMAL;
+    }
+
+    /**
+     * Sensitivity of a step's output: RESTRICTED when its metadata or its tool reference names
+     * a restricted integration (see {@link RestrictedDataPolicy}).
+     */
+    static DataSensitivity classify(StepExecutionResult result, String toolReference) {
+        DataSensitivity fromOutput = result != null
+                ? RestrictedDataPolicy.fromToolMetadata(result.output())
+                : DataSensitivity.NORMAL;
+        return fromOutput.max(RestrictedDataPolicy.forToolReference(toolReference));
+    }
+
+    /**
+     * Classify-and-tag entry point for callers that write a JSON payload to storage OUTSIDE the
+     * normal step-output path and therefore cannot go through {@link #persistStepPayloadOutcome}
+     * (no {@link StepExecutionResult} to build one from) - namely a resumed signal's resolution
+     * output ({@code SignalResumeService}) and an interface action's submitted data
+     * ({@code InterfaceActionService}).
+     *
+     * <p>LC-066/LC-011 re-audit item 3: both of those used to call
+     * {@code storageService.saveJsonWithContext} directly with no sensitivity argument (implicit
+     * NORMAL, {@code expiresAt=null}), so a signal resolved in a restricted run - or a user
+     * echoing Gmail/Drive content back through an interface form - was retained forever with no
+     * tag. This method centralises the decision here rather than duplicating the run-taint +
+     * payload-metadata lookup in each caller.
+     *
+     * <p>RESTRICTED when either witness says so: the run already holds restricted data (same
+     * taint rule as every other payload path in this class - a later step of a restricted run is
+     * restricted too, even about an unrelated field), or the payload itself names a restricted
+     * integration in its own metadata (e.g. an interface action echoing a Gmail-sourced field
+     * back with its {@code iconSlug}).
+     *
+     * @param runId   the workflow run id, or null when unknown (treated as not-restricted)
+     * @param payload the JSON payload about to be written
+     */
+    public DataSensitivity classifySensitivityForRun(String runId, Map<String, Object> payload) {
+        if (RestrictedDataPolicy.fromToolMetadata(payload).isRestricted() || isRunRestricted(runId)) {
+            return DataSensitivity.RESTRICTED;
+        }
+        return DataSensitivity.NORMAL;
+    }
+
+    /**
+     * Files a restricted step produced (a Gmail attachment, a Drive download) are indexed by the
+     * catalog before the step returns, so they cannot be tagged at write time. Tag them here, on
+     * the same storage rows, so the retention sweep deletes their objects too. Best-effort: a
+     * failure is logged and never fails the step.
+     */
+    private void markProducedFilesRestricted(String tenantId, StepExecutionResult result, String stepId) {
+        try {
+            java.util.List<UUID> ids = new java.util.ArrayList<>();
+            for (String id : com.apimarketplace.orchestrator.domain.file.FileRefScanner.collectFileIds(result.output())) {
+                parseUuid(id).ifPresent(ids::add);
+            }
+            if (!ids.isEmpty()) {
+                int tagged = storageService.markRestricted(tenantId, ids, null);
+                logger.info("Tagged {} file(s) produced by restricted step {} as RESTRICTED", tagged, stepId);
+            }
+        } catch (Exception e) {
+            logger.warn("Could not tag the files produced by restricted step {}: {}", stepId, e.getMessage());
+        }
     }
 
     /**
@@ -359,15 +572,40 @@ public class StepPayloadService {
      * @return The storage UUID, or null if persistence failed
      */
     public UUID persistSkippedNodePayload(String tenantId, Map<String, Object> skipPayload, int epoch) {
+        return persistSkippedNodePayload(tenantId, skipPayload, epoch, null);
+    }
+
+    /**
+     * Persists payload for skipped nodes with explicit epoch and run id.
+     *
+     * <p>LC-066/CASA re-audit item 4: {@code runId} is consulted ONLY via
+     * {@link #isRunRestricted(String)} to tag the payload's {@link DataSensitivity} - a skip
+     * envelope records the skip reason and the node that caused the skip, which can quote a
+     * value evaluated from Gmail/Drive content when the branch was skipped BECAUSE of a
+     * restricted-run decision (same run-level taint as {@link #persistStepPayloadOutcome} and
+     * {@link #persistDecisionPayload}). {@code runId} is deliberately NOT stamped onto the
+     * storage row itself (unlike step-output rows): this payload has never been queryable by
+     * run/step key, and changing that correlation is out of scope for this fix.
+     *
+     * @param tenantId The tenant ID
+     * @param skipPayload The skip payload data
+     * @param epoch The trigger epoch number (0 = unset)
+     * @param runId The workflow run id, or null when unknown (treated as not-restricted)
+     * @return The storage UUID, or null if persistence failed
+     */
+    public UUID persistSkippedNodePayload(String tenantId, Map<String, Object> skipPayload, int epoch, String runId) {
         try {
+            DataSensitivity sensitivity = isRunRestricted(runId) ? DataSensitivity.RESTRICTED : DataSensitivity.NORMAL;
             return storageService.saveJsonWithContext(
                     tenantId,
                     skipPayload,
                     ExecutionConstants.CONTENT_TYPE_JSON,
                     null,
                     null, null, null, null, epoch,
+                    0,
                     null,
-                    "SKIPPED_NODE"
+                    "SKIPPED_NODE",
+                    sensitivity
             );
         } catch (QuotaExceededException quota) {
             logger.error("Storage quota exceeded persisting skipped node payload (tenant {}): {}",
@@ -413,6 +651,25 @@ public class StepPayloadService {
                     .findStep(stepAliasOrId != null ? stepAliasOrId : stepId)
                     .map(step -> step.id() != null ? step.id() : null);
             UUID toolUuid = toolIdOpt.flatMap(this::parseUuid).orElse(null);
+            if (isRunRestricted(runId)) {
+                // A decision's context snapshot quotes the values it evaluated, which in a
+                // restricted run can be Gmail content: same retention as the run's payloads.
+                return saveWithRetry(stepId, runId, () -> storageService.saveJsonWithContext(
+                        execution.getPlan().getTenantId(),
+                        extraMetadata,
+                        ExecutionConstants.CONTENT_TYPE_JSON,
+                        null,
+                        toolUuid,
+                        runId,
+                        stepKey,
+                        itemIndex != null ? itemIndex : 0,
+                        epoch,
+                        0,
+                        execution.getPlan().getId(),
+                        "DECISION",
+                        DataSensitivity.RESTRICTED
+                ));
+            }
             return saveWithRetry(stepId, runId, () -> storageService.saveJsonWithContext(
                     execution.getPlan().getTenantId(),
                     extraMetadata,
@@ -433,6 +690,27 @@ public class StepPayloadService {
         minimalPayload.put("_duration_ms", 0L);
         if (execution.getDisplayName() != null) {
             minimalPayload.put("_display_name", execution.getDisplayName());
+        }
+        // LC-066/CASA re-audit item 4: this branch was NOT gated on isRunRestricted, unlike its
+        // sibling above - a decision in a restricted run whose extraMetadata happened to be empty
+        // (no evaluated values to quote) still wrote a NORMAL-tagged, never-expiring row, breaking
+        // the run-level taint invariant every other payload path in this class upholds.
+        if (isRunRestricted(runId)) {
+            return saveWithRetry(stepId, runId, () -> storageService.saveJsonWithContext(
+                    execution.getPlan().getTenantId(),
+                    minimalPayload,
+                    ExecutionConstants.CONTENT_TYPE_JSON,
+                    null,
+                    null,
+                    runId,
+                    stepKey,
+                    itemIndex != null ? itemIndex : 0,
+                    epoch,
+                    0,
+                    execution.getPlan().getId(),
+                    "DECISION",
+                    DataSensitivity.RESTRICTED
+            ));
         }
         return saveWithRetry(stepId, runId, () -> storageService.saveJsonWithContext(
                 execution.getPlan().getTenantId(),
@@ -605,7 +883,7 @@ public class StepPayloadService {
         };
     }
 
-    private boolean isTriggerStepId(String stepId) {
+    private static boolean isTriggerStepId(String stepId) {
         return stepId != null && stepId.startsWith("trigger:");
     }
 

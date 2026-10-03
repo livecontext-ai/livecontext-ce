@@ -27,6 +27,7 @@ import { clearModelsCache } from '@/hooks/useModels';
 import { PublicationCard, PublicationCardSkeleton } from '@/components/marketplace/PublicationCard';
 import type { MarketplaceRefinements } from '@/lib/api/orchestrator/publication.service';
 import { samePageUrl, showSamePageUrl } from '@/lib/navigation/showSamePageUrl';
+import { urlEnum, urlNullable, urlString, useUrlSearchState, useUrlState } from '@/hooks/useUrlState';
 import { track } from '@/lib/analytics/analytics';
 import {
   CloudLinkExpiredNotice,
@@ -104,6 +105,8 @@ const RATING_PARAMS: Record<RatingFilter, string> = {
   rating3: 'min_3',
 };
 
+const VISIBILITY_FILTERS: readonly VisibilityFilter[] = ['all', 'public', 'private'];
+
 /** Query params cleared together by the "reset filters" action. */
 const REFINEMENT_PARAM_KEYS = ['rating', 'date', 'price'] as const;
 
@@ -137,6 +140,9 @@ const PAGE_SIZE = 24;
  * to `fallback`, and selecting the fallback drops the param entirely so the
  * canonical URL stays clean.
  */
+/** What a marketplace tab switch takes out of the address with it. */
+const MARKETPLACE_TAB_OWNED_KEYS = ['q', 'category', 'visibility'] as const;
+
 function useQueryParamState<T extends string>(
   key: string,
   allowed: readonly T[],
@@ -248,8 +254,13 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
   const [page, setPage] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string | undefined>();
+  // The search text and the category live in the URL like the refinements below, so a reload
+  // or a return from a publication reopens the grid that was on screen.
+  const [searchQuery, setSearchQuery] = useUrlSearchState('q');
+  const [categoryParam, setCategoryParam] = useUrlState<string | null>('category', null, {
+    codec: urlNullable(urlString),
+  });
+  const selectedCategory = categoryParam ?? undefined;
   // The studio shelf, a SECOND AXIS read straight off the URL rather than held in state: it is how
   // the studio surface links here, and it composes with whatever category is also selected. Kept out
   // of state so a shared link opens the same shelf the sender was looking at.
@@ -486,10 +497,10 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
   }, [remote, searchQuery, selectedCategory, refinements, t, displayFilter, studioOnly]);
 
   const handleCategoryChange = useCallback((categorySlug?: string) => {
-    setSelectedCategory(categorySlug);
+    setCategoryParam(categorySlug ?? null);
     setSearchQuery('');
     track('marketplace_filtered', { filter: 'category', value: categorySlug ?? null });
-  }, []);
+  }, [setCategoryParam, setSearchQuery]);
 
   // One tracked setter per refinement control: the value is a bounded option key.
   const trackFilter = useCallback((filter: string, value: string | null) => {
@@ -919,7 +930,9 @@ function MyPublicationsTab() {
   const [error, setError] = useState<string | null>(null);
   // Visibility filter - these are all the viewer's OWN publications, so Public / Private narrows by
   // marketplace visibility, mirroring /app/applications. `private` = everything not PUBLIC.
-  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>('all');
+  const [visibilityFilter, setVisibilityFilter] = useUrlState<VisibilityFilter>('visibility', 'all', {
+    codec: urlEnum(VISIBILITY_FILTERS),
+  });
 
   const fetchMyPublications = useCallback(async () => {
     setIsLoading(true);
@@ -1291,7 +1304,17 @@ function MarketplacePageContent({ remote = false }: { remote?: boolean }) {
   const studioOnly = marketplaceSearchParams.get('studio') === 'true';
   const marketplacePathname = usePathname();
   const router = useRouter();
-  const [requestedTab, setActiveTab] = useQueryParamState<MarketplaceTab>('tab', MARKETPLACE_TABS, 'explore');
+  // A tab is a step: Back returns to the one before it, as on every other tabbed page. It takes
+  // the search, the category and the visibility filter with it, which describe the tab being
+  // left. The refinements (type, sort, rating...) stay, as they always have.
+  const [requestedTab, setActiveTab] = useUrlState<MarketplaceTab>('tab', 'explore', {
+    codec: urlEnum(MARKETPLACE_TABS),
+    history: 'push',
+    clears: MARKETPLACE_TAB_OWNED_KEYS,
+  });
+  // Putting an address right is not a step: it replaces, so Back does not return to a tab
+  // the visitor may not open.
+  const [, correctTab] = useQueryParamState<MarketplaceTab>('tab', MARKETPLACE_TABS, 'explore');
 
   // Defensive: if the user signs out while on a private tab, or deep-links to
   // ?tab=mine without a session, snap back to Explore so we don't fire auth'd
@@ -1301,9 +1324,9 @@ function MarketplacePageContent({ remote = false }: { remote?: boolean }) {
 
   useEffect(() => {
     if (!isAuthenticated && requestedTab !== 'explore') {
-      setActiveTab('explore');
+      correctTab('explore');
     }
-  }, [isAuthenticated, requestedTab, setActiveTab]);
+  }, [isAuthenticated, requestedTab, correctTab]);
 
   return (
     <div className="flex-1 overflow-y-auto min-h-0">

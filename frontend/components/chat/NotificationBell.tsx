@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
-import { Bell, Bot, AppWindow, Workflow, Clock, Webhook, MessageSquare, FormInput, Zap, Trash2, ChevronLeft, ChevronRight, UserPlus, Table, Sparkles, BookOpen, Monitor, Share2, Copy, Check, ExternalLink, MessageCircle, MessagesSquare, FileText, Trophy, ClipboardList, KeyRound, Coins, Store } from 'lucide-react';
+import { Bell, Bot, AppWindow, Workflow, Clock, Webhook, MessageSquare, FormInput, Zap, Trash2, ChevronLeft, ChevronRight, UserPlus, Table, Sparkles, BookOpen, Monitor, Share2, Copy, Check, ExternalLink, MessageCircle, MessagesSquare, FileText, Trophy, ClipboardList, KeyRound, Coins, Store, UserRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { EpochStatusIcon } from '@/components/workflow/EpochStatusIcon';
@@ -1663,6 +1663,8 @@ function InboxRowIcon({ item }: { item: NotificationItem }) {
       return <Coins className={cls} aria-hidden="true" data-testid="inbox-subject-icon-BILLING" />;
     case 'PUBLICATION':
       return <Store className={cls} aria-hidden="true" data-testid="inbox-subject-icon-PUBLICATION" />;
+    case 'USER':
+      return <UserRound className={cls} aria-hidden="true" data-testid="inbox-subject-icon-USER" />;
     case 'BADGE':
       return (
         <Trophy
@@ -1763,6 +1765,10 @@ function notificationHref(item: NotificationItem): string {
       // preview. subjectId IS the publication id, and the preview route handles
       // every publication type (agents included).
       return `/app/marketplace/${item.subjectId}/preview`;
+    case 'USER':
+      // A new subscriber: open their profile. The id is derived and leads nowhere, so the
+      // handle carried in the payload is the only way there; none means the app home.
+      return item.profileHandle ? `/app/u/${encodeURIComponent(item.profileHandle)}` : '/app';
     case 'BADGE':
       // The trophy wall is a tab of the settings overview page, which reads the
       // active tab from `?tab=` on mount.

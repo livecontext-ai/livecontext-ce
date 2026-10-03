@@ -49,7 +49,7 @@ class ScheduleControllerPinGateTest {
     private static final String TENANT = "tenant-A";
 
     private ScheduleController controller() {
-        return new ScheduleController(triggerClient, scheduleExecutorService, workflowRepository, true);
+        return new ScheduleController(triggerClient, scheduleExecutorService, workflowRepository, null, true);
     }
 
     @Test

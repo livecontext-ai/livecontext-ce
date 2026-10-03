@@ -83,3 +83,23 @@ describe('classifyAgentError: codes', () => {
     expect(classifyAgentError(null)).toBe('unknown');
   });
 });
+
+// CASA LC-004: Gmail / Drive data refused for a provider outside the allow-list. The fix is to
+// switch provider, so it is its own kind, whatever code the refusal arrives with. It used to be
+// explained by the chat error banner, which no longer exists.
+describe('classifyAgentError: restricted-data refusal', () => {
+  const refusal =
+    "Agent execution error: RESTRICTED_DATA_PROVIDER_NOT_ALLOWED: Data from Gmail or Google Drive cannot be sent to the model provider 'deepseek'.";
+
+  it('classifies the stream refusal as restrictedData, not as a provider rejection', () => {
+    expect(classifyAgentError(refusal, 'STREAM_ERROR')).toBe('restrictedData');
+  });
+
+  it('keeps that kind when the refusal ended a send (never a generic send failure)', () => {
+    expect(classifyAgentError('RESTRICTED_DATA_PROVIDER_NOT_ALLOWED', SEND_FAILED_CODE)).toBe('restrictedData');
+  });
+
+  it('matches the exact token only: a lowercase mention is not a refusal', () => {
+    expect(classifyAgentError('restricted_data_provider_not_allowed', 'STREAM_ERROR')).not.toBe('restrictedData');
+  });
+});

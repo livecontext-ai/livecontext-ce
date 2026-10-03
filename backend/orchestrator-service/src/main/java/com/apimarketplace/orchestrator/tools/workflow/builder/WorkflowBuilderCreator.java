@@ -6,6 +6,7 @@ import com.apimarketplace.orchestrator.tools.workflow.builder.creators.ClassifyC
 import com.apimarketplace.orchestrator.tools.workflow.builder.creators.ControlNodeCreator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.creators.GuardrailCreator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.creators.McpCreator;
+import com.apimarketplace.orchestrator.tools.workflow.builder.creators.NoteCreator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.creators.TableCreator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.creators.TriggerCreator;
 import lombok.RequiredArgsConstructor;
@@ -47,6 +48,7 @@ public class WorkflowBuilderCreator {
     private final ControlNodeCreator coreCreator;
     private final GuardrailCreator guardrailCreator;
     private final ClassifyCreator classifyCreator;
+    private final NoteCreator noteCreator;
 
     // ==================== Node Types ====================
 
@@ -323,6 +325,16 @@ public class WorkflowBuilderCreator {
      */
     public ToolExecutionResult executeAddDataInput(WorkflowBuilderSession session, Map<String, Object> parameters) {
         return coreCreator.executeAddDataInput(session, parameters);
+    }
+
+    // ==================== Add Note ====================
+
+    /**
+     * Execute add_node type='note': a canvas annotation, optionally attached to one node.
+     * Delegates to NoteCreator.
+     */
+    public ToolExecutionResult executeAddNote(WorkflowBuilderSession session, Map<String, Object> parameters) {
+        return noteCreator.executeAddNote(session, parameters);
     }
 
     // ==================== Add Interface ====================

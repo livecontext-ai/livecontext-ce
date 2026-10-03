@@ -12,6 +12,7 @@ import {
 } from '@/lib/interfaces/interfaceViewerBus';
 import { CreateInterfaceModal } from '@/components/chat/CreateInterfaceModal';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
+import { urlPageIndex, useUrlState } from '@/hooks/useUrlState';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { useState, useEffect, useCallback } from 'react';
 import { orchestratorApi } from '@/lib/api';
@@ -89,7 +90,9 @@ export default function InterfaceDetailPage({ params }: { params: Promise<{ id: 
 
   // Render data for interfaces with datasource
   const [renderResult, setRenderResult] = useState<RenderResult | null>(null);
-  const [currentPage, setCurrentPage] = useState(0);
+  // Which item of the datasource is on screen (0 = newest), kept in the address so a reload
+  // reopens the same one.
+  const [currentPage, setCurrentPage] = useUrlState('page', 0, { codec: urlPageIndex });
   const [isResolvingData, setIsResolvingData] = useState(false);
 
   // Fetch interface data
@@ -168,18 +171,24 @@ export default function InterfaceDetailPage({ params }: { params: Promise<{ id: 
   const totalItems = renderResult?.pagination?.totalItems || 0;
   const totalPages = renderResult?.pagination?.totalPages || 0;
 
+  // An address asking for an item past the last one (rows were deleted since) lands on the last.
+  // Only once the count is known: it is 0 until the first render answer arrives.
+  useEffect(() => {
+    if (totalPages > 0 && currentPage > totalPages - 1) setCurrentPage(totalPages - 1);
+  }, [totalPages, currentPage, setCurrentPage]);
+
   // Epoch nav: page 0 = newest. handleNewer decrements, handleOlder increments.
   const handleNewer = useCallback(() => {
     if (currentPage > 0) {
       setCurrentPage(prev => prev - 1);
     }
-  }, [currentPage]);
+  }, [currentPage, setCurrentPage]);
 
   const handleOlder = useCallback(() => {
     if (currentPage < totalPages - 1) {
       setCurrentPage(prev => prev + 1);
     }
-  }, [currentPage, totalPages]);
+  }, [currentPage, totalPages, setCurrentPage]);
 
   // Listen for edit event from AppHeader
   useEffect(() => {

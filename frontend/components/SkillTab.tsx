@@ -48,7 +48,7 @@ export function SkillTab({ className = '' }: SkillTabProps) {
     deleteFolder,
     moveFolder,
     moveSkill,
-  } = useSkillExplorer();
+  } = useSkillExplorer({ urlState: true });
 
   // V275/V276 (2026-05-21) - per-user override map. Effective active state
   // for a skill = `userOverrides[skill.id] ?? skill.isDefaultActive`.

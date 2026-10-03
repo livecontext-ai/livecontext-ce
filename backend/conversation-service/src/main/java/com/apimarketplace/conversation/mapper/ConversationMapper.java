@@ -31,6 +31,7 @@ public class ConversationMapper {
         dto.setProvider(conversation.getProvider());
         dto.setWorkflowId(conversation.getWorkflowId());
         dto.setAgentId(conversation.getAgentId());
+        dto.setTaskId(conversation.getTaskId());
         dto.setParentConversationId(conversation.getParentConversationId());
         dto.setActive(conversation.getActive());
         dto.setCreatedAt(conversation.getCreatedAt());

@@ -17,7 +17,8 @@ import java.util.Map;
  * Public authentication endpoints: JWKS for JWT validation and a simple authorize stub.
  */
 @RestController
-@CrossOrigin(origins = "*")
+// No @CrossOrigin (LC-033): CORS is decided centrally (gateway CorsConfig). A per-controller
+// wildcard would widen the origin set for any request reaching this service directly.
 public class AuthController {
 
     private static final Logger logger = LoggerFactory.getLogger(AuthController.class);

@@ -12,6 +12,8 @@ public class ApiKeyResponse {
     private String maskedApiKey;    // hint: "lc_live_...a1b2"
     private LocalDateTime createdAt;
     private boolean active;
+    /** When the key stops working; null = never (only possible before V531). */
+    private LocalDateTime expiresAt;
 
     public ApiKeyResponse() {}
 
@@ -26,4 +28,7 @@ public class ApiKeyResponse {
 
     public boolean isActive() { return active; }
     public void setActive(boolean active) { this.active = active; }
+
+    public LocalDateTime getExpiresAt() { return expiresAt; }
+    public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }
 }

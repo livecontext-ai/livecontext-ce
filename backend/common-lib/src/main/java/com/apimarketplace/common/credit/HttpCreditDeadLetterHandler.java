@@ -1,5 +1,6 @@
 package com.apimarketplace.common.credit;
 
+import com.apimarketplace.common.web.InternalGatewaySigner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
@@ -7,6 +8,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.RestTemplate;
 
+import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -26,12 +28,23 @@ public class HttpCreditDeadLetterHandler implements CreditDeadLetterHandler {
 
     private static final Logger log = LoggerFactory.getLogger(HttpCreditDeadLetterHandler.class);
 
+    /** Provider id the forward is signed with (auth-service can HMAC-gate /api/internal/auth/). */
+    static final String INTERNAL_PROVIDER_ID = "internal-credit-dead-letter";
+
     private final RestTemplate restTemplate;
     private final String deadLetterServiceUrl;
+    private final String gatewaySecretKey;
 
+    /** Unsigned: tests and deployments whose auth-service verifies nothing. */
     public HttpCreditDeadLetterHandler(RestTemplate restTemplate, String deadLetterServiceUrl) {
+        this(restTemplate, deadLetterServiceUrl, null);
+    }
+
+    public HttpCreditDeadLetterHandler(RestTemplate restTemplate, String deadLetterServiceUrl,
+                                       String gatewaySecretKey) {
         this.restTemplate = restTemplate;
         this.deadLetterServiceUrl = deadLetterServiceUrl;
+        this.gatewaySecretKey = gatewaySecretKey;
     }
 
     @Override
@@ -72,9 +85,11 @@ public class HttpCreditDeadLetterHandler implements CreditDeadLetterHandler {
             if (organizationId != null && !organizationId.isBlank()) {
                 headers.set("X-Organization-ID", organizationId);
             }
-            restTemplate.postForEntity(
-                    deadLetterServiceUrl + "/api/internal/auth/credit/dead-letter",
-                    new HttpEntity<>(body, headers), Void.class);
+            String url = deadLetterServiceUrl + "/api/internal/auth/credit/dead-letter";
+            // Signed last, over the headers actually sent (v1, then v2 over method and URI).
+            InternalGatewaySigner.stamp(headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
+            InternalGatewaySigner.stampV2(headers, "POST", URI.create(url), gatewaySecretKey);
+            restTemplate.postForEntity(url, new HttpEntity<>(body, headers), Void.class);
             log.warn("Dead-letter entry forwarded to auth-service for tenant={}, source={}/{}, org={}",
                     tenantId, sourceType, sourceId, organizationId);
         } catch (Exception e) {

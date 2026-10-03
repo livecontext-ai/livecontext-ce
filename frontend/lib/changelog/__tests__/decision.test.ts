@@ -13,6 +13,8 @@ describe('decideChangelog', () => {
     publishedAt: '2026-09-07',
     media: null,
     learnMoreUrl: '/changelog',
+    copy: 'latest',
+    action: null,
   };
 
   const state = (over: Partial<ChangelogServerState> = {}): ChangelogServerState => ({

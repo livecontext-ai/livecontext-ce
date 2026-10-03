@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.controllers.interfaces;
 
+import com.apimarketplace.common.web.ShareContextResourceBinding;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.orchestrator.services.InterfaceRenderService;
 import com.apimarketplace.orchestrator.services.InterfaceRenderService.InterfaceRenderResult;
@@ -44,6 +45,17 @@ public class InterfaceController {
      * preview, screenshot worker, runtime InterfaceNode) go through the
      * /showcase-render path and InterfaceRenderService directly, NOT
      * this controller.
+     *
+     * <p>CASA LC-037 follow-up - added an interface-membership gate for share-context
+     * callers. This is the ONE render endpoint an APPLICATION share token can reach
+     * (gateway/CE allow-list: {@code interfaces/{uuid}(/render)?}); the run-ownership
+     * gate above only proves {@code runId} is the shared publication's own run, not
+     * that the path {@code id} (interface) belongs to that run's plan at all. Without
+     * this, a share holder could pair the shared runId with ANY other interface UUID
+     * the owner ever built and get it rendered. Scoped to share-context requests only
+     * (see {@link ShareContextResourceBinding}) so non-share callers - e.g. the builder
+     * previewing a draft interface not yet saved into the plan - are unaffected. Fails
+     * closed (404) on a non-APPLICATION share, a lookup failure, or no match.
      */
     @GetMapping("/{id}/render")
     public ResponseEntity<InterfaceRenderResult> renderInterface(
@@ -58,6 +70,8 @@ public class InterfaceController {
 
         String tenantId = tenantResolver.resolveOrNull(request);
         String organizationId = request.getHeader("X-Organization-ID");
+        // Under a share link this also binds the interface to the shared run / application
+        // (CASA LC-037): an interface outside it answers 404, like an unknown one.
         if (!interfaceRenderService.callerCanRenderInterface(id, runId, tenantId, organizationId)) {
             return ResponseEntity.notFound().build();
         }

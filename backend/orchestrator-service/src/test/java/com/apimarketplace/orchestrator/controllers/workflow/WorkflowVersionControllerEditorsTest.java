@@ -210,6 +210,8 @@ class WorkflowVersionControllerEditorsTest {
         request.addHeader("X-Share-Resource-Token", sharedPublication.toString());
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         try {
+            // The share scope comes from the request above (X-Share-Resource-Token = the shared
+            // publication), which the workflow under test belongs to.
             ResponseEntity<?> response = controller.listVersions(WORKFLOW_ID_STR, TENANT_ID, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);

@@ -2,6 +2,7 @@ package com.apimarketplace.common.security.token;
 
 import com.apimarketplace.common.security.CredentialEncryptionService;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
@@ -77,6 +78,15 @@ public final class TokenAtRest {
         return service().hmacHash(plaintext);
     }
 
+    /**
+     * Every hash a stored row can carry for this plaintext (the current write form first, then the
+     * pre-v2 password-keyed form and the previous key generation). Lookups iterate these so rows
+     * hashed before a write-version flip or a key rotation keep resolving. Empty for null/blank.
+     */
+    public static List<String> hashCandidates(String plaintext) {
+        return service().hmacHashCandidates(plaintext);
+    }
+
     /** Ciphertext for the column. Already-encrypted input is returned unchanged. */
     public static String encrypt(String plaintext) {
         return service().encrypt(plaintext);
@@ -93,6 +103,16 @@ public final class TokenAtRest {
      */
     public static boolean isUsingEphemeralMaterial() {
         return service().isUsingEphemeralMaterial();
+    }
+
+    /** True when new writes use the v2 envelope and the HKDF lookup key (write-version 2). */
+    public static boolean isWritingV2() {
+        return service().isWritingV2();
+    }
+
+    /** True when the stored token must be re-sealed under the current key (see the service). */
+    public static boolean needsReencryption(String stored) {
+        return service().needsReencryption(stored);
     }
 
     /** @return true when the stored value carries the encrypted prefix. */
@@ -123,7 +143,13 @@ public final class TokenAtRest {
         if (plaintext == null || plaintext.isBlank()) {
             return Optional.empty();
         }
-        Optional<T> found = byHash.apply(hash(plaintext));
+        Optional<T> found = Optional.empty();
+        for (String candidate : hashCandidates(plaintext)) {
+            found = byHash.apply(candidate);
+            if (found.isPresent()) {
+                break;
+            }
+        }
         if (found.isEmpty()) {
             found = legacy.apply(plaintext);
         }

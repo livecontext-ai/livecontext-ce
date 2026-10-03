@@ -1,0 +1,5 @@
+# Test-only dependencies of the websearch-service pytest suite (ci.yml job
+# "Websearch Tests"). requirements-dev.txt is generated from this file by
+#   bash websearch-service/scripts/lock-requirements.sh
+pytest==9.1.1
+pytest-asyncio==1.4.0

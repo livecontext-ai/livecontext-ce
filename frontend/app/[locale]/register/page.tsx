@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowRight } from 'lucide-react';
 import { embeddedRegister } from '@/lib/providers/embedded-auth-provider';
 import { IS_CLOUD } from '@/lib/edition';
+import { MIN_PASSWORD_LENGTH } from '@/lib/auth/changePasswordOutcome';
 import { useAuth } from '@/lib/providers/smart-providers';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { AuthLayout } from '@/components/auth/AuthLayout';
@@ -14,9 +15,11 @@ import { apiClient } from '@/lib/api';
 import { CE_STATUS_API_PATH } from '@/components/security/onboardingStatus';
 import { isCeFirstRun, type CeFirstRunStatus } from '@/lib/auth/ceFirstRun';
 import { track } from '@/lib/analytics/analytics';
+import { safeReturnPath } from '@/lib/security/safeReturnPath';
 
 export default function RegisterPage() {
   const t = useTranslations('auth.register');
+  const tErrors = useTranslations('errors');
   const locale = useLocale();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -25,8 +28,9 @@ export default function RegisterPage() {
   // accept page (/invitations/accept?token=...) land back there after
   // signup. The backend onboarding hook will auto-accept the pending
   // invitation by email match, but the user still expects the accept
-  // page to confirm the join.
-  const returnTo = searchParams.get('returnTo') || `/${locale}/app/chat`;
+  // page to confirm the join. Untrusted query value: only a same-origin relative path
+  // survives (open-redirect guard).
+  const returnTo = safeReturnPath(searchParams.get('returnTo'), `/${locale}/app/chat`);
   const loginHref = `/${locale}/login?returnTo=${encodeURIComponent(returnTo)}`;
 
   const [firstName, setFirstName] = useState('');
@@ -57,6 +61,13 @@ export default function RegisterPage() {
     return () => { cancelled = true; };
   }, []);
 
+  // Cloud: as on the login page, a redirect to Keycloak that SETTLES did not leave the page (a
+  // failed one resolves null in react-oidc-context): show the error and a retry, not a spinner.
+  const startCloudSignIn = useCallback((explicit: boolean) => {
+    const notLeft = () => setError(tErrors('signInUnreachable'));
+    loginWithRedirect({ appState: { returnTo }, resetLoopGuards: explicit }).then(notLeft, notLeft);
+  }, [loginWithRedirect, returnTo, t]);
+
   useEffect(() => {
     if (!IS_CLOUD || isAuthLoading || redirectStartedRef.current) return;
     if (isAuthenticated) {
@@ -65,17 +76,14 @@ export default function RegisterPage() {
       return;
     }
     redirectStartedRef.current = true;
-    loginWithRedirect({ appState: { returnTo } }).catch(() => {
-      redirectStartedRef.current = false;
-      setError(t('error'));
-    });
-  }, [isAuthenticated, isAuthLoading, loginWithRedirect, returnTo, router, t]);
+    startCloudSignIn(false);
+  }, [isAuthenticated, isAuthLoading, returnTo, router, startCloudSignIn]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    if (password.length < 8) {
+    if (password.length < MIN_PASSWORD_LENGTH) {
       setError(t('passwordTooShort'));
       return;
     }
@@ -103,8 +111,17 @@ export default function RegisterPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[var(--bg-primary)] px-4">
         {error ? (
-          <div className="w-full max-w-sm rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3">
-            <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+          <div className="w-full max-w-sm space-y-3">
+            <div role="alert" className="rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3">
+              <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => { setError(''); startCloudSignIn(true); }}
+              className="inline-flex h-9 w-full items-center justify-center rounded-md border border-[var(--accent-primary)] bg-[var(--accent-primary)] px-4 text-sm font-medium text-[var(--accent-foreground)] transition-opacity hover:opacity-90"
+            >
+              {tErrors('retry')}
+            </button>
           </div>
         ) : (
           <LoadingSpinner size="lg" />

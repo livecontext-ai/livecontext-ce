@@ -406,7 +406,10 @@ public class NodeDescriptionBuilder {
             modifiableFields.put("items", new ModifiableField(items, "items",
                 "Expression returning array to iterate: {{mcp:x.output.items}}"));
             modifiableFields.put("maxItems", new ModifiableField(maxItems, "maxItems",
-                "Max items to process in parallel"));
+                "Max items to process in parallel - defaults to 100, and "
+                    + com.apimarketplace.orchestrator.execution.v2.split.SplitNodeExecutor.SPLIT_HARD_CEILING
+                    + " is the highest value accepted. Items beyond maxItems are not processed; "
+                    + "a list above the ceiling with no maxItems fails the run instead of being truncated."));
             helpTopic = "split";
         } else if ("merge".equals(type)) {
             config.put("behavior", "AND mode - waits for ALL predecessors to complete");

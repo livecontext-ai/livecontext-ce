@@ -46,6 +46,7 @@ class WorkflowRunQueryControllerTest {
     @Mock private StorageService storageService;
     @Mock private com.apimarketplace.orchestrator.repository.WorkflowEpochRepository workflowEpochRepository;
     @Mock private com.apimarketplace.orchestrator.services.ApplicationRunVersionBatchService applicationRunVersionBatchService;
+    @Mock private com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private WorkflowRunQueryController controller;
@@ -64,7 +65,8 @@ class WorkflowRunQueryControllerTest {
             storageService,
             objectMapper,
             workflowEpochRepository,
-            applicationRunVersionBatchService
+            applicationRunVersionBatchService,
+            orgAccessGuard
         );
     }
 
@@ -205,7 +207,7 @@ class WorkflowRunQueryControllerTest {
     void returnsNotFoundWhenRunMissing() {
         when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.empty());
 
-        ResponseEntity<?> response = controller.getStatusCounts(RUN_ID, TENANT_ID, null);
+        ResponseEntity<?> response = controller.getStatusCounts(RUN_ID, TENANT_ID, null, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
@@ -224,7 +226,7 @@ class WorkflowRunQueryControllerTest {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
             stubEpochCountsEmpty();
 
-            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null));
+            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null));
             assertThat(body).containsKeys("runId", "status", "epoch", "nodes", "edges", "updatedAt");
             assertThat(body.get("runId")).isEqualTo(RUN_ID);
             assertThat(body.get("status")).isEqualTo("WAITING_TRIGGER");
@@ -249,7 +251,7 @@ class WorkflowRunQueryControllerTest {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
             stubEpochCountsEmpty();
 
-            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null));
+            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null));
             assertThat(body).containsKey("dagEpochs");
             @SuppressWarnings("unchecked")
             Map<String, Object> returnedDagEpochs = (Map<String, Object>) body.get("dagEpochs");
@@ -265,7 +267,7 @@ class WorkflowRunQueryControllerTest {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
             stubEpochCountsEmpty();
 
-            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null));
+            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null));
             assertThat(body).doesNotContainKey("dagEpochs");
         }
     }
@@ -288,7 +290,7 @@ class WorkflowRunQueryControllerTest {
                 "step1", Map.of("completed", 3L)
             ));
 
-            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             assertThat(nodes.get("webhook1").get("completed")).isEqualTo(3L);
             assertThat(nodes.get("step1").get("completed")).isEqualTo(3L);
@@ -308,7 +310,7 @@ class WorkflowRunQueryControllerTest {
                 "api_call", Map.of("completed", 1L)
             ));
 
-            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null));
+            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null));
             assertThat(body.get("epoch")).isEqualTo(0);
 
             Map<String, Map<String, Long>> nodes = getNodes(body);
@@ -327,7 +329,7 @@ class WorkflowRunQueryControllerTest {
                 "api_call", Map.of("completed", 5L, "failed", 2L, "running", 1L)
             ));
 
-            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
             assertThat(nodes.get("api_call")).containsEntry("completed", 5L);
             assertThat(nodes.get("api_call")).containsEntry("failed", 2L);
             assertThat(nodes.get("api_call")).containsEntry("running", 1L);
@@ -342,7 +344,7 @@ class WorkflowRunQueryControllerTest {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
             stubEpochCountsEmpty();
 
-            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
             assertThat(nodes).isEmpty();
         }
 
@@ -374,7 +376,7 @@ class WorkflowRunQueryControllerTest {
                 "step_b", Map.of("completed", 1L)
             ));
 
-            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             assertThat(nodes.get("webhook1").get("completed")).isEqualTo(2L);
             assertThat(nodes.get("step_a").get("completed")).isEqualTo(2L);
@@ -402,7 +404,7 @@ class WorkflowRunQueryControllerTest {
                 "webhook2", Map.of("completed", 1L)
             ));
 
-            controller.getStatusCounts(RUN_ID, TENANT_ID, null);
+            controller.getStatusCounts(RUN_ID, TENANT_ID, null, null);
 
             verify(workflowEpochService).getAccumulatedCounts(RUN_ID);
         }
@@ -432,7 +434,7 @@ class WorkflowRunQueryControllerTest {
                 "trigger:webhook1->mcp:step1", Map.of("completed", 2L)
             ));
 
-            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
             assertThat(edges).containsKey("trigger:webhook1->mcp:step1");
             assertThat(edges.get("trigger:webhook1->mcp:step1").get("completed")).isEqualTo(2L);
         }
@@ -461,7 +463,7 @@ class WorkflowRunQueryControllerTest {
                 "mcp:step1->interface:user_form", Map.of("completed", 2L)
             ));
 
-            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null));
+            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null));
             Map<String, Map<String, Long>> nodes = getNodes(body);
             Map<String, Map<String, Long>> edges = getEdges(body);
 
@@ -506,7 +508,7 @@ class WorkflowRunQueryControllerTest {
                 "core:sharedmerge->core:echo", Map.of("completed", 5L)
             ));
 
-            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             // Regression: manuala edge MUST NOT appear with target merge node's count.
             assertThat(edges)
@@ -539,7 +541,7 @@ class WorkflowRunQueryControllerTest {
                 "trigger:webhook1->mcp:step1", Map.of("completed", 1L)
             ));
 
-            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             assertThat(edges).containsKey("trigger:webhook1->mcp:step1");
             assertThat(edges).doesNotContainKey("trigger:webhook1->mcp:step2");
@@ -567,7 +569,7 @@ class WorkflowRunQueryControllerTest {
                 "trigger:my_webhook->mcp:step_one", Map.of("completed", 2L)
             ));
 
-            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
             assertThat(edges).containsKey("trigger:my_webhook->mcp:step_one");
             assertThat(edges.get("trigger:my_webhook->mcp:step_one").get("completed")).isEqualTo(2L);
         }
@@ -593,7 +595,7 @@ class WorkflowRunQueryControllerTest {
                 "agent:classifier:category_1->mcp:dispatch", Map.of("completed", 1L)
             ));
 
-            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             assertThat(edges.get("agent:classifier->mcp:dispatch").get("completed")).isEqualTo(3L);
         }
@@ -606,7 +608,7 @@ class WorkflowRunQueryControllerTest {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
             stubEpochCountsEmpty();
 
-            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> edges = getEdges(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
             assertThat(edges).isEmpty();
         }
     }
@@ -635,7 +637,7 @@ class WorkflowRunQueryControllerTest {
                 "user_form", Map.of("completed", 3L)
             ));
 
-            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             assertThat(nodes.get("user_form").get("completed")).isEqualTo(3L);
             assertThat(nodes.get("step1").get("completed")).isEqualTo(3L);
@@ -660,7 +662,7 @@ class WorkflowRunQueryControllerTest {
                 "my_note", Map.of("completed", 2L)
             ));
 
-            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             assertThat(nodes.get("webhook1").get("completed")).isEqualTo(2L);
             assertThat(nodes.get("api_call").get("completed")).isEqualTo(2L);
@@ -699,7 +701,7 @@ class WorkflowRunQueryControllerTest {
                 "form_b", Map.of("completed", 1L)
             ));
 
-            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             assertThat(nodes.get("form_a").get("completed")).isEqualTo(2L);
             assertThat(nodes.get("form_b").get("completed")).isEqualTo(1L);
@@ -719,7 +721,7 @@ class WorkflowRunQueryControllerTest {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
             stubEpochCounts(Map.of("webhook1", Map.of("completed", 1L)));
 
-            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null));
+            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null));
             assertThat(body).doesNotContainKey("dagEpochs");
             verify(workflowEpochService).getAccumulatedCounts(RUN_ID);
         }
@@ -732,7 +734,7 @@ class WorkflowRunQueryControllerTest {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
             stubEpochCountsEmpty();
 
-            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null));
+            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null));
             assertThat(body.get("epoch")).isEqualTo(0);
         }
 
@@ -750,7 +752,7 @@ class WorkflowRunQueryControllerTest {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
             stubEpochCounts(Map.of("webhook1", Map.of("completed", 3L)));
 
-            controller.getStatusCounts(RUN_ID, TENANT_ID, null);
+            controller.getStatusCounts(RUN_ID, TENANT_ID, null, null);
 
             verify(workflowEpochService).getAccumulatedCounts(RUN_ID);
         }
@@ -763,7 +765,7 @@ class WorkflowRunQueryControllerTest {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
             stubEpochCountsEmpty();
 
-            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null));
+            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null));
             assertThat(body.get("epoch")).isEqualTo(0);
         }
 
@@ -777,7 +779,7 @@ class WorkflowRunQueryControllerTest {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
             stubEpochCountsEmpty();
 
-            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null));
+            Map<String, Object> body = getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null));
             assertThat(body.get("epoch")).isEqualTo(0);
         }
     }
@@ -804,7 +806,7 @@ class WorkflowRunQueryControllerTest {
                 "step_a", Map.of("completed", 1L)
             ));
 
-            ResponseEntity<?> response = controller.getStatusCounts(RUN_ID, TENANT_ID, null);
+            ResponseEntity<?> response = controller.getStatusCounts(RUN_ID, TENANT_ID, null, null);
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 
             Map<String, Map<String, Long>> nodes = getNodes(getBody(response));
@@ -824,7 +826,7 @@ class WorkflowRunQueryControllerTest {
             when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
             stubEpochCountsEmpty();
 
-            controller.getStatusCounts(RUN_ID, TENANT_ID, null);
+            controller.getStatusCounts(RUN_ID, TENANT_ID, null, null);
 
             verify(workflowEpochService).getAccumulatedCounts(RUN_ID);
         }
@@ -861,7 +863,7 @@ class WorkflowRunQueryControllerTest {
                 "classifier", Map.of("completed", 1L)
             ));
 
-            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             assertThat(nodes.get("webhook1").get("completed")).isEqualTo(3L);
             assertThat(nodes.get("api1").get("completed")).isEqualTo(2L);
@@ -889,7 +891,7 @@ class WorkflowRunQueryControllerTest {
                 "step1", Map.of("completed", 3L)
             ));
 
-            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             assertThat(nodes.get("webhook1").get("completed")).isEqualTo(3L);
             assertThat(nodes.get("step1").get("completed")).isEqualTo(3L);
@@ -907,7 +909,7 @@ class WorkflowRunQueryControllerTest {
 
             stubEpochCountsEmpty();
 
-            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             assertThat(nodes).isEmpty();
             verify(workflowEpochService).getAccumulatedCounts(RUN_ID);
@@ -928,7 +930,7 @@ class WorkflowRunQueryControllerTest {
                 "step1", Map.of("completed", 2L, "failed", 1L)
             ));
 
-            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null)));
+            Map<String, Map<String, Long>> nodes = getNodes(getBody(controller.getStatusCounts(RUN_ID, TENANT_ID, null, null)));
 
             assertThat(nodes.get("webhook1").get("completed")).isEqualTo(3L);
             assertThat(nodes.get("step1").get("completed")).isEqualTo(2L);
@@ -944,7 +946,7 @@ class WorkflowRunQueryControllerTest {
         @DisplayName("empty workflowIds returns {} without touching the service")
         void emptyReturnsEmpty() {
             ResponseEntity<Map<String, com.apimarketplace.orchestrator.controllers.dto.ApplicationRunVersionSummary>> resp =
-                controller.getApplicationRunVersionBatch(Map.of("workflowIds", List.of()), "user-1", "org-1");
+                controller.getApplicationRunVersionBatch(Map.of("workflowIds", List.of()), "user-1", "org-1", null);
             assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(resp.getBody()).isEmpty();
             org.mockito.Mockito.verifyNoInteractions(applicationRunVersionBatchService);
@@ -953,8 +955,8 @@ class WorkflowRunQueryControllerTest {
         @Test
         @DisplayName("missing or non-List workflowIds returns {}")
         void nonListReturnsEmpty() {
-            assertThat(controller.getApplicationRunVersionBatch(Map.of(), "user-1", "org-1").getBody()).isEmpty();
-            assertThat(controller.getApplicationRunVersionBatch(Map.of("workflowIds", "not-a-list"), "user-1", "org-1").getBody()).isEmpty();
+            assertThat(controller.getApplicationRunVersionBatch(Map.of(), "user-1", "org-1", null).getBody()).isEmpty();
+            assertThat(controller.getApplicationRunVersionBatch(Map.of("workflowIds", "not-a-list"), "user-1", "org-1", null).getBody()).isEmpty();
             org.mockito.Mockito.verifyNoInteractions(applicationRunVersionBatchService);
         }
 
@@ -962,7 +964,7 @@ class WorkflowRunQueryControllerTest {
         @DisplayName("all-malformed UUIDs short-circuit to {} (service not called)")
         void allMalformedReturnsEmpty() {
             ResponseEntity<Map<String, com.apimarketplace.orchestrator.controllers.dto.ApplicationRunVersionSummary>> resp =
-                controller.getApplicationRunVersionBatch(Map.of("workflowIds", List.of("not-a-uuid", "also-bad")), "user-1", "org-1");
+                controller.getApplicationRunVersionBatch(Map.of("workflowIds", List.of("not-a-uuid", "also-bad")), "user-1", "org-1", null);
             assertThat(resp.getBody()).isEmpty();
             org.mockito.Mockito.verifyNoInteractions(applicationRunVersionBatchService);
         }
@@ -980,7 +982,7 @@ class WorkflowRunQueryControllerTest {
                 .thenReturn(Map.of(wf, summary));
 
             ResponseEntity<Map<String, com.apimarketplace.orchestrator.controllers.dto.ApplicationRunVersionSummary>> resp =
-                controller.getApplicationRunVersionBatch(Map.of("workflowIds", Arrays.asList(wf.toString(), "garbage")), "user-1", "org-1");
+                controller.getApplicationRunVersionBatch(Map.of("workflowIds", Arrays.asList(wf.toString(), "garbage")), "user-1", "org-1", null);
 
             assertThat(resp.getBody()).containsOnlyKeys(wf.toString());
             assertThat(resp.getBody().get(wf.toString()).applicationRunId()).isEqualTo("run-9");

@@ -40,6 +40,17 @@ public class TriggerController {
     private final WorkflowRunRepository runRepository;
     private final ReusableTriggerService triggerService;
     private final WorkflowResumeService resumeService;
+    /**
+     * Intra-organization authorization (VIEWER read-only + the per-member per-resource
+     * deny-list). See {@link #scopeError} (LC-012, security audit 2026-08-13).
+     *
+     * <p>REQUIRED, matching every sibling that uses this guard (WorkflowCrudController,
+     * WorkflowVersionController, WorkflowExecutionController, StorageExplorerController). It was
+     * briefly optional so slim unit tests could construct the controller directly, which made
+     * the gate fail OPEN if the bean were ever missing: an authorization check that silently
+     * does not run is worse than no check, because the code reads as if it does. It is a
+     * constructor argument, so the context refuses to start without it.
+     */
     private final com.apimarketplace.auth.client.access.OrgAccessGuard orgAccessGuard;
 
     public TriggerController(WorkflowRunRepository runRepository,
@@ -130,7 +141,8 @@ public class TriggerController {
             @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         logger.info("[TriggerController] Chat trigger request for runId={}, message={}",
-                   runId, payload != null ? payload.get("message") : null);
+                   runId, com.apimarketplace.common.logging.PayloadLogSafety.describeText(payload != null && payload.get("message") != null
+                           ? String.valueOf(payload.get("message")) : null, 80));
 
         if (payload == null || !payload.containsKey("message")) {
             return ResponseEntity.badRequest().body(
@@ -207,11 +219,15 @@ public class TriggerController {
      * @param runId The public run ID
      * @return List of TriggerInfo objects
      */
+    // A READ: it does not go through the fire guard, but it does go through the READ gate
+    // (canReadRun): a member the owner deny-listed from the workflow must not enumerate its
+    // triggers either (LC-012, audit round 2). A VIEWER keeps reading.
     @GetMapping("/{runId}/triggers")
     public ResponseEntity<List<TriggerInfo>> getAvailableTriggers(
             @PathVariable("runId") String runId,
             @RequestHeader(value = "X-User-ID", required = false) String userId,
-            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
 
         logger.info("[TriggerController] Get available triggers for runId={}", runId);
 
@@ -230,6 +246,11 @@ public class TriggerController {
             logger.warn("[TriggerController] Cross-tenant/publication trigger list blocked: runId={} caller={} org={}",
                     runId, userId, orgId);
             return ResponseEntity.notFound().build();
+        }
+        if (!WorkflowControllerHelper.canReadRun(run, userId, orgRole, orgAccessGuard)) {
+            logger.warn("[TriggerController] OrgAccess denied: user {} (role={}) may not list triggers of run {} in org {}",
+                    userId, orgRole, runId, run.getOrganizationId());
+            return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN).build();
         }
 
         // 2. Don't surface triggers on terminal runs - the fire endpoints reject those
@@ -320,7 +341,7 @@ public class TriggerController {
 
         // 1a. Scope guard - the caller (or share visitor) must own this run (or be bound to
         // the shared application's publication). Closes a cross-tenant trigger-fire IDOR.
-        ResponseEntity<TriggerResponse> scopeError = scopeError(run, runId, userId, orgId);
+        ResponseEntity<TriggerResponse> scopeError = scopeError(run, runId, userId, orgId, orgRole);
         if (scopeError != null) {
             return scopeError;
         }
@@ -516,7 +537,7 @@ public class TriggerController {
      * fire on this run. Mirrors {@code InterfaceActionController.isCallerInRunScope}.
      */
     private ResponseEntity<TriggerResponse> scopeError(
-            WorkflowRunEntity run, String runId, String userId, String orgId) {
+            WorkflowRunEntity run, String runId, String userId, String orgId, String orgRole) {
         // isRunInScope enforces both the strict tenant/org scope AND the share binding
         // (shareContextPermitsRun). A cross-tenant caller or an unauthenticated request to a
         // real (tenant-tagged) run fails it -> 404 (hides existence), mirroring the sibling
@@ -526,6 +547,8 @@ public class TriggerController {
                     runId, userId, orgId);
             return ResponseEntity.notFound().build();
         }
+        // The caller's ROLE inside the workspace (LC-012: VIEWER read-only, member deny-list) is
+        // checked next by writeError, through RunWriteGate like every run-execution entry point.
         return null;
     }
 
@@ -563,7 +586,7 @@ public class TriggerController {
 
         // 1a. Scope guard - the caller (or share visitor) must own this run (or be bound to
         // the shared application's publication). Closes a cross-tenant trigger-fire IDOR.
-        ResponseEntity<TriggerResponse> scopeError = scopeError(run, runId, userId, orgId);
+        ResponseEntity<TriggerResponse> scopeError = scopeError(run, runId, userId, orgId, orgRole);
         if (scopeError != null) {
             return scopeError;
         }

@@ -2,6 +2,7 @@ package com.apimarketplace.interfaces.integration;
 
 import com.apimarketplace.common.storage.service.StorageBreakdownService;
 import com.apimarketplace.interfaces.client.OrchestratorCascadeClient;
+import com.apimarketplace.interfaces.client.OrchestratorInterfaceMembershipClient;
 import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -58,6 +59,21 @@ public class IntegrationTestConfig {
         OrchestratorCascadeClient mock = mock(OrchestratorCascadeClient.class);
         when(mock.stripInterfaceReferences(anyString(), anyString()))
                 .thenReturn(new OrchestratorCascadeClient.CascadeSummary(0, 0, 0));
+        return mock;
+    }
+
+    /**
+     * CASA LC-037 (gap 1) plan-membership check to orchestrator-service - same rationale as
+     * {@link #orchestratorCascadeClient}: orchestrator isn't running in the test harness, so the
+     * real client's HTTP call would fail and (fail-closed) deny every share-context interface
+     * read. Defaults permissive (true) so existing tests that DO exercise a share context are
+     * unaffected unless they explicitly stub a denial.
+     */
+    @Bean
+    @Primary
+    public OrchestratorInterfaceMembershipClient orchestratorInterfaceMembershipClient() {
+        OrchestratorInterfaceMembershipClient mock = mock(OrchestratorInterfaceMembershipClient.class);
+        when(mock.isReferencedByWorkflow(anyString(), anyString())).thenReturn(true);
         return mock;
     }
 }

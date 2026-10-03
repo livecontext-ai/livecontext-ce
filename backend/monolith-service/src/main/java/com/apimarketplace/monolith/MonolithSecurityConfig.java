@@ -3,9 +3,12 @@ package com.apimarketplace.monolith;
 import com.apimarketplace.auth.dto.UserResolutionResponse;
 import com.apimarketplace.auth.security.JwtKeyPairManager;
 import com.apimarketplace.auth.service.ApiKeyService;
+import com.apimarketplace.auth.service.CeSessionRevocationService;
 import com.apimarketplace.common.web.GatewayFilterProperties;
 import com.apimarketplace.common.web.MonolithSecurityFilter;
 import com.apimarketplace.publication.service.SharedLinkService;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -30,8 +33,13 @@ public class MonolithSecurityConfig {
     public MonolithSecurityFilter monolithSecurityFilter(GatewayFilterProperties properties,
                                                          JwtKeyPairManager keyPairManager,
                                                          SharedLinkService sharedLinkService,
-                                                         ApiKeyService apiKeyService) {
-        return new MonolithSecurityFilter(
+                                                         ApiKeyService apiKeyService,
+                                                         @Value("${auth.jwt.issuer:livecontext}") String jwtIssuer,
+                                                         @Value("${auth.jwt.audience:livecontext}") String jwtAudience,
+                                                         @Value("${auth.deny-by-default:false}") boolean denyByDefault,
+                                                         ObjectProvider<CeSessionRevocationService> sessionRevocation) {
+        CeSessionRevocationService sessions = sessionRevocation.getIfAvailable();
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
                 keyPairManager::getPublicKey,
                 properties.getPublicPaths(),
                 token -> sharedLinkService.getByToken(token)
@@ -65,6 +73,12 @@ public class MonolithSecurityConfig {
                     return new MonolithSecurityFilter.ApiKeyAuth(claims, resolved.getApiKeyScopes());
                 }
         );
+        // CASA LC-083 (iss + aud, same properties JwtTokenProvider signs with) and LC-015 (the
+        // token's login session must still be live, so logout / password change withdraw it).
+        filter.withTokenBinding(jwtIssuer, jwtAudience,
+                sessions != null ? sessions::isSessionActive : null);
+        // CASA LC-036: OFF by default this release, see MonolithSecurityFilter.withDenyByDefault.
+        return filter.withDenyByDefault(denyByDefault);
     }
 
     @Bean

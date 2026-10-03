@@ -1,6 +1,7 @@
 import type { PlanGeneratorContext } from './planGeneratorContext';
 import { getNodePosition } from './planHelpers';
 import { nodeRegistry } from '../registry/nodeRegistry';
+import { getNoteAnchor, nodeAnchorKey } from './noteAnchors';
 
 /**
  * Collects all note nodes and adds them to the plan.
@@ -14,8 +15,9 @@ export function collectNotes(ctx: PlanGeneratorContext): void {
       return;
     }
 
+    // A note not placed yet is still saved, without a position: the canvas places it
+    // next to its anchor (or above the graph) on the next load. Dropping it lost the text.
     const notePosition = getNodePosition(noteNode);
-    if (!notePosition) return;
 
     // Default styling values
     const defaultColor = '#fef3c7';
@@ -32,11 +34,21 @@ export function collectNotes(ctx: PlanGeneratorContext): void {
       textColor: noteNode.data.noteTextColor || defaultText,
       width: noteNode.data.noteWidth || defaultWidth,
       height: noteNode.data.noteHeight || defaultHeight,
-      position: notePosition,
     };
+    if (notePosition) {
+      note.position = notePosition;
+    }
 
     if (noteNode.data.label) {
       note.label = noteNode.data.label;
+    }
+
+    // The anchor is written as the node's CURRENT key, so a node renamed in the editor
+    // keeps its notes. A deleted anchor leaves a free note.
+    const anchor = getNoteAnchor(noteNode, ctx.nodes);
+    const anchorKey = anchor ? nodeAnchorKey(anchor) : null;
+    if (anchorKey) {
+      note.attachedTo = anchorKey;
     }
 
     if (!ctx.plan.notes) {

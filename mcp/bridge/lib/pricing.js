@@ -20,6 +20,8 @@
  * Claude Code turn (mostly cache reads) was projected at ~5x its real debit.
  */
 
+import { gatewaySignedHeaders, withGatewaySignatureV2 } from './gatewayAuth.mjs';
+
 // ─── Constants ──────────────────────────────────────────────────────────
 // Centralised tunables. Source of truth for rates: auth-service DB via
 // /api/internal/auth/pricing/snapshot. The fallback defaults below match
@@ -336,6 +338,31 @@ async function defaultFetcher(url) {
   const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
+}
+
+/** Provider id the snapshot read is signed with (Java twin: PricingSnapshotClient). */
+export const PRICING_SNAPSHOT_PROVIDER_ID = 'internal-pricing-snapshot-client';
+
+/**
+ * Snapshot fetcher that signs the request with the shared gateway HMAC (v1 headers plus the
+ * v2 signature over method and URL). auth-service can require that signature on its whole
+ * `/api/internal/auth/` prefix (`AUTH_INTERNAL_HMAC_REQUIRED_PATH`), and the bridge reads the
+ * snapshot directly, without the gateway. A blank secret sends the request unsigned, as the
+ * balance refresh does.
+ *
+ * @param {string} secretKey  `GATEWAY_SECRET_KEY`
+ * @param {typeof fetch} [fetchImpl]  override for tests
+ */
+export function signedSnapshotFetcher(secretKey, fetchImpl = (...args) => fetch(...args)) {
+  return async (url) => {
+    const headers = withGatewaySignatureV2(
+      { 'Accept': 'application/json',
+        ...gatewaySignedHeaders({ secretKey, providerId: PRICING_SNAPSHOT_PROVIDER_ID }) },
+      { secretKey, method: 'GET', url });
+    const res = await fetchImpl(url, { headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  };
 }
 
 /** Singleton - most callers want the shared cache. */

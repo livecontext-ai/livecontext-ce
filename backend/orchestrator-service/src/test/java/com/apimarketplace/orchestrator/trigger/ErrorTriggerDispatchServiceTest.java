@@ -410,6 +410,53 @@ class ErrorTriggerDispatchServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("LC-066: a failed run holding Gmail / Drive data restricts the handler's run")
+    class RestrictedFailedRun {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> dispatchAndCapturePayload(boolean failedRunRestricted) {
+            com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.persistence.StepPayloadService.class);
+            when(stepPayloadService.isRunRestricted(PARENT_RUN_ID)).thenReturn(failedRunRestricted);
+            org.springframework.test.util.ReflectionTestUtils.setField(service, "stepPayloadService", stepPayloadService);
+
+            WorkflowRunEntity parentRun = createParentRunEntity(buildPlanWithTrigger("manual", "start"));
+            when(runRepository.findById(PARENT_WORKFLOW_RUN_ID)).thenReturn(Optional.of(parentRun));
+            WorkflowEntity downstream = createDownstreamWorkflow();
+            when(triggerLookupService.findByErrorTrigger(PARENT_WORKFLOW_ID.toString())).thenReturn(List.of(downstream));
+            WorkflowRunEntity downstreamRun = createDownstreamRunEntity(
+                buildPlanWithTrigger("error", PARENT_WORKFLOW_ID.toString()));
+            when(runRepository.countByWorkflowIdAndStatus(DOWNSTREAM_WORKFLOW_ID, RunStatus.RUNNING)).thenReturn(0L);
+            stubActiveRun(downstreamRun);
+            when(triggerService.executeTrigger(eq(downstreamRun), any(), eq(TriggerType.ERROR), any()))
+                .thenReturn(TriggerExecutionResult.success(
+                    DOWNSTREAM_RUN_ID, "trigger:error_handler", TriggerType.ERROR, Set.of(), 1));
+
+            service.dispatchWorkflowFailure(createFailedExecution(RunStatus.FAILED));
+
+            ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
+            verify(triggerService).executeTrigger(eq(downstreamRun), any(), eq(TriggerType.ERROR), payload.capture());
+            return payload.getValue();
+        }
+
+        @Test
+        @DisplayName("regression: the error fire of a restricted run carries the restricted-data marker")
+        void restrictedFailedRunMarksTheHandlerFire() {
+            // The payload quotes the failed run (its error message, its failing step), which can
+            // be Gmail content: the handler's run must be restricted from its first payload on.
+            assertThat(dispatchAndCapturePayload(true))
+                .containsEntry(ReusableTriggerService.RESTRICTED_DATA_MARKER, Boolean.TRUE);
+        }
+
+        @Test
+        @DisplayName("an ordinary failed run's error fire carries no marker")
+        void ordinaryFailedRunCarriesNoMarker() {
+            assertThat(dispatchAndCapturePayload(false))
+                .doesNotContainKey(ReusableTriggerService.RESTRICTED_DATA_MARKER);
+        }
+    }
+
     /**
      * Run resolution moved from a hand-rolled repository lookup to
      * {@link ProductionRunResolver#resolveActiveRun}. These tests pin the SEAM: the

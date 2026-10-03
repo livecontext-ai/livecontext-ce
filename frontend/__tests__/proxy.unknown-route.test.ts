@@ -185,7 +185,7 @@ describe('proxy: everything that must keep working', () => {
       '/about', '/changelog', '/compare', '/compare/n8n-alternative', '/contact',
       '/docs', '/docs/workflows', '/integrations', '/integrations/slack',
       '/legal/terms', '/local-mcp', '/marketplace', '/marketplace/reconcile',
-      '/models', '/redeem', '/status', '/f/tok', '/s/tok', '/u/someone',
+      '/models', '/redeem', '/status', '/f/tok', '/offer/tok', '/s/tok', '/u/someone',
       '/w/embed/tok', '/workflows/builder', '/billing/success',
     ]) {
       expect(isNotFound(pathname), pathname).toBe(false);

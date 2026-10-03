@@ -9,7 +9,7 @@
 
 export type ChangePasswordOutcome =
   | 'mismatch'      // newPassword !== confirmPassword
-  | 'too_short'     // newPassword shorter than the 8-char minimum
+  | 'too_short'     // newPassword shorter than MIN_PASSWORD_LENGTH
   | 'success'       // backend accepted the change
   | 'wrong_current' // backend rejected the current password (HTTP 401)
   | 'error';        // any other failure (network, 4xx/5xx)
@@ -20,8 +20,11 @@ export interface PasswordChangeForm {
   confirmPassword: string;
 }
 
-/** Mirrors the backend's PasswordAuthService minimum (>= 8 characters). */
-export const MIN_PASSWORD_LENGTH = 8;
+/**
+ * Mirrors the backend's PasswordAuthService.MIN_PASSWORD_LENGTH (12 since CASA LC-084, was 8).
+ * The single frontend copy: register, invitation accept, reset and change password import it.
+ */
+export const MIN_PASSWORD_LENGTH = 12;
 
 /**
  * Validate the form, then (only if valid) call the backend and classify the result.

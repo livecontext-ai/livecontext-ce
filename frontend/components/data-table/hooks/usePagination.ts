@@ -5,6 +5,8 @@ import type { PaginationState } from '../types';
 
 export interface UsePaginationParams {
   initialPageSize?: number;
+  /** The page to start on (1-based), for a view restored from the address. */
+  initialPage?: number;
 }
 
 export interface UsePaginationReturn {
@@ -49,10 +51,11 @@ const DEFAULT_PAGE_SIZE = 50;
  * by the parent controller to maintain proper separation of concerns.
  */
 export function usePagination({
-  initialPageSize = DEFAULT_PAGE_SIZE
+  initialPageSize = DEFAULT_PAGE_SIZE,
+  initialPage = 1,
 }: UsePaginationParams = {}): UsePaginationReturn {
   const [pagination, setPagination] = useState<PaginationState>({
-    currentPage: 1,
+    currentPage: initialPage,
     pageSize: initialPageSize,
     totalItems: 0,
     totalPages: 0,

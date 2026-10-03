@@ -89,6 +89,13 @@ public class Conversation implements OrgScopedEntity, HashedTokenEntity {
     @Column(name = "parent_conversation_id")
     private String parentConversationId;
 
+    /**
+     * CASA LC-066 (V563): the delegated task whose RESTRICTED turns this conversation holds, so the
+     * agent's main conversation (task_id NULL) never stores them. NULL for every other conversation.
+     */
+    @Column(name = "task_id")
+    private String taskId;
+
     @NotNull
     @Column(name = "active", nullable = false)
     private Boolean active = true;
@@ -330,6 +337,14 @@ public class Conversation implements OrgScopedEntity, HashedTokenEntity {
 
     public void setParentConversationId(String parentConversationId) {
         this.parentConversationId = parentConversationId;
+    }
+
+    public String getTaskId() {
+        return taskId;
+    }
+
+    public void setTaskId(String taskId) {
+        this.taskId = taskId;
     }
 
     public Boolean getActive() {

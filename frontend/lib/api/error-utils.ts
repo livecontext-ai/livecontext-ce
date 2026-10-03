@@ -154,6 +154,33 @@ export function isModelNotSupportedError(error: unknown): boolean {
   return errorText(error).includes('MODEL_NOT_SUPPORTED');
 }
 
+/** Token every backend refusal to send Gmail / Google Drive data to a non-allowed LLM provider carries. */
+export const RESTRICTED_DATA_PROVIDER_CODE = 'RESTRICTED_DATA_PROVIDER_NOT_ALLOWED';
+
+/** Fields that may carry the token, directly or as a nested error payload. */
+const RESTRICTED_DATA_FIELDS = ['code', 'message', 'error', 'body', 'data', 'response', 'details'] as const;
+
+function containsRestrictedDataCode(value: unknown, depth: number): boolean {
+  if (value == null || depth > 4) return false;
+  if (typeof value === 'string') return value.includes(RESTRICTED_DATA_PROVIDER_CODE);
+  if (typeof value !== 'object') return false;
+  if (value instanceof Error && value.message?.includes(RESTRICTED_DATA_PROVIDER_CODE)) return true;
+  const o = value as Record<string, unknown>;
+  return RESTRICTED_DATA_FIELDS.some((field) => containsRestrictedDataCode(o[field], depth + 1));
+}
+
+/**
+ * The backend refused to send Gmail / Google Drive data to an LLM provider outside its
+ * allow-list. The refusal carries the {@link RESTRICTED_DATA_PROVIDER_CODE} token in every
+ * shape it reaches the UI: a chat stream error string ("Agent execution error: ..."), a
+ * persisted "[Error] ..." assistant message, a 403 JSON body `{code, message, provider}`
+ * (possibly nested under `response.data` / `body`), and a workflow node error message.
+ * Case-sensitive token match.
+ */
+export function isRestrictedDataRefusal(error: unknown): boolean {
+  return containsRestrictedDataCode(error, 0);
+}
+
 /** Machine token the cloud answers (HTTP 403 body or NDJSON error event) when a CE link's cloud account is not on a paid plan. */
 export const CLOUD_LINK_PLAN_REQUIRED_CODE = 'CLOUD_LINK_PLAN_REQUIRED';
 

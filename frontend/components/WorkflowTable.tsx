@@ -27,6 +27,9 @@ import { SelectionActionBar, BulkBarButton } from '@/components/ui/SelectionActi
 import { EmptyState } from '@/components/ui/EmptyState';
 import { CardSkeletonGrid } from '@/components/ui/CardSkeletonGrid';
 import { PaginationBar } from '@/components/ui/PaginationBar';
+import { useUrlListView } from '@/hooks/useUrlListView';
+import { useEffectOnChange } from '@/hooks/useEffectOnChange';
+import { urlList, useUrlState } from '@/hooks/useUrlState';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
@@ -75,22 +78,26 @@ export default function WorkflowTable({
   // Bumped on workspace switch to force a reload; the load effect keys on it (and the search term)
   // rather than on the fetch callback identity, so an unstable callback can never re-fire the load.
   const [reloadKey, setReloadKey] = useState(0);
-  const [searchQuery, setSearchQuery] = useState('');
+  // The list's view lives in the address, so a reload reopens it as it was.
+  const {
+    searchQuery, setSearchQuery, sortBy, setSortBy, visibilityFilter, setVisibilityFilter,
+    page, setPage, pageSize, setPageSize,
+  } = useUrlListView<ListSortKey>({
+    sortKeys: ['lastModified', 'lastExecuted', 'name', 'runCount'],
+    defaultSort: 'lastModified',
+    defaultPageSize: 25,
+  });
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
   // Default order = most-recently-modified first (preserves the list's long-standing ordering);
   // visibility filter = no restriction. Both are applied SERVER-SIDE over the whole tenant set,
   // so the browser loads only the page it shows (no fetch-all).
-  const [sortBy, setSortBy] = useState<ListSortKey>('lastModified');
-  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>('all');
   /**
    * Node-type filter (server-side, ANY-of) and the options offered for it. The
    * facets arrive with each page rather than from a call of their own, so the
    * counts can never describe a different set than the rows on screen.
    */
-  const [nodeTypeFilter, setNodeTypeFilter] = useState<string[]>([]);
+  const [nodeTypeFilter, setNodeTypeFilter] = useUrlState<string[]>('types', [], { codec: urlList() });
   const [nodeTypeFacets, setNodeTypeFacets] = useState<NodeTypeFacet[]>([]);
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
   const [totalCount, setTotalCount] = useState(0);
   // Monotonic id so only the latest page request applies its result (out-of-order guard).
   const requestIdRef = useRef(0);
@@ -214,7 +221,7 @@ export default function WorkflowTable({
 
   // Reset to page 0 when the search term, sort, or a filter changes - the visible set
   // differs so the current page index may be out of range.
-  useEffect(() => {
+  useEffectOnChange(() => {
     setPage(0);
   }, [debouncedSearch, sortBy, visibilityFilter, nodeTypeFilter, folders.folderIdParam]);
 
@@ -434,8 +441,11 @@ export default function WorkflowTable({
 
   // Snap back if the active page fell out of range (e.g. a last-page deletion narrowed the total).
   useEffect(() => {
-    if (!loading && page > 0 && page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
-  }, [loading, page, totalPages]);
+    // Not after a failed load: the count is 0 then because nothing came back, not because the
+    // list is empty, and snapping would erase from the address the very page a reload after a
+    // dropped connection is meant to come back to.
+    if (!loading && !error && page > 0 && page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
+  }, [loading, error, page, totalPages, setPage]);
 
   // Chargement initial + reload on search term / workspace switch. Keyed on the inputs (not the
   // fetch callback) so an unstable `fetchWorkflows` identity never triggers a render→fetch loop.

@@ -38,8 +38,9 @@ public class RemoteToolAggregationConfig {
 
     @Bean
     public RemoteToolGateway remoteToolGateway(AggregatedToolCatalog aggregatedToolCatalog,
-                                               ObjectMapper objectMapper) {
-        return new RemoteToolGateway(aggregatedToolCatalog, executionRestTemplate(), objectMapper);
+                                               ObjectMapper objectMapper,
+                                               @Value("${gateway.filter.secret-key:${GATEWAY_SECRET_KEY:}}") String gatewaySecretKey) {
+        return new RemoteToolGateway(aggregatedToolCatalog, executionRestTemplate(), objectMapper, gatewaySecretKey);
     }
 
     /** Short timeouts: a slow/dead sibling degrades to serve-stale instead of blocking tools/list. */

@@ -25,7 +25,8 @@ export type SubjectType =
   | 'BADGE'
   | 'AGENT'
   | 'BILLING'
-  | 'PUBLICATION';
+  | 'PUBLICATION'
+  | 'USER';
 
 /**
  * Single notification item - aggregated per (subjectId, category).
@@ -70,6 +71,8 @@ export interface NotificationItem {
    * icon and the `?tab=` deep-link on `/app/settings/public-access`.
    */
   triggerKind?: 'schedule' | 'webhook' | 'chat' | 'form' | null;
+  /** USER-only: the @handle of the person the row is about (a new subscriber). */
+  profileHandle?: string | null;
 }
 
 /**

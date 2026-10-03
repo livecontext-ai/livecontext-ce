@@ -356,7 +356,7 @@ public class StepByStepExecutor {
             Map<String, Object> inputData,
             Supplier<WorkflowRunState> stateSupplier,
             Supplier<WorkflowPlan> planRefresher) {
-        logger.info("Executing single step (step-by-step mode): {} for run: {}, inputData: {}", stepId, runId, inputData);
+        logger.info("Executing single step (step-by-step mode): {} for run: {}, inputData: {}", stepId, runId, com.apimarketplace.common.logging.PayloadLogSafety.describeAny(inputData));
 
         // Verify we're in step-by-step mode
         ExecutionMode mode = getExecutionMode(runId);
@@ -404,7 +404,7 @@ public class StepByStepExecutor {
 
                 // Store chat trigger input if provided
                 if (inputData != null && !inputData.isEmpty() && stepId.startsWith("trigger:")) {
-                    logger.info("Storing chat trigger input for stepId={}: {}", stepId, inputData);
+                    logger.info("Storing chat trigger input for stepId={}: {}", stepId, com.apimarketplace.common.logging.PayloadLogSafety.describeAny(inputData));
                     execution.setChatTriggerInput(stepId, inputData);
                 }
 

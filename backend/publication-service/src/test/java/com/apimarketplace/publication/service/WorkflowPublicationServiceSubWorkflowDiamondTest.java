@@ -220,6 +220,51 @@ class WorkflowPublicationServiceSubWorkflowDiamondTest {
                 .anySatisfy((req) -> assertThat(req.get("sourcePath")).isEqualTo(publisherPath));
     }
 
+    // ==================== a sub-workflow's table copy must refuse the publish ====================
+
+    /** A sub-workflow plan with one table node on datasource 9 ("Orders"). */
+    private void stubSubWorkflowWithOrdersTable() {
+        Map<String, Object> planB = new HashMap<>();
+        planB.put("tables", new ArrayList<>(List.of(new HashMap<>(Map.of("dataSourceId", 9, "label", "Find orders")))));
+        when(orchestratorClient.getWorkflowForPublication(B, TENANT, ORG)).thenReturn(workflowData("B", planB));
+        when(dataSourceClient.bulkFind(any(), eq(TENANT), eq(ORG))).thenReturn(List.of(
+                new com.apimarketplace.datasource.client.dto.DataSourceDto(9L, TENANT, "Orders", "Order book",
+                        null, null, null, null, null, null, null, null, null, null, null, ORG)));
+    }
+
+    @Test
+    @DisplayName("regression (silent drop): a sub-workflow whose table copy fails refuses the publish instead of being skipped")
+    void subWorkflowTableCopyFailureRefusesThePublish() {
+        stubSubWorkflowWithOrdersTable();
+        when(dataSourceClient.copyAllItems(9L, TENANT, ORG))
+                .thenThrow(new com.apimarketplace.datasource.client.TableCopyException(9L, "down", null));
+        Map<String, Object> planA = planWithSubWorkflows(B);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.enrichPlanWithSubWorkflowData(planA, TENANT, ORG, A))
+                .isInstanceOfSatisfying(PublicationValidationException.class, e ->
+                        assertThat(e.getErrorCode()).isEqualTo(PublicationValidationException.TABLE_COPY_FAILED));
+        assertThat(planA).doesNotContainKey("_snapshot_subworkflows");
+    }
+
+    @Test
+    @DisplayName("regression (silent drop): a sub-workflow whose table is over the row limit refuses the publish")
+    void subWorkflowTableOverTheRowLimitRefusesThePublish() {
+        stubSubWorkflowWithOrdersTable();
+        List<com.apimarketplace.datasource.client.dto.DataSourceItemDto> rows = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            rows.add(new com.apimarketplace.datasource.client.dto.DataSourceItemDto((long) i, 9L, TENANT, Map.of("n", i), 0, null));
+        }
+        when(dataSourceClient.copyAllItems(9L, TENANT, ORG)).thenReturn(rows);
+        service.snapshotBudget = new PublicationSnapshotBudget(new ObjectMapper(), PublicationSnapshotBudget.DEFAULT_MAX_BYTES, 2);
+        Map<String, Object> planA = planWithSubWorkflows(B);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.enrichPlanWithSubWorkflowData(planA, TENANT, ORG, A))
+                .isInstanceOfSatisfying(PublicationValidationException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(PublicationValidationException.PUBLICATION_SNAPSHOT_TOO_LARGE);
+                    assertThat(e.getMessage()).contains("'Orders' has 3 rows");
+                });
+    }
+
     /** Build a plan whose cores are sub_workflow nodes referencing the given child workflow ids. */
     private static Map<String, Object> planWithSubWorkflows(UUID... childIds) {
         List<Object> cores = new ArrayList<>();

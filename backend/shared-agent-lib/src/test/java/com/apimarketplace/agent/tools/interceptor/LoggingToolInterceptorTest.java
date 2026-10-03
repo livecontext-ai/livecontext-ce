@@ -22,7 +22,7 @@ class LoggingToolInterceptorTest {
 
     @BeforeEach
     void setUp() {
-        interceptor = new LoggingToolInterceptor();
+        interceptor = new LoggingToolInterceptor(false);
     }
 
     @Nested

@@ -138,6 +138,12 @@ public final class PlaintextTokenBackfill {
             try {
                 Result r = migrate(spec);
                 total += r.migrated();
+                int resealed = resealAndRehash(spec);
+                total += resealed;
+                if (resealed > 0) {
+                    log.info("Token-at-rest backfill of {}: {} row(s) re-sealed under the current key and re-hashed",
+                            spec.key(), resealed);
+                }
                 if (r.migrated() > 0 || r.failed() > 0) {
                     log.info("Token-at-rest backfill of {}: {} row(s) moved to encrypted+hashed storage, {} skipped, drained={}",
                             spec.key(), r.migrated(), r.failed(), r.drained());
@@ -191,6 +197,57 @@ public final class PlaintextTokenBackfill {
     }
 
     /**
+     * Second pass, for rows that already have a hash: at {@code credential.encryption.write-version=2}
+     * a row whose token is still in the v1 envelope, sealed under another key id, or whose hash
+     * is not the current lookup HMAC (password-keyed, or the previous generation's) is re-sealed
+     * AND re-hashed from its plaintext, which the ciphertext makes recoverable. Without it the v1
+     * population and the old hashes never drain, and a key rotation never finishes. A no-op at
+     * write-version 1 (the old forms ARE the current ones there). Compare-and-set on the token and
+     * hash read, so a concurrent regeneration wins. A row the loaded keys cannot decrypt is left
+     * as-is and logged.
+     *
+     * @return rows rewritten
+     */
+    public int resealAndRehash(TableSpec spec) {
+        if (!TokenAtRest.isWritingV2() || TokenAtRest.isUsingEphemeralMaterial()) {
+            return 0;
+        }
+        String where = " WHERE " + spec.hashColumn() + " IS NOT NULL AND " + spec.tokenColumn() + " IS NOT NULL AND "
+                + spec.tokenColumn() + " <> ''";
+        String columns = "SELECT " + spec.idColumn() + " AS id, " + spec.tokenColumn() + " AS tok, "
+                + spec.hashColumn() + " AS h FROM " + spec.table();
+        String order = " ORDER BY " + spec.idColumn() + " LIMIT " + PAGE_SIZE;
+        String update = "UPDATE " + spec.table() + " SET " + spec.tokenColumn() + " = ?, " + spec.hashColumn() + " = ?"
+                + " WHERE " + spec.idColumn() + " = ? AND " + spec.tokenColumn() + " = ? AND " + spec.hashColumn() + " = ?";
+        int rewritten = 0;
+        Object lastId = null;
+        for (int page = 0; page < MAX_PAGES; page++) {
+            List<Map<String, Object>> rows = lastId == null
+                    ? jdbc.queryForList(columns + where + order)
+                    : jdbc.queryForList(columns + where + " AND " + spec.idColumn() + " > ?" + order, lastId);
+            if (rows.isEmpty()) {
+                break;
+            }
+            for (Map<String, Object> row : rows) {
+                lastId = row.get("id");
+                String stored = (String) row.get("tok");
+                String storedHash = (String) row.get("h");
+                try {
+                    String plaintext = TokenAtRest.isEncrypted(stored) ? TokenAtRest.decrypt(stored) : stored;
+                    String currentHash = TokenAtRest.hash(plaintext);
+                    if (!TokenAtRest.needsReencryption(stored) && currentHash.equals(storedHash)) {
+                        continue;
+                    }
+                    rewritten += jdbc.update(update, TokenAtRest.encrypt(plaintext), currentHash, lastId, stored, storedHash);
+                } catch (RuntimeException e) {
+                    log.warn("Token-at-rest re-seal of {}: row id={} left as-is (cause: {})", spec.key(), lastId, e.toString());
+                }
+            }
+        }
+        return rewritten;
+    }
+
+    /**
      * True until a pass in this process has proven the table holds no legacy row. Services gate
      * the plaintext fallback on it, so a public miss costs one query once the migration is done.
      */
@@ -240,8 +297,10 @@ public final class PlaintextTokenBackfill {
             return 0;
         }
         // A row may already carry ciphertext with a null hash (written by the new code in the same
-        // second the column was added); hash the PLAINTEXT in that case too.
-        String plaintext = TokenAtRest.decrypt(stored);
+        // second the column was added); hash the PLAINTEXT in that case too. A plaintext row is
+        // read as-is, not through decrypt(), so it is not counted (nor refused under
+        // plaintext-reads=deny) as a credential read: migrating it is the point of this pass.
+        String plaintext = TokenAtRest.isEncrypted(stored) ? TokenAtRest.decrypt(stored) : stored;
         String encrypted = TokenAtRest.encrypt(plaintext);
         String hash = TokenAtRest.hash(plaintext);
         return jdbc.update(

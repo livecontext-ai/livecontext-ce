@@ -14,8 +14,11 @@ import {
 } from './onboardingStatus';
 import {
   buildLoginRedirectPath,
+  isCheckoutRoute,
   isProtectedAppRoute,
 } from './appRouteAuth';
+import { forgetPostOnboardingReturnOfOthers, rememberPostOnboardingReturn } from '@/lib/navigation/postOnboardingReturn';
+import { getClientLocale } from '@/lib/utils/locale';
 
 const IS_EMBEDDED_AUTH = IS_CE;
 
@@ -161,6 +164,17 @@ function FirstLoginGuardInner({ children }: Props) {
   const { isAuthenticated, user, isLoading, isAuthChecking } = useAuthGuard();
   const queryClient = useQueryClient();
   const protectedAppRoute = isProtectedAppRoute(pathname);
+  // Pricing and a partner's offer page are open to anonymous visitors (no sign-in redirect), but a
+  // signed-in person finishes onboarding before buying: a fresh account from a partner's link
+  // would otherwise pay before its email is verified, the partner code still waiting, and never
+  // be attributed.
+  const checkoutRoute = isCheckoutRoute(pathname);
+  const onboardingRoute = protectedAppRoute || checkoutRoute;
+
+  // A return to a page to pay from, left by another account on this browser, is never handed to this one.
+  useEffect(() => {
+    if (user?.sub) forgetPostOnboardingReturnOfOthers(window, user.sub);
+  }, [user?.sub]);
 
   // Track the last checked user to reset state on user change
   const lastUserRef = useRef<string | null>(null);
@@ -182,9 +196,9 @@ function FirstLoginGuardInner({ children }: Props) {
     // Prevent concurrent checks
     if (checkingRef.current) return;
 
-    // Only check protected /app/* routes. Public app routes are intentionally
-    // available before signup and before onboarding is complete.
-    if (!protectedAppRoute) return;
+    // Only check protected /app/* routes and, for a signed-in person, the pages to pay from. The
+    // other public app routes stay available before signup and before onboarding is complete.
+    if (!onboardingRoute) return;
 
     // Skip if already on onboarding or ce-setup page
     if (pathname?.includes('/onboarding') || pathname?.includes('/ce-setup')) {
@@ -224,7 +238,14 @@ function FirstLoginGuardInner({ children }: Props) {
         // Redirect to onboarding if needed (including unverified email)
         if (needsOnboarding || firstLogin || profileIncomplete || emailVerified === false) {
           const localeMatch = pathname?.match(/^\/([a-z]{2})\//);
-          const locale = localeMatch ? localeMatch[1] : 'en';
+          // A page outside the locale segment (a partner's offer) reads in the app locale, the
+          // NEXT_LOCALE cookie: onboarding opens in that language, not in English.
+          const locale = localeMatch ? localeMatch[1] : getClientLocale();
+          // From pricing or an offer, come back to it (selection, partner code and recommendation
+          // included) once onboarding is done, rather than to the chat.
+          if (checkoutRoute && pathname && user?.sub) {
+            rememberPostOnboardingReturn(window, `${pathname}${window.location.search}`, user.sub);
+          }
           router.replace(`/${locale}/onboarding`);
           checkingRef.current = false;
           // Don't set hasCheckedForApp to true - we're redirecting
@@ -239,7 +260,7 @@ function FirstLoginGuardInner({ children }: Props) {
     } finally {
       checkingRef.current = false;
     }
-  }, [queryClient, user?.sub, pathname, protectedAppRoute, router]);
+  }, [queryClient, user?.sub, pathname, onboardingRoute, checkoutRoute, router]);
 
   useEffect(() => {
     if (isAuthChecking || isLoading || isAuthenticated || !protectedAppRoute) return;
@@ -247,7 +268,7 @@ function FirstLoginGuardInner({ children }: Props) {
   }, [isAuthenticated, isAuthChecking, isLoading, pathname, protectedAppRoute, router]);
 
   useEffect(() => {
-    if (!protectedAppRoute) {
+    if (!onboardingRoute) {
       // Reset so the check runs fresh when user navigates to /app/*
       setHasCheckedForApp(false);
       return;
@@ -267,14 +288,19 @@ function FirstLoginGuardInner({ children }: Props) {
     if (!isAuthenticated && !isLoading) {
       setHasCheckedForApp(false);
     }
-  }, [protectedAppRoute, isAuthenticated, isLoading, user?.sub, hasCheckedForApp, checkOnboardingStatus]);
+  }, [onboardingRoute, isAuthenticated, isLoading, user?.sub, hasCheckedForApp, checkOnboardingStatus]);
 
   // Block rendering of /app/* routes until onboarding check completes.
   // This prevents users from seeing or interacting with protected pages
   // before we confirm their email is verified and onboarding is done.
   if (
-    protectedAppRoute
-    && (isAuthChecking || isLoading || !isAuthenticated || !hasCheckedForApp)
+    (protectedAppRoute && (isAuthChecking || isLoading || !isAuthenticated || !hasCheckedForApp))
+    // Pricing and offers: held while the session is read, then, for a signed-in person, while the
+    // onboarding status is checked; an anonymous visitor gets the page as soon as the session is
+    // known to be empty. Holding during the session read too matters: rendering the page then
+    // swapping it for the spinner mounted it twice, and the Stripe return (?checkout=success)
+    // consumed its query on the first mount, so the second never confirmed the payment.
+    || (checkoutRoute && (isAuthChecking || isLoading || (isAuthenticated && !hasCheckedForApp)))
   ) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-theme-primary">

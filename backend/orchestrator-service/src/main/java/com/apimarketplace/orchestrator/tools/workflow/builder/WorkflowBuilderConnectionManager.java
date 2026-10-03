@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.*;
 import com.apimarketplace.agent.tools.ToolErrorCode;
+import com.apimarketplace.orchestrator.utils.LabelNormalizer;
 import com.apimarketplace.orchestrator.utils.EdgeRefParser;
 
 /**
@@ -161,6 +162,13 @@ public class WorkflowBuilderConnectionManager {
         if (!session.nodeExists(toNodeId)) {
             return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "Target node not found: " + toRef +
                 ". Available: " + formatAvailableNodes(session));
+        }
+        // A note annotates the canvas and never runs: an edge to or from it would be stored and
+        // then ignored by the engine, which reads to the caller like a working connection.
+        if (LabelNormalizer.isNoteKey(fromNodeId) || LabelNormalizer.isNoteKey(toNodeId)) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, "A note cannot be connected: it "
+                + "annotates the canvas and never runs. To tie it to the node it explains, use "
+                + "workflow(action='modify', node='<note label>', params={attachedTo: '<node label>'}).");
         }
 
         // Terminal nodes (exit, end, stop_on_error) cannot have outgoing edges.

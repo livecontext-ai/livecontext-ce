@@ -93,6 +93,19 @@ class McpStreamableHttpControllerTest {
         assertThat(result.get("protocolVersion")).isEqualTo("2025-06-18");
     }
 
+    @Test
+    @DisplayName("initialize tells the agent that a key scope bounds its calls, not what an executed workflow does (LC-055)")
+    void initializeStatesTheScopeBoundary() throws Exception {
+        ResponseEntity<Object> response = controller.handlePost(authenticatedRequest(), json(
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"," +
+                "\"params\":{\"protocolVersion\":\"2025-03-26\",\"clientInfo\":{\"name\":\"claude-code\"}}}"));
+
+        Map<String, Object> result = (Map<String, Object>) body(response).get("result");
+        assertThat(String.valueOf(result.get("instructions")))
+                .contains("PERMISSION_DENIED")
+                .contains("not with this key's scope");
+    }
+
     // ==================== notifications ====================
 
     @Test

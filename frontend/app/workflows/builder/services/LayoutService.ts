@@ -11,6 +11,7 @@ import dagre from '@dagrejs/dagre';
 import type { Node, Edge } from 'reactflow';
 import type { BuilderNodeData } from '../types';
 import { nodeRegistry } from '../registry/nodeRegistry';
+import { getNoteAnchor } from '../utils/noteAnchors';
 import {
   DEFAULT_WORKFLOW_LAYOUT_DIRECTION,
   type WorkflowLayoutDirection,
@@ -104,6 +105,22 @@ export function layoutConfigForDirection(
  * @returns Nodes with calculated positions
  */
 export function applyDagreLayout(
+  nodes: Node<BuilderNodeData>[],
+  edges: Edge[],
+  options?: Partial<typeof LAYOUT_CONFIG>
+): Node<BuilderNodeData>[] {
+  // Notes are annotations, not part of the flow: ranked by Dagre, each one became its own
+  // component in its own lane, far from the node it explains. They are laid out AFTER the
+  // graph instead (see `placeNotes`).
+  const notes = nodes.filter((n) => nodeRegistry.isNoteNode(n));
+  if (notes.length === 0) return layoutFlowNodes(nodes, edges, options);
+  const flowNodes = nodes.filter((n) => !nodeRegistry.isNoteNode(n));
+  const laid = layoutFlowNodes(flowNodes, edges, options);
+  const direction = directionOf({ ...LAYOUT_CONFIG, ...options }.rankdir);
+  return placeNotes([...laid, ...notes], direction, positionsById(nodes));
+}
+
+function layoutFlowNodes(
   nodes: Node<BuilderNodeData>[],
   edges: Edge[],
   options?: Partial<typeof LAYOUT_CONFIG>
@@ -637,7 +654,7 @@ export function getNodeDimensions(
   // Resizable nodes carry an explicit stored size even before measure - use it
   // (their width is the box the user dragged, NOT a function of the label).
   if (nodeRegistry.isNoteNode(node)) {
-    return { width: data.noteWidth || 250, height: data.noteHeight || 120 };
+    return estimateNoteSize(node);
   }
   if (data.kind === 'data_input' && (data.dataInputWidth || data.dataInputHeight)) {
     return { width: data.dataInputWidth || 220, height: data.dataInputHeight || 120 };
@@ -676,4 +693,171 @@ export function getNodeDimensions(
 
 export function hasValidPosition(node: Node<BuilderNodeData>): boolean {
   return !!node.position && isFinite(node.position.x) && isFinite(node.position.y);
+}
+
+// ==================== Notes ====================
+
+/** Space between a note and the node it explains, and between a note and the graph. */
+export const NOTE_GAP_PX = 24;
+
+const NOTE_DEFAULT_WIDTH = 250;
+const NOTE_MIN_HEIGHT = 120;
+const NOTE_PADDING_X_PX = 32; // px-4 on both sides
+const NOTE_PADDING_Y_PX = 24; // py-3 on both sides
+const NOTE_LINE_PX = 20;      // text-sm line height
+const NOTE_CHAR_PX = 7;       // avg latin text-sm glyph
+const NOTE_WIDE_CHAR_PX = 14; // a CJK glyph is about one em wide
+
+/** Width of one line of note text, in px: CJK and other wide scripts count double. */
+function noteLineWidth(line: string): number {
+  let width = 0;
+  for (const ch of line) width += ch.codePointAt(0)! >= 0x2e80 ? NOTE_WIDE_CHAR_PX : NOTE_CHAR_PX;
+  return width;
+}
+
+type Box = { x: number; y: number; width: number; height: number };
+
+/** ids -> positions, for the nodes that have a real one. */
+function positionsById(nodes: Node<BuilderNodeData>[]): Map<string, { x: number; y: number }> {
+  return new Map(nodes.filter(hasValidPosition).map((n) => [n.id, { ...n.position }]));
+}
+
+/**
+ * The size a note paints before it is measured. Its stored height is a MINIMUM (the note
+ * grows with its text), so the text decides too: a long agent-written note must not be
+ * placed half on top of the node above it.
+ */
+function estimateNoteSize(note: Node<BuilderNodeData>): { width: number; height: number } {
+  const data = note.data as any;
+  const width = data.noteWidth || NOTE_DEFAULT_WIDTH;
+  const textWidth = Math.max(NOTE_WIDE_CHAR_PX * 4, width - NOTE_PADDING_X_PX);
+  const lines = String(data.noteText || '')
+    .split('\n')
+    .reduce((sum, line) => sum + Math.max(1, Math.ceil(noteLineWidth(line) / textWidth)), 0);
+  return { width, height: Math.max(data.noteHeight || NOTE_MIN_HEIGHT, NOTE_PADDING_Y_PX + lines * NOTE_LINE_PX) };
+}
+
+/** The box a note paints: measured once it has rendered, estimated before. */
+function noteBox(note: Node<BuilderNodeData>): { width: number; height: number } {
+  if (isMeasured(note.width) && isMeasured(note.height)) return { width: note.width, height: note.height };
+  return estimateNoteSize(note);
+}
+
+function intersects(a: Box, b: Box): boolean {
+  return a.x < b.x + b.width + NOTE_GAP_PX && b.x < a.x + a.width + NOTE_GAP_PX
+    && a.y < b.y + b.height + NOTE_GAP_PX && b.y < a.y + a.height + NOTE_GAP_PX;
+}
+
+/** Slide `box` along one axis, away from the graph, until it overlaps nothing. */
+function clearOf(box: Box, obstacles: Box[], away: 'up' | 'right'): Box {
+  const placed = { ...box };
+  for (let i = 0; i < obstacles.length + 1; i++) {
+    const hit = obstacles.find((o) => intersects(placed, o));
+    if (!hit) break;
+    if (away === 'up') placed.y = hit.y - placed.height - NOTE_GAP_PX;
+    else placed.x = hit.x + hit.width + NOTE_GAP_PX;
+  }
+  return placed;
+}
+
+/**
+ * Position the notes around nodes that are already laid out.
+ *
+ *  - An ATTACHED note the user already placed keeps its offset from its node: when the
+ *    layout moved the node, the note moves by the same amount (`previous` holds where the
+ *    node was), so a re-layout never leaves a note behind.
+ *  - An attached note with NO position (an agent wrote it) goes next to its node: above it
+ *    in a left-to-right graph, to its right in a top-to-bottom one, the side where the flow
+ *    leaves room, then slides further out until it covers nothing.
+ *  - A free note keeps its position, or without one goes in a row above the graph.
+ *  - Whatever its origin, a note never ends on top of a node or of another note: one that
+ *    would (the graph was laid out again, or in the other direction) slides out of the way.
+ *    With `onlyUnplaced` (the graph was NOT laid out, only new notes need a spot), a note that
+ *    already has a position keeps it exactly and only counts as an obstacle.
+ */
+export function placeNotes(
+  nodes: Node<BuilderNodeData>[],
+  direction: WorkflowLayoutDirection,
+  previous: Map<string, { x: number; y: number }> = new Map(),
+  options: { onlyUnplaced?: boolean } = {},
+): Node<BuilderNodeData>[] {
+  const flowNodes = nodes.filter((n) => !nodeRegistry.isNoteNode(n) && hasValidPosition(n));
+  const obstacles: Box[] = flowNodes.map((n) => ({
+    ...n.position,
+    ...getNodeDimensions(n, false, direction),
+  }));
+  const graphTop = obstacles.length ? Math.min(...obstacles.map((b) => b.y)) : 0;
+  const graphLeft = obstacles.length ? Math.min(...obstacles.map((b) => b.x)) : 0;
+  if (options.onlyUnplaced) {
+    // These notes will not move, so a new note must avoid every one of them, including those
+    // that come after it in the plan.
+    for (const n of nodes) {
+      if (nodeRegistry.isNoteNode(n) && hasValidPosition(n)) obstacles.push({ ...n.position, ...noteBox(n) });
+    }
+  }
+
+  const placedById = new Map<string, { x: number; y: number }>();
+  for (const note of nodes) {
+    if (!nodeRegistry.isNoteNode(note)) continue;
+    const size = noteBox(note);
+    const anchor = getNoteAnchor(note, flowNodes);
+    let position: { x: number; y: number } | null = null;
+
+    const away = direction === 'vertical' ? 'right' : 'up';
+    if (options.onlyUnplaced && hasValidPosition(note)) {
+      // Placing an agent's new note is no reason to move one the user put down by hand.
+      position = { ...note.position };
+    } else if (anchor && hasValidPosition(note)) {
+      const before = previous.get(anchor.id);
+      const kept = before
+        ? { x: note.position.x + anchor.position.x - before.x, y: note.position.y + anchor.position.y - before.y }
+        : note.position;
+      const placed = clearOf({ ...kept, ...size }, obstacles, away);
+      position = { x: placed.x, y: placed.y };
+    } else if (anchor) {
+      const anchorSize = getNodeDimensions(anchor, false, direction);
+      const beside: Box = direction === 'vertical'
+        ? { x: anchor.position.x + anchorSize.width + NOTE_GAP_PX, y: anchor.position.y, ...size }
+        : { x: anchor.position.x, y: anchor.position.y - size.height - NOTE_GAP_PX, ...size };
+      const placed = clearOf(beside, obstacles, away);
+      position = { x: placed.x, y: placed.y };
+    } else if (hasValidPosition(note)) {
+      const placed = clearOf({ ...note.position, ...size }, obstacles, away);
+      position = { x: placed.x, y: placed.y };
+    } else {
+      const placed = clearOf({ x: graphLeft, y: graphTop - size.height - NOTE_GAP_PX, ...size }, obstacles, 'right');
+      position = { x: placed.x, y: placed.y };
+    }
+
+    if (!(options.onlyUnplaced && hasValidPosition(note))) obstacles.push({ ...position, ...size });
+    placedById.set(note.id, position);
+  }
+
+  return nodes.map((n) => {
+    const p = placedById.get(n.id);
+    return p ? { ...n, position: p, positionAbsolute: p } : n;
+  });
+}
+
+/** True when some note has no position yet, and only the notes need placing. */
+export function hasUnplacedNotes(nodes: Node<BuilderNodeData>[]): boolean {
+  return nodes.some((n) => nodeRegistry.isNoteNode(n) && !hasValidPosition(n));
+}
+
+/**
+ * Forget where the ATTACHED notes sit, so the next layout puts each one beside its node again.
+ *
+ * For a layout in the OTHER reading direction: an attached note's offset only means something
+ * in the direction it was taken in. Above its node in a left-to-right graph is the gap between
+ * two ranks once the graph runs top to bottom, so kept as is the note landed on the edges and
+ * was slid sideways as far as it took. Free notes keep their place (they slide only if covered).
+ */
+export function unplaceAttachedNotes(nodes: Node<BuilderNodeData>[]): Node<BuilderNodeData>[] {
+  // Only a note whose node is on the canvas: one that lost its node would drop into the
+  // free-note row instead of keeping where the user left it.
+  return nodes.map((n) =>
+    nodeRegistry.isNoteNode(n) && getNoteAnchor(n, nodes)
+      ? { ...n, position: { x: NaN, y: NaN }, positionAbsolute: undefined }
+      : n,
+  );
 }

@@ -60,4 +60,24 @@
         </properties>
     </persistence-unit>
 
+    <!-- ConversationTaskConversationQueryTest - the LC-066 per-task conversation finders, parsed
+         and executed on H2 like conversation-kind-h2-pu (its own in-memory database, so the two
+         classes never share tables). -->
+    <persistence-unit name="conversation-task-h2-pu" transaction-type="RESOURCE_LOCAL">
+        <provider>org.hibernate.jpa.HibernatePersistenceProvider</provider>
+        <class>com.apimarketplace.conversation.entity.Conversation</class>
+        <class>com.apimarketplace.conversation.entity.Message</class>
+        <exclude-unlisted-classes>true</exclude-unlisted-classes>
+        <properties>
+            <property name="hibernate.dialect" value="org.hibernate.dialect.H2Dialect"/>
+            <property name="jakarta.persistence.jdbc.driver" value="org.h2.Driver"/>
+            <property name="jakarta.persistence.jdbc.url"
+                      value="jdbc:h2:mem:conversation-task;DB_CLOSE_DELAY=-1;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS conversation"/>
+            <property name="jakarta.persistence.jdbc.user" value="sa"/>
+            <property name="jakarta.persistence.jdbc.password" value=""/>
+            <property name="hibernate.hbm2ddl.auto" value="create"/>
+            <property name="hibernate.show_sql" value="false"/>
+        </properties>
+    </persistence-unit>
+
 </persistence>

@@ -1,24 +1,38 @@
+// Relative and straight to the module, not through `@/lib/edition`: the CE e2e suite imports
+// this file in a plain Node process, which resolves no path alias and should not load the
+// edition index's React hook.
+import { IS_MANAGED_CLOUD } from '../edition/edition';
+
 /**
- * The single in-app changelog entry this build announces.
+ * The in-app changelog entry this build announces: one per edition, the newest.
  *
  * Why the entry lives in the bundle rather than in a feed: an install announces exactly what it
- * is RUNNING. A cloud tenant and an air-gapped CE box therefore see the same panel with no
- * network call, no CDN and no version skew between "what the server advertises" and "what the
- * user actually has". The server owns only the per-user acknowledgement (GET/POST
- * /api/changelog), which is the one part that has to follow a user across devices.
+ * is RUNNING. A cloud tenant and an air-gapped CE box therefore see their panel with no network
+ * call, no CDN and no version skew between "what the server advertises" and "what the user
+ * actually has". The server owns only the per-user acknowledgement (GET/POST /api/changelog),
+ * which is the one part that has to follow a user across devices.
  *
- * Publishing a new entry (the whole procedure):
- *   1. drop the media under `frontend/public/changelog/` and DELETE the previous file - only the
- *      latest entry is ever shown, so an older asset is dead weight in every image;
- *   2. point {@link LATEST_CHANGELOG_ENTRY} at it and give the entry a NEW `key`;
- *   3. rewrite `changelog.latest.title` / `.body` / `.mediaAlt` in ALL SIX locale files
- *      (`frontend/messages/*.json`), each with a real translation.
+ * Why two entries: some news exists on one edition only. The partner program, its badge and the
+ * partner space are managed-cloud features (the badge renders nothing on a self-hosted install),
+ * so announcing them on a CE box would point at something that is not there. The managed cloud
+ * reads {@link CLOUD_CHANGELOG_ENTRY}, every self-hosted deployment {@link SELF_HOSTED_CHANGELOG_ENTRY}.
+ * Each has its own key and its own copy block, even when the news is the same: a shared key would
+ * mark one edition's entry as read by the other's acknowledgement.
+ *
+ * Publishing a new entry (the whole procedure, per edition):
+ *   1. drop the media under `frontend/public/changelog/` and DELETE the file no entry points at
+ *      any more - only the latest entries are ever shown, so an older asset is dead weight in
+ *      every image;
+ *   2. point the edition's constant at it and give the entry a NEW `key`;
+ *   3. rewrite its copy block (`changelog.<copy>.title` / `.body` / `.mediaAlt`, plus `.action`
+ *      when the entry has one) in ALL SIX locale files (`frontend/messages/*.json`), each with a
+ *      real translation.
  * A new key is what makes every user see it once. Reusing a key means nobody sees the new copy,
  * because acknowledgements are matched by key equality.
  *
- * Set the constant to `null` to ship a build that announces nothing. That is the content-level
- * off switch; the deployment-level one is `CHANGELOG_ENABLED=false` on the backend, which also
- * removes the sidebar entry and needs no rebuild.
+ * Set a constant to `null` to ship a build that announces nothing on that edition. That is the
+ * content-level off switch; the deployment-level one is `CHANGELOG_ENABLED=false` on the
+ * backend, which needs no rebuild.
  */
 
 /** An image or a short video illustrating the entry. */
@@ -57,19 +71,67 @@ export interface ChangelogEntry {
    * built from the published releases - this panel deliberately keeps no archive of its own.
    */
   learnMoreUrl: string | null;
+  /** Which block under `changelog` in the locale files holds the entry's words. */
+  copy: ChangelogCopyKey;
+  /**
+   * A call to action, the panel's primary button, or null for none. Its label is the copy block's
+   * `action` string. It is drawn in the gold of the partner program, the only entry that has one
+   * so far; an entry that needs another look adds it here.
+   */
+  action: ChangelogAction | null;
 }
 
-export const LATEST_CHANGELOG_ENTRY: ChangelogEntry | null = {
-  key: '2026-09-run-epochs-time-zone',
-  publishedAt: '2026-09-29',
+/** The copy blocks the locale files carry: one per edition entry. */
+export const CHANGELOG_COPY_KEYS = ['latest', 'latestCloud'] as const;
+export type ChangelogCopyKey = (typeof CHANGELOG_COPY_KEYS)[number];
+
+export interface ChangelogAction {
+  /** In-app path, same rule as `learnMoreUrl`. */
+  href: string;
+}
+
+/** What every self-hosted deployment (CE, self-hosted enterprise) announces. */
+export const SELF_HOSTED_CHANGELOG_ENTRY: ChangelogEntry | null = {
+  key: '2026-10-agent-notes-url-views',
+  publishedAt: '2026-10-03',
   media: {
     type: 'image',
-    src: '/changelog/2026-09-run-epochs-time-zone.svg',
+    src: '/changelog/2026-10-agent-notes-url-views.svg',
     width: 720,
     height: 260,
   },
   learnMoreUrl: '/changelog',
+  copy: 'latest',
+  action: null,
 };
+
+/** What the managed cloud announces: the partner program first, then the rest of the release. */
+export const CLOUD_CHANGELOG_ENTRY: ChangelogEntry | null = {
+  key: '2026-10-partner-program',
+  publishedAt: '2026-10-03',
+  media: {
+    type: 'image',
+    src: '/changelog/2026-10-partner-program.svg',
+    width: 720,
+    height: 260,
+  },
+  learnMoreUrl: '/changelog',
+  copy: 'latestCloud',
+  action: { href: '/partners' },
+};
+
+/** The entry of THIS build's edition, frozen at build time like the edition itself. */
+export const LATEST_CHANGELOG_ENTRY: ChangelogEntry | null = entryForEdition(IS_MANAGED_CLOUD);
+
+/** The candidate for an edition. Split out so both branches are reachable from a test. */
+export function entryForEdition(managedCloud: boolean): ChangelogEntry | null {
+  return managedCloud ? CLOUD_CHANGELOG_ENTRY : SELF_HOSTED_CHANGELOG_ENTRY;
+}
+
+/** In-app path only: `//evil.example.com` also starts with a slash and leaves the deployment. */
+function isInAppPath(href: string): boolean {
+  return href.startsWith('/') && !href.startsWith('//');
+}
 
 /**
  * Guards the shape at runtime rather than trusting the type alone: this object is edited by hand
@@ -90,11 +152,10 @@ export function isValidEntry(entry: ChangelogEntry | null): entry is ChangelogEn
     if (poster !== undefined && !poster.startsWith('/changelog/')) return false;
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return false;
   }
-  if (entry.learnMoreUrl !== null) {
-    // In-app path only. `//evil.example.com` also starts with a slash and is a fully external
-    // URL, so the leading-slash test alone would let the panel link off the deployment.
-    if (!entry.learnMoreUrl.startsWith('/') || entry.learnMoreUrl.startsWith('//')) return false;
-  }
+  if (entry.learnMoreUrl !== null && !isInAppPath(entry.learnMoreUrl)) return false;
+  // An unknown block would render the raw key path as the panel's title.
+  if (!(CHANGELOG_COPY_KEYS as readonly string[]).includes(entry.copy)) return false;
+  if (entry.action && !isInAppPath(entry.action.href)) return false;
   return true;
 }
 
@@ -112,4 +173,13 @@ export function resolveEntry(candidate: ChangelogEntry | null): ChangelogEntry |
 /** The entry this build should announce, or null when there is none to announce. */
 export function currentEntry(): ChangelogEntry | null {
   return resolveEntry(LATEST_CHANGELOG_ENTRY);
+}
+
+/**
+ * The entry a self-hosted build announces, whatever edition THIS process resolves. For the CE
+ * e2e suite, which runs in a Node process that does not carry the CE build's edition variables
+ * and would otherwise resolve the cloud entry.
+ */
+export function selfHostedEntry(): ChangelogEntry | null {
+  return resolveEntry(SELF_HOSTED_CHANGELOG_ENTRY);
 }

@@ -35,6 +35,13 @@ public class AgentPublishModule implements ToolModule {
 
     private static final Set<String> HANDLED_ACTIONS = Set.of("publish", "unpublish");
 
+    static final String RESTRICTED_PUBLISH_REFUSAL =
+            com.apimarketplace.common.classification.RestrictedDataPolicy.REFUSAL_CODE
+            + ": Content from Gmail or Google Drive seen earlier in this conversation cannot be written to the "
+            + "marketplace: a listing title and description are public. In this conversation no agent can be "
+            + "published (unpublishing still works). Tell the user: they can publish the agent from a "
+            + "conversation that has not read Gmail or Google Drive.";
+
     private final PublicationClient publicationClient;
 
     public AgentPublishModule(PublicationClient publicationClient) {
@@ -68,6 +75,12 @@ public class AgentPublishModule implements ToolModule {
                 context != null ? context.orgRole() : null, "agent", action);
         if (roleDenied.isPresent()) {
             return Optional.of(ToolExecutionResult.failure(ToolErrorCode.PERMISSION_DENIED, roleDenied.get()));
+        }
+        // LC-066: a listing writes a free-text title and description to the public marketplace,
+        // which no restricted tag can follow, so a restricted conversation cannot publish.
+        if ("publish".equals(action) && context != null && com.apimarketplace.common.classification.DataSensitivity
+                .fromCredentials(context.credentials()).isRestricted()) {
+            return Optional.of(ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, RESTRICTED_PUBLISH_REFUSAL));
         }
         return Optional.of(switch (action) {
             case "publish" -> executePublish(parameters, tenantId, context);
@@ -149,8 +162,13 @@ public class AgentPublishModule implements ToolModule {
                     + "Marketplace publication id: " + response.get("id"));
             return ToolExecutionResult.success(data);
         } catch (com.apimarketplace.publication.client.PublicationValidationException e) {
-            String msg = buildValidationFailureMessage(e);
             log.warn("Agent publish refused for {}: {}", agentIdStr, e.getMessage());
+            if (e.isRetryable()) {
+                // A table's rows could not be read just now: nothing to fix, the same call can be retried.
+                return ToolExecutionResult.failure(ToolErrorCode.EXTERNAL_SERVICE_ERROR,
+                        "Publish failed: " + e.getMessage());
+            }
+            String msg = buildValidationFailureMessage(e);
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, msg);
         } catch (RuntimeException e) {
             String msg = extractPublicationErrorMessage(e);
@@ -225,25 +243,20 @@ public class AgentPublishModule implements ToolModule {
         }
 
         if ("AGENT_SNAPSHOT_TOO_LARGE".equals(code)) {
-            StringBuilder sb = new StringBuilder("Publish refused: ").append(e.getMessage());
-            if (body.get("breakdown") instanceof List<?> breakdown && !breakdown.isEmpty()) {
-                sb.append(" Heaviest resources: ");
-                boolean first = true;
-                for (Object bRaw : breakdown) {
-                    if (!(bRaw instanceof Map<?, ?> b)) continue;
-                    if (!first) sb.append(", ");
-                    first = false;
-                    Object name = b.get("name") != null ? b.get("name") : b.get("id");
-                    sb.append(b.get("type")).append(" \"").append(name).append('"');
-                    if (b.get("items") != null) sb.append(" (").append(b.get("items")).append(" rows)");
-                }
-                sb.append('.');
+            // The reason (without the share-modal fix sentence), the heaviest resources only for a
+            // size refusal, then the fix in tool actions, aimed at the real table id when one is named.
+            String tableId = e.oversizedTableId();
+            StringBuilder sb = new StringBuilder("Publish refused: ").append(e.reasonForAgent());
+            if (tableId != null) {
+                sb.append(" Fix: call `agent` with action=update and remove table ").append(tableId)
+                  .append(" from the agent's custom selection, or delete rows with table(action='delete_rows', table_id=")
+                  .append(tableId).append(", where={...}), then retry publish.");
+            } else {
+                sb.append(" Fix: call `agent` with action=update and remove the heaviest resources from the agent's ")
+                  .append("custom selection (or reduce the table content), then retry publish.");
             }
-            sb.append(" Fix: call `agent` with action=update and remove the heaviest resources from the agent's ")
-              .append("custom selection (or reduce the table content), then retry publish.");
             return sb.toString();
         }
-
         return "Failed to publish agent: " + e.getMessage();
     }
 

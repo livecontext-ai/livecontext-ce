@@ -107,6 +107,21 @@ public class DataSourceService {
                                         DataSourceType sourceType, Map<String, Object> sourceConfig,
                                         List<Map<String, Object>> data, String createdBy,
                                         Map<String, ColumnMappingSpec> mappingSpec, String organizationId) {
+        return createDataSource(tenantId, name, description, sourceType, sourceConfig, data, createdBy,
+                mappingSpec, organizationId, com.apimarketplace.common.classification.DataSensitivity.NORMAL);
+    }
+
+    /**
+     * {@link #createDataSource(String, String, String, DataSourceType, Map, List, String, Map, String)}
+     * whose initial rows are stamped {@code sensitivity}: RESTRICTED when the caller's context
+     * holds Gmail / Drive content (CASA LC-066), so every later read of them is tagged. The tag
+     * is permanent: user-table rows have no retention sweep.
+     */
+    public DataSource createDataSource(String tenantId, String name, String description,
+                                        DataSourceType sourceType, Map<String, Object> sourceConfig,
+                                        List<Map<String, Object>> data, String createdBy,
+                                        Map<String, ColumnMappingSpec> mappingSpec, String organizationId,
+                                        com.apimarketplace.common.classification.DataSensitivity sensitivity) {
         validateCreateDataSourceInput(tenantId, name, sourceType, sourceConfig, createdBy);
 
         // Plan resource limit check (REST + LLM tool path).
@@ -160,7 +175,7 @@ public class DataSourceService {
         logger.info("DataSource saved with ID: {}", savedDataSource.id());
 
         if (data != null && !data.isEmpty()) {
-            addDataToSource(savedDataSource.id(), tenantId, data);
+            addDataToSource(savedDataSource.id(), tenantId, data, sensitivity);
         }
 
         // New table created with a vector column (self-hosted): schedule the
@@ -200,6 +215,12 @@ public class DataSourceService {
     }
 
     public void addDataToSource(Long dataSourceId, String tenantId, List<Map<String, Object>> data) {
+        addDataToSource(dataSourceId, tenantId, data, com.apimarketplace.common.classification.DataSensitivity.NORMAL);
+    }
+
+    /** {@link #addDataToSource(Long, String, List)} with every row stamped {@code sensitivity}. */
+    public void addDataToSource(Long dataSourceId, String tenantId, List<Map<String, Object>> data,
+                                com.apimarketplace.common.classification.DataSensitivity sensitivity) {
         if (dataSourceId == null) {
             throw new IllegalArgumentException("dataSourceId cannot be null");
         }
@@ -216,7 +237,11 @@ public class DataSourceService {
             DataSourceItem dataSourceItem = new DataSourceItem(
                     null, dataSourceId, tenantId, item, 0, Instant.now()
             );
-            dataSourceItemRepository.save(dataSourceItem);
+            if (sensitivity != null && sensitivity.isRestricted()) {
+                dataSourceItemRepository.insert(dataSourceItem, sensitivity);
+            } else {
+                dataSourceItemRepository.save(dataSourceItem);
+            }
             totalSize += estimateItemSize(item);
         }
         breakdownService.increment(tenantId, "DATATABLES", totalSize, data.size());
@@ -689,6 +714,55 @@ public class DataSourceService {
                                                                                   int offset,
                                                                                   int limit) {
         return getDataSourceItemsByTenantAndDataSourcePaginated(dataSourceId, tenantId, null, offset, limit);
+    }
+
+    /**
+     * True when any of these rows, returned by a read the caller was scoped for, is RESTRICTED
+     * (CASA LC-066). A failed lookup answers false: the rows are still returned, untagged.
+     */
+    public boolean containsRestrictedItems(Long dataSourceId, List<DataSourceItem> items) {
+        if (items == null || items.isEmpty()) {
+            return false;
+        }
+        try {
+            return dataSourceItemRepository.anyRestricted(dataSourceId,
+                    items.stream().map(DataSourceItem::id).toList());
+        } catch (Exception e) {
+            logger.warn("Could not read the sensitivity of datasource={} rows: {}", dataSourceId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * One page of a table for a caller that COPIES it out of the restricted-data controls: a
+     * marketplace publication snapshot (table, interface, workflow, application or agent listing)
+     * and the moderation view of one. RESTRICTED rows (Gmail / Drive-derived, CASA LC-066) are left
+     * out of the copy; the publisher's own table keeps them.
+     *
+     * <p>The exclusion is in the query, before the page is cut: filtering a page after it was cut
+     * made a page holding a RESTRICTED row come back short, which a caller paging to the end
+     * cannot tell apart from the last page. It cannot fail open: an unreadable sensitivity is a
+     * failed query, which propagates, so nothing is served. With {@code after} the page resumes
+     * after that row (keyset) and {@code offset} is ignored. Scope selection mirrors
+     * {@link #getDataSourceItemsByTenantAndDataSourcePaginated(Integer, String, String, int, int)}.
+     */
+    public List<DataSourceItem> getDataSourceItemsForCopy(Integer dataSourceId, String tenantId,
+                                                          String organizationId, int offset, int limit,
+                                                          DataSourceItemRepository.CopyCursor after) {
+        if (dataSourceId == null || offset < 0 || limit <= 0) {
+            return List.of();
+        }
+        if (organizationId != null && !organizationId.isBlank()) {
+            return dataSourceItemRepository.findCopyPageInOrgScope(
+                    dataSourceId.longValue(), organizationId, offset, limit, after);
+        }
+        if (tenantId == null) {
+            return List.of();
+        }
+        logger.warn("[DataSourceService] copy page fell back to tenant-only scope (no organizationId): "
+                + "dsId={}, tenant={}", dataSourceId, tenantId);
+        return dataSourceItemRepository.findCopyPageForTenant(
+                dataSourceId.longValue(), tenantId, offset, limit, after);
     }
 
     /**

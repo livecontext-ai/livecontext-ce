@@ -16,6 +16,19 @@ from dataclasses import dataclass
 from PIL import Image
 
 from app.config import settings
+from app.services.browser_request_guard import (
+    BlockedRequest,
+    RequestGuard,
+    install_on_nodriver,
+    nodriver_browser_connection,
+)
+from app.services.crawl_filter import crawl_block_reason
+from app.services.egress_guard_proxy import (
+    CHROME_EGRESS_ARGS,
+    CHROME_PROXY_EVERYTHING_ARG,
+    egress_guard_alive,
+    ensure_egress_guard,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +183,61 @@ _browser = None
 _browser_lock: asyncio.Lock | None = None
 _tab_semaphore: asyncio.Semaphore | None = None
 _proxy_forwarder = None  # Shared proxy forwarder
+# Egress guard URL the running Chrome was started with ("" behind an upstream proxy).
+_browser_egress_url = ""
+
+# Frame navigations the SSRF request guard refused, keyed by frame id. A tab's
+# main frame id is its target id, so `_crawl_in_tab` can tell "the page itself
+# (or one of its redirect hops) was blocked" from "an iframe was blocked".
+# Shared by every concurrent tab, so it is bounded by evicting the OLDEST
+# entries (insertion order) and never one a live crawl still needs: the main
+# frame of a tab being crawled (`_live_tabs`), nor a recent entry, which may
+# belong to a tab whose `browser.get` has not returned yet (the block is
+# recorded during the navigation, before the tab's id is known). A hard cap
+# bounds a flood of recent iframe blocks. (Clearing the whole map when full
+# dropped another tab's block and let its error page through as content.)
+_blocked_frames: dict[str, str] = {}
+_blocked_frames_at: dict[str, float] = {}
+_live_tabs: set[str] = set()
+_MAX_BLOCKED_FRAMES = 256
+_HARD_MAX_BLOCKED_FRAMES = 4096
+_BLOCKED_FRAME_GRACE_S = 120.0
+
+
+def _record_blocked_request(blocked: BlockedRequest) -> None:
+    if not (blocked.is_document and blocked.frame_id):
+        return
+    frame_id = blocked.frame_id
+    _blocked_frames.pop(frame_id, None)          # re-insert: newest last
+    _blocked_frames[frame_id] = blocked.reason
+    now = time.monotonic()
+    _blocked_frames_at[frame_id] = now
+    if len(_blocked_frames) > _MAX_BLOCKED_FRAMES:
+        _evict_blocked_frames(now)
+
+
+def _evict_blocked_frames(now: float) -> None:
+    for frame_id in list(_blocked_frames):       # oldest first
+        size = len(_blocked_frames)
+        if size <= _MAX_BLOCKED_FRAMES:
+            return
+        if frame_id in _live_tabs:
+            continue
+        recent = now - _blocked_frames_at.get(frame_id, 0.0) < _BLOCKED_FRAME_GRACE_S
+        if recent and size <= _HARD_MAX_BLOCKED_FRAMES:
+            continue
+        _forget_blocked_frame(frame_id)
+
+
+def _forget_blocked_frame(frame_id: str) -> None:
+    _blocked_frames.pop(frame_id, None)
+    _blocked_frames_at.pop(frame_id, None)
+
+
+def _main_frame_block(tab) -> str | None:
+    """Reason the guard refused this tab's own navigation, if it did."""
+    target_id = str(getattr(tab, "target_id", "") or "")
+    return _blocked_frames.get(target_id) if target_id else None
 
 # Circuit breaker: prevent infinite browser restart loops
 _MAX_RESTARTS = 3           # max restarts within the window
@@ -260,7 +328,7 @@ async def _ensure_browser():
     max _MAX_RESTARTS restarts within _RESTART_WINDOW_S seconds,
     then pauses for _COOLDOWN_S seconds before allowing new starts.
     """
-    global _browser, _proxy_forwarder
+    global _browser, _proxy_forwarder, _browser_egress_url
 
     if _browser is not None:
         # Health check: verify Chrome process is still running
@@ -271,6 +339,17 @@ async def _ensure_browser():
                 _browser = None
         except Exception:
             pass
+
+    if _browser is not None and _browser_egress_url and not egress_guard_alive(_browser_egress_url):
+        # Chrome's only way out is the egress guard: with it gone every
+        # page fails. Start a new guard (new port) and a Chrome pointing at it.
+        logger.error("[BROWSER] Egress guard proxy %s is down; restarting it and Chrome",
+                     _browser_egress_url)
+        try:
+            _browser.stop()
+        except Exception:
+            pass
+        _browser = None
 
     if _browser is not None:
         return _browser
@@ -299,14 +378,34 @@ async def _ensure_browser():
 
         # Rotating proxy
         proxy_url = settings.proxy_url
+        egress_url = ""
         if proxy_url:
             from nodriver.core.util import ProxyForwarder
             _proxy_forwarder = ProxyForwarder(proxy_url)
             logger.info("[BROWSER] Proxy forwarder started: %s → %s",
                         _proxy_forwarder.proxy_server, settings.proxy_host)
             args.append(f"--proxy-server={_proxy_forwarder.proxy_server}")
+            # Loopback / link-local too: Chrome would otherwise open those
+            # (WebSockets included, which the Fetch guard never sees) from
+            # this host instead of the proxy's network.
+            args.append(CHROME_PROXY_EVERYTHING_ARG)
             args.append("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
             args.append("--enable-features=WebRtcHideLocalIpsWithMdns")
+        else:
+            # No upstream proxy: Chrome reaches the network only through the
+            # local egress guard, which resolves each name once and dials the
+            # address it checked (DNS rebinding, WebSockets). With an upstream
+            # proxy, names are resolved and dialled from the proxy's network.
+            # Fail closed: no guard, no browser.
+            try:
+                # Off the event loop: (re)starting the guard waits for its thread.
+                egress_url = await asyncio.to_thread(ensure_egress_guard)
+                args.append(f"--proxy-server={egress_url}")
+            except Exception as e:
+                logger.error("[BROWSER] Egress guard proxy could not start (%s: %s); "
+                             "refusing to crawl", type(e).__name__, e)
+                return None
+            args.extend(CHROME_EGRESS_ARGS)
 
         import tempfile
         user_data_dir = tempfile.mkdtemp(prefix="uc_browser_")
@@ -318,9 +417,16 @@ async def _ensure_browser():
             with open(os.path.join(prefs_dir, "Preferences"), "w") as f:
                 _json.dump(prefs, f)
 
+        # The new Chrome stays in a local until it is fully set up: `_browser`
+        # and `_browser_egress_url` are published together, with no await in
+        # between, once the request guard is installed. A concurrent caller
+        # meanwhile sees `_browser is None` and waits on the lock for this
+        # startup, so it never gets a Chrome without Fetch interception, nor
+        # pairs the new Chrome with the previous guard's URL (which reads as
+        # a dead guard and would stop the Chrome still being set up).
         t1 = time.monotonic()
         try:
-            _browser = await uc.start(
+            browser = await uc.start(
                 headless=use_headless,
                 user_data_dir=user_data_dir,
                 browser_args=args,
@@ -330,6 +436,23 @@ async def _ensure_browser():
             _record_restart()
             return None
         _record_restart()
+
+        # SSRF guard on EVERY request this Chrome makes (redirect hops,
+        # iframes, subresources, workers). Fail closed: a browser without
+        # the guard is never handed out.
+        try:
+            await install_on_nodriver(
+                nodriver_browser_connection(browser), RequestGuard(on_blocked=_record_blocked_request),
+            )
+        except Exception as e:
+            logger.error("[BROWSER] SSRF request guard could not be installed (%s: %s); "
+                         "refusing to crawl", type(e).__name__, e)
+            try:
+                browser.stop()
+            except Exception:
+                pass
+            return None
+        _browser, _browser_egress_url = browser, egress_url
         mode = "headless" if use_headless else "headed"
         proxy_info = f", proxy={settings.proxy_host}" if proxy_url else ""
         logger.info("[BROWSER] Chrome started: %dms (%s%s, max_tabs=%d)",
@@ -552,6 +675,9 @@ async def _crawl_in_tab(
                            blocked_reason="browser_crashed")
     logger.info("[TIMING] %s navigate: %dms", domain, int((time.monotonic() - t0) * 1000))
 
+    target_id = str(getattr(tab, "target_id", "") or "")
+    if target_id:
+        _live_tabs.add(target_id)
     try:
         # 0. Neutral timezone (avoid FR timezone fingerprint leak)
         try:
@@ -565,6 +691,11 @@ async def _crawl_in_tab(
         blocked_reason = await _wait_for_content(tab, timeout_s=8.0)
         logger.info("[TIMING] %s content ready: %dms", domain, int((time.monotonic() - t1) * 1000))
 
+        ssrf_reason = _main_frame_block(tab)
+        if ssrf_reason:
+            logger.warning("[SSRF] %s navigation refused: %s", domain, ssrf_reason)
+            return BrowsedPage(html="", title="", screenshot_bytes=None,
+                               blocked_reason=crawl_block_reason(ssrf_reason))
 
         # 2. If blocked, extract title and bail out immediately
         if blocked_reason:
@@ -823,12 +954,22 @@ async def _crawl_in_tab(
             except Exception as e:
                 logger.warning("Screenshot failed for %s: %r", url, e)
 
+        # A late redirect (meta refresh, JS location change) can be refused
+        # after the first check: never return the error page as content.
+        ssrf_reason = _main_frame_block(tab)
+        if ssrf_reason:
+            logger.warning("[SSRF] %s late navigation refused: %s", domain, ssrf_reason)
+            return BrowsedPage(html="", title="", screenshot_bytes=None,
+                               blocked_reason=crawl_block_reason(ssrf_reason))
+
         return BrowsedPage(
             html=text_content,
             title=title,
             screenshot_bytes=screenshot_bytes,
         )
     finally:
+        _live_tabs.discard(target_id)
+        _forget_blocked_frame(target_id)
         try:
             await tab.close()
         except Exception:

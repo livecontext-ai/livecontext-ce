@@ -140,6 +140,8 @@ class MonolithSecurityFilterProtectedPathTest {
         MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/storage/quota");
         request.setRemoteAddr("127.0.0.1");
+        // In-process caller: presents this boot's secret (CASA LC-032).
+        request.addHeader(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret());
         request.addHeader("X-User-ID", "42");
         request.addHeader("X-User-Roles", "USER");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -165,6 +167,8 @@ class MonolithSecurityFilterProtectedPathTest {
         MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
         MockHttpServletRequest request = new MockHttpServletRequest("POST", BRIDGE_ACCESS_PATH);
         request.setRemoteAddr("127.0.0.1");
+        // In-process caller: presents this boot's secret (CASA LC-032).
+        request.addHeader(MonolithSecurityFilter.IN_PROCESS_SECRET_HEADER, MonolithSecurityFilter.inProcessSecret());
         request.addHeader("X-User-ID", "42");
         request.addHeader("X-User-Roles", "USER");
         MockHttpServletResponse response = new MockHttpServletResponse();

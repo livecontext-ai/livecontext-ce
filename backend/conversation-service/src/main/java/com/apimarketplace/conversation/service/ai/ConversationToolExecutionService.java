@@ -88,6 +88,10 @@ public class ConversationToolExecutionService implements ToolExecutionService {
         this.streamPubSubService = streamPubSubService;
         this.toolServiceRouter = toolServiceRouter;
         this.restTemplate = createToolExecutionRestTemplate();
+        // CASA LC-035: v2 gateway signature added at send time to the calls internalHeaders()
+        // stamped with v1. The secret is a field-injected @Value, hence the supplier.
+        this.restTemplate.getInterceptors().add(
+                new com.apimarketplace.common.web.GatewaySignatureV2Interceptor(() -> gatewaySecretKey));
         this.objectMapper = new ObjectMapper();
     }
 
@@ -342,12 +346,20 @@ public class ConversationToolExecutionService implements ToolExecutionService {
             if (savedResult.getErrorMessage() != null) {
                 result.put("error", savedResult.getErrorMessage());
             }
+            // A copy of a Gmail / Drive result is that result: it keeps its class, so the saved copy
+            // is purged and withheld like the original (CASA LC-066 / LC-011).
+            Map<String, Object> copyMetadata = com.apimarketplace.common.classification.DataSensitivity
+                    .parse(savedResult.getDataSensitivity()).isRestricted()
+                ? Map.of(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY,
+                    com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name())
+                : null;
 
             return ToolResult.builder()
                 .toolCall(toolCall)
                 .success(true)
                 .content(objectMapper.writeValueAsString(result))
                 .durationMs(duration)
+                .metadata(copyMetadata)
                 .build();
 
         } catch (Exception e) {
@@ -662,6 +674,8 @@ public class ConversationToolExecutionService implements ToolExecutionService {
                 Map<String, Object> meta = new HashMap<>();
                 meta.put("silentError", true);   // tells frontend NOT to render a service-approval card
                 meta.put("exists", true);
+                // Names the service only to label the result; nothing was read (CASA LC-066).
+                meta.put(com.apimarketplace.common.classification.RestrictedDataPolicy.CREDENTIAL_NEEDED_KEY, true);
                 meta.put("services", servicesAlreadyConfigured);
                 // Enrich for the (rare) case where the tool result IS shown in the activity
                 // feed - gives it a proper name/icon instead of falling back to "#1".
@@ -749,6 +763,9 @@ public class ConversationToolExecutionService implements ToolExecutionService {
             // Build metadata with services list AND display info
             Map<String, Object> metadata = new HashMap<>();
             metadata.put("serviceApprovalRequested", true);
+            // A Connect card reads nothing: it names Gmail only to be drawn, so it must not mark
+            // the conversation restricted (CASA LC-066), as the catalog's own cards do not.
+            metadata.put(com.apimarketplace.common.classification.RestrictedDataPolicy.CREDENTIAL_NEEDED_KEY, true);
             metadata.put("services", services);
             metadata.put("reason", reason != null ? reason : "");
             // Add icon and display name for tool card (like catalog_call does)
@@ -1517,6 +1534,9 @@ public class ConversationToolExecutionService implements ToolExecutionService {
                 headers.set("X-User-Roles", userRoles);
             }
         }
+        // Sign LAST (CASA LC-013), over the identity/role headers set above, so the tool service
+        // can authorize on them instead of trusting an unauthenticated public path.
+        com.apimarketplace.common.web.InternalGatewaySigner.stamp(headers, INTERNAL_PROVIDER_ID, gatewaySecretKey);
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(request, headers);
 
@@ -1534,7 +1554,7 @@ public class ConversationToolExecutionService implements ToolExecutionService {
 
             // DEBUG: Log response body for workflow
             if ("workflow".equals(toolCall.toolName())) {
-                log.info("📦 [WORKFLOW] Response from orchestrator - metadata: {}", body.get("metadata"));
+                log.info("📦 [WORKFLOW] Response from orchestrator - metadata: {}", com.apimarketplace.common.logging.PayloadLogSafety.describeAny(body.get("metadata")));
             }
 
             return parseExecutionResponse(toolCall, body, duration);

@@ -29,6 +29,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import com.apimarketplace.common.classification.DataSensitivity;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -187,7 +188,7 @@ class AgentTaskServiceRefusalLogLevelTest {
                 "DeepSeek Reviewer", ORG)).thenReturn(CONVERSATION_ID);
         lenient().when(conversationClient.sendChatSync(eq(TENANT), eq(CONVERSATION_ID), anyString(),
                 eq(reviewerId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK_REVIEW"),
-                eq(taskId.toString()), eq(ORG), anyString(), anyString()))
+                eq(taskId.toString()), eq(ORG), anyString(), anyString(), eq(DataSensitivity.NORMAL)))
                 .thenReturn(Map.of("success", false, "error", chatError));
 
         TenantResolver.runWithOrgScope(ORG, () -> invokePrivate("executeReviewerForTask", task));
@@ -209,7 +210,7 @@ class AgentTaskServiceRefusalLogLevelTest {
         lenient().when(conversationClient.findOrCreateAgentConversation(agentId.toString(), TENANT, "DeepSeek Worker", ORG))
                 .thenReturn(CONVERSATION_ID);
         lenient().when(conversationClient.sendChatSync(eq(TENANT), eq(CONVERSATION_ID), contains("Complete the assigned task"),
-                eq(agentId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK"), eq(taskId.toString()), eq(ORG), isNull(), anyString()))
+                eq(agentId.toString()), eq("deepseek-chat"), eq("deepseek"), eq("TASK"), eq(taskId.toString()), eq(ORG), isNull(), anyString(), eq(DataSensitivity.NORMAL)))
                 .thenReturn(Map.of("success", false, "error", chatError));
         lenient().when(taskRepository.findByIdAndOrganizationIdStrict(taskId, ORG)).thenReturn(Optional.of(stillInProgress));
 

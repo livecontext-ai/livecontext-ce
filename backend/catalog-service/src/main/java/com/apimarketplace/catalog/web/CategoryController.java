@@ -8,8 +8,10 @@ import com.apimarketplace.catalog.domain.dto.ToolListResponse;
 import com.apimarketplace.catalog.domain.dto.IntentResolutionResponse;
 import com.apimarketplace.catalog.service.CategoryService;
 import com.apimarketplace.catalog.service.CatalogV1Service;
+import com.apimarketplace.common.web.AdminRoleGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 

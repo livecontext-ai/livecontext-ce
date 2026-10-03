@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # Gateway authentication (shared secret with Java gateway)
     gateway_secret: str = ""
 
+    # Origins a caller-supplied `callback_url` may target, comma-separated
+    # bare origins (e.g. "http://livecontext:8080"). Must match the origin of
+    # the orchestrator's WEBSEARCH_CALLBACK_BASE_URL. Empty = no callback is
+    # ever sent, and startup logs a warning (crawl_filter.callback_origin_warnings).
+    # Set per lane: CE compose files (the monolith), websearch-host.service (prod).
+    callback_allowed_origins: str = ""
+
     # ── Browser-agent (browser-use) safety toggles ─────────────────────────
     # When enabled, the runner injects `guardrails.js` into every new
     # document so password / credit-card fields cannot be typed into and

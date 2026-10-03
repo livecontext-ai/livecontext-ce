@@ -27,7 +27,13 @@ public record CrudResultDto(
             // this (CrudResponse.ResultData); without the component here Jackson dropped it on the
             // way in, so a workflow's table step could write a value the platform had diagnosed as
             // unusable and report nothing at all.
-            List<String> warnings
+            List<String> warnings,
+            // LC-066/LC-011 re-audit item 2: "RESTRICTED" or "NORMAL" - for read-row, the OR of
+            // every returned row's own stored tag and the request's restricted flag (see
+            // datasource-service's CrudExecutorService.readResultSensitivity). Orchestrator's
+            // CrudToolExecutor stamps this onto the tool-result metadata so a disallowed LLM
+            // processor never receives a row echoing Gmail/Drive content.
+            String dataSensitivity
     ) {
         /**
          * The shape before warnings existed. Kept so every caller that builds a result without them
@@ -38,7 +44,16 @@ public record CrudResultDto(
                           Integer offset, List<Long> insertedIds, Integer insertedCount,
                           Integer affectedRows, Integer deletedRows, List<String> createdColumns) {
             this(rows, rowCount, hasMore, offset, insertedIds, insertedCount, affectedRows,
-                    deletedRows, createdColumns, null);
+                    deletedRows, createdColumns, null, null);
+        }
+
+        /** The shape before dataSensitivity existed. Kept for the same reason as the ctor above. */
+        public ResultData(List<Map<String, Object>> rows, Integer rowCount, Boolean hasMore,
+                          Integer offset, List<Long> insertedIds, Integer insertedCount,
+                          Integer affectedRows, Integer deletedRows, List<String> createdColumns,
+                          List<String> warnings) {
+            this(rows, rowCount, hasMore, offset, insertedIds, insertedCount, affectedRows,
+                    deletedRows, createdColumns, warnings, null);
         }
     }
 }

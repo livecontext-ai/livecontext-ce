@@ -15,6 +15,7 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +31,40 @@ import java.util.UUID;
 public class DataSourceClient {
 
     private static final Logger log = LoggerFactory.getLogger(DataSourceClient.class);
+
+    /**
+     * Response header of the internal items read: {@code RESTRICTED} when a returned row is
+     * (CASA LC-066). A header, so the rows' JSON, which other callers copy and compare, is unchanged.
+     */
+    public static final String DATA_SENSITIVITY_HEADER = "X-LiveContext-Data-Sensitivity";
+
+    /**
+     * Response header of the internal items read: {@code true} when the RESTRICTED rows were left
+     * out as asked ({@code excludeRestricted=true}, CASA LC-066). A datasource-service that predates
+     * the filter ignores the parameter and does not send this header, so a copy read without it is
+     * refused rather than trusted (the rolling-update window).
+     */
+    public static final String RESTRICTED_EXCLUDED_HEADER = "X-LiveContext-Restricted-Excluded";
+
+    /**
+     * Response header of a copy page ({@code excludeRestricted=true}): {@code true} when the
+     * RESTRICTED rows were left out BEFORE the page was cut and an {@code afterPriority} /
+     * {@code afterId} cursor, when sent, was honoured. An older datasource-service filters after
+     * the cut and ignores the cursor, so a copy page without it is not trusted.
+     */
+    public static final String COPY_KEYSET_HEADER = "X-LiveContext-Copy-Keyset";
+
+    /**
+     * Most rows a publication may ship per table, which bounds a publication copy
+     * ({@link #getAllItems}): it reads ONE row past this, so a table at exactly the limit and a
+     * larger one stay distinguishable and the caller's budget check refuses the larger one instead
+     * of shipping a silently capped copy. publication-service's snapshot budget
+     * ({@code publication.agent-snapshot.max-table-rows}, default 5000) is clamped to it.
+     */
+    public static final int MAX_COPY_ROWS = 5_000;
+
+    /** Rows per request when {@link #getAllItems} pages through a table. */
+    static final int COPY_PAGE_SIZE = 500;
 
     private final RestTemplate restTemplate;
     // Dedicated bounded-timeout template used ONLY by
@@ -465,6 +500,14 @@ public class DataSourceClient {
      * {@link #getAllItems} deliberately does not ask, because it copies the table.
      */
     public List<DataSourceItemDto> getItems(Long dataSourceId, String tenantId, int offset, int limit) {
+        return getItemsPage(dataSourceId, tenantId, offset, limit).items();
+    }
+
+    /**
+     * {@link #getItems}, plus whether a returned row is RESTRICTED (CASA LC-066), for a caller
+     * about to RUN on the rows: a run that loads Gmail-derived rows holds that content.
+     */
+    public DataSourceItemsPage getItemsPage(Long dataSourceId, String tenantId, int offset, int limit) {
         String url = UriComponentsBuilder.fromHttpUrl(baseUrl + "/api/internal/datasource/" + dataSourceId + "/items")
                 .queryParam("offset", offset)
                 .queryParam("limit", limit)
@@ -474,43 +517,138 @@ public class DataSourceClient {
         try {
             ResponseEntity<List<DataSourceItemDto>> response = restTemplate.exchange(
                     url, HttpMethod.GET, entity, new ParameterizedTypeReference<>() {});
-            return response.getBody() != null ? response.getBody() : Collections.emptyList();
+            boolean restricted = "RESTRICTED".equalsIgnoreCase(
+                    response.getHeaders().getFirst(DATA_SENSITIVITY_HEADER));
+            return new DataSourceItemsPage(response.getBody(), restricted);
         } catch (Exception e) {
             log.error("Failed to get items for ds={}: {}", dataSourceId, e.getMessage());
-            return Collections.emptyList();
+            return new DataSourceItemsPage(Collections.emptyList(), false);
         }
     }
 
     /**
-     * Get ALL items for a datasource (no pagination).
-     * Used by InterfaceRenderService and publication enrichment.
+     * {@link #getAllItems(Long, String, String)} in tenant scope: a lenient copy, empty on failure
+     * (see {@link #copyAllItems} for the paging, the confirmations and the row cap).
      */
     public List<DataSourceItemDto> getAllItems(Long dataSourceId, String tenantId) {
         return getAllItems(dataSourceId, tenantId, null);
     }
 
     /**
-     * Get ALL items for a datasource in an explicit organization scope.
+     * {@link #copyAllItems}, for a caller that can live without the rows: any failure answers an
+     * empty list (logged) instead of throwing. Used by the moderation view of a listing, which
+     * shows what it can; a PUBLISH must call {@link #copyAllItems}, so that a failed copy never
+     * ships as an empty table.
+     */
+    public List<DataSourceItemDto> getAllItems(Long dataSourceId, String tenantId, String organizationId) {
+        try {
+            return copyAllItems(dataSourceId, tenantId, organizationId);
+        } catch (TableCopyException e) {
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * A publication copy of a table, in an explicit organization scope (null = tenant scope): the
+     * whole table in its stored order, or {@link #MAX_COPY_ROWS} + 1 rows when it is larger.
+     * Throws {@link TableCopyException} when the copy cannot be completed, so a caller tells a
+     * table that IS empty (an empty list) from one that could not be read.
+     *
+     * <p>Pages through the internal endpoint in pages of {@link #COPY_PAGE_SIZE} until a short page
+     * (the {@code page} / {@code size} this method used to send were ignored by the endpoint, so a
+     * copy held at most the first 50 rows). The first page is {@code offset=0}; each next one
+     * resumes after the last row received ({@code afterPriority} / {@code afterId}, a keyset on the
+     * total order {@code priority DESC, id ASC}), so a row inserted or deleted while the copy runs
+     * does not shift the pages. Rows are de-duplicated by id. The copy is not one transaction: a
+     * row whose priority changes mid-copy may be missed, and is never copied twice.
+     *
+     * <p>One row past the cap is read on purpose: {@code MAX_COPY_ROWS + 1} rows means "larger than
+     * the cap", which the caller's snapshot budget refuses. Never a silently capped table.
+     *
+     * <p>Every page must confirm two things, or the copy fails: {@link #RESTRICTED_EXCLUDED_HEADER}
+     * (RESTRICTED rows, Gmail / Drive-derived, CASA LC-066, were left out) and
+     * {@link #COPY_KEYSET_HEADER} (they were left out BEFORE the page was cut, so a short page is
+     * the last one, and a cursor was honoured). A datasource-service older than either answers
+     * without it during a rolling update: trusting it could copy RESTRICTED rows, stop early on a
+     * short page, or serve the first page again forever. Termination never depends on the server:
+     * a full page that adds no new row fails the copy, and so does a copy still paging after
+     * {@code ceil((MAX_COPY_ROWS + 1) / COPY_PAGE_SIZE) + 1} requests.
      *
      * <p>Deliberately does NOT ask for hydrated media cells: this feeds the publication snapshot and
      * the live side of the moderation diff, both of which are compared against stored copies. A
      * different encoding on one side would make an unchanged table read as changed on every media
      * cell.
      */
-    public List<DataSourceItemDto> getAllItems(Long dataSourceId, String tenantId, String organizationId) {
-        String url = UriComponentsBuilder.fromHttpUrl(baseUrl + "/api/internal/datasource/" + dataSourceId + "/items")
-                .queryParam("page", 0)
-                .queryParam("size", 10000)
-                .toUriString();
+    public List<DataSourceItemDto> copyAllItems(Long dataSourceId, String tenantId, String organizationId) {
         HttpEntity<Void> entity = new HttpEntity<>(buildHeaders(tenantId, organizationId));
+        int wanted = MAX_COPY_ROWS + 1;
+        int maxRequests = (wanted + COPY_PAGE_SIZE - 1) / COPY_PAGE_SIZE + 1;
+        List<DataSourceItemDto> copy = new ArrayList<>();
+        java.util.Set<Long> seen = new java.util.HashSet<>();
+        DataSourceItemDto last = null;
+        int received = 0;
         try {
-            ResponseEntity<List<DataSourceItemDto>> response = restTemplate.exchange(
-                    url, HttpMethod.GET, entity, new ParameterizedTypeReference<>() {});
-            return response.getBody() != null ? response.getBody() : Collections.emptyList();
+            for (int request = 0; copy.size() < wanted; request++) {
+                if (request >= maxRequests) {
+                    throw copyFailure(dataSourceId, organizationId, copy.size(),
+                            "still paging after " + maxRequests + " requests", null);
+                }
+                int limit = Math.min(COPY_PAGE_SIZE, wanted - copy.size());
+                UriComponentsBuilder uri = UriComponentsBuilder
+                        .fromHttpUrl(baseUrl + "/api/internal/datasource/" + dataSourceId + "/items")
+                        .queryParam("offset", received)
+                        .queryParam("limit", limit)
+                        .queryParam("excludeRestricted", true);
+                if (last != null) {
+                    if (last.id() == null || last.priority() == null) {
+                        throw copyFailure(dataSourceId, organizationId, copy.size(),
+                                "a copied row has no id or priority to resume after", null);
+                    }
+                    uri.queryParam("afterPriority", last.priority()).queryParam("afterId", last.id());
+                }
+                ResponseEntity<List<DataSourceItemDto>> response = restTemplate.exchange(
+                        uri.toUriString(), HttpMethod.GET, entity, new ParameterizedTypeReference<>() {});
+                if (!"true".equalsIgnoreCase(response.getHeaders().getFirst(RESTRICTED_EXCLUDED_HEADER))) {
+                    throw copyFailure(dataSourceId, organizationId, copy.size(), "the page did not confirm that "
+                            + "RESTRICTED rows were left out (datasource-service older than the filter?)", null);
+                }
+                if (!"true".equalsIgnoreCase(response.getHeaders().getFirst(COPY_KEYSET_HEADER))) {
+                    throw copyFailure(dataSourceId, organizationId, copy.size(), "the page did not confirm keyset "
+                            + "paging (datasource-service older than the paged copy?)", null);
+                }
+                List<DataSourceItemDto> page = response.getBody() != null ? response.getBody() : List.of();
+                received += page.size();
+                int added = 0;
+                for (DataSourceItemDto item : page) {
+                    if (item.id() == null || seen.add(item.id())) {
+                        copy.add(item);
+                        added++;
+                    }
+                }
+                if (page.size() < limit) {
+                    return copy;
+                }
+                if (added == 0) {
+                    throw copyFailure(dataSourceId, organizationId, copy.size(),
+                            "a full page added no new row (the cursor was not honoured)", null);
+                }
+                last = page.get(page.size() - 1);
+            }
+            log.warn("Datasource ds={} org={} has more than {} copyable rows: the copy stops one row past the "
+                    + "cap so the publication budget refuses it", dataSourceId, organizationId, MAX_COPY_ROWS);
+            return copy;
+        } catch (TableCopyException e) {
+            throw e;
         } catch (Exception e) {
-            log.error("Failed to get all items for ds={} org={}: {}", dataSourceId, organizationId, e.getMessage());
-            return Collections.emptyList();
+            throw copyFailure(dataSourceId, organizationId, copy.size(), e.getMessage(), e);
         }
+    }
+
+    private static TableCopyException copyFailure(Long dataSourceId, String organizationId, int copied,
+                                                  String reason, Throwable cause) {
+        log.error("Publication copy of ds={} org={} failed after {} rows, nothing copied: {}",
+                dataSourceId, organizationId, copied, reason);
+        return new TableCopyException(dataSourceId, "Copy of table " + dataSourceId + " failed: " + reason, cause);
     }
 
     /**

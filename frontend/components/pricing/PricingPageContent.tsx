@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getClientLocale } from '@/lib/utils/locale';
 import Link from 'next/link';
 import { TYPOGRAPHY } from '@/lib/typography';
@@ -17,6 +17,7 @@ import { useAuth } from '@/lib/providers/smart-providers';
 import { usePlans } from '@/lib/hooks/smart-hooks-complete';
 import EnterprisePricingModal from '@/components/EnterprisePricingModal';
 import UpgradeModal, { UpgradeModalState } from '@/components/UpgradeModal';
+import { PartnerOfferWelcomeModal } from '@/components/partner/offer/PartnerOfferWelcomeModal';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Toast from '@/components/Toast';
 import { Button } from '@/components/ui/button';
@@ -30,6 +31,8 @@ import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { cloudLinkService, type CloudLinkStatus, CLOUD_NO_SUBSCRIPTION } from '@/lib/api/cloud-link.service';
 import { track } from '@/lib/analytics/analytics';
 import { RewardCodeInline } from '@/components/reward/RewardCodeInline';
+import { PartnerRecommendationBanner } from '@/components/partner/PartnerRecommendationBanner';
+import { partnerRecommendationFromSearch } from '@/lib/partners/partnerLink';
 import { usePersonalOffer } from '@/lib/hooks/usePersonalOffer';
 import { readPendingPersonalOffer } from '@/lib/lifecycle/pendingPersonalOffer';
 import {
@@ -39,7 +42,8 @@ import {
   savePersonalOfferJourney,
 } from '@/lib/lifecycle/personalOfferJourney';
 import { ApiError } from '@/lib/api/api-client';
-import { hasAttachedPersonalOfferCheckout, personalOfferCheckoutApiError, personalOfferCheckoutBlock } from '@/lib/billing/personal-offer-checkout';
+import { OFFER_TOKEN_RE } from '@/lib/partners/offerToken';
+import { hasAttachedPersonalOfferCheckout, PERSONAL_OFFER_STALE_CODES, personalOfferCheckoutApiError, personalOfferCheckoutBlock, personalOfferPreviewError } from '@/lib/billing/personal-offer-checkout';
 
 // CE installs manage billing on the LINKED LiveContext Cloud account; the cloud web app lives
 // here (matches the hardcoded cloud host used elsewhere in CE, e.g. marketplace CategoryFilter).
@@ -51,6 +55,7 @@ export default function PricingPage() {
   const tCards = useTranslations('pricing.planCards');
   const locale = useLocale();
   const tOffer = useTranslations('reward.personalOffer');
+  const tPartnerRec = useTranslations('pricing.partnerRecommendation');
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('yearly');
   const [creditTierIndex, setCreditTierIndex] = useState(0);
   const personalOffer = usePersonalOffer(creditTierIndex, billingCycle, !isCeMode);
@@ -165,6 +170,18 @@ export default function PricingPage() {
   // Router and search params for Stripe return handling
   const searchParams = useSearchParams();
   const router = useRouter();
+  // A partner's recommended link (see PartnerLinkBuilder). The banner above the grid states the
+  // recommendation whatever the visitor selects; a card says "recommended by your partner" only
+  // while the page shows exactly what was recommended (plan, credits and cycle), otherwise a
+  // visitor's own 1M yearly would wear the badge of a 250K monthly recommendation.
+  const partnerRecommendation = useMemo(
+    () => (isCeMode ? null : partnerRecommendationFromSearch(new URLSearchParams(searchParams?.toString() ?? ''))),
+    [searchParams],
+  );
+  const partnerRecommendedPlan = partnerRecommendation
+    && partnerRecommendation.creditTier === creditTierIndex && partnerRecommendation.cycle === billingCycle
+    ? partnerRecommendation.plan.toUpperCase()
+    : null;
 
   // A campaign link's monthly cadence and any choices made before sign-in or Stripe take
   // precedence over the ordinary yearly default. Restore once to avoid resetting later edits.
@@ -412,6 +429,9 @@ export default function PricingPage() {
   // Track if we're currently polling for webhook confirmation
   const [isPollingWebhook, setIsPollingWebhook] = useState(false);
   const [planBeforeCheckout, setPlanBeforeCheckout] = useState<string | null>(null);
+  // Back from paying through a partner's offer: its welcome (the apps it gives, the partner)
+  // replaces the plain upgrade confirmation.
+  const [offerWelcomeToken, setOfferWelcomeToken] = useState<string | null>(null);
 
   // One page-view event per mount, once the subscription has resolved so
   // current_plan is the real one (the query is not loading when signed out).
@@ -442,11 +462,14 @@ export default function PricingPage() {
       // Status + plan only: the Stripe session id never leaves the browser.
       track('checkout_returned', { status: 'success', from_plan: currentPlan });
       void personalOffer.refresh();
+      const offerToken = searchParams.get('offer');
+      if (offerToken && OFFER_TOKEN_RE.test(offerToken)) setOfferWelcomeToken(offerToken);
 
       // Keep the chosen cadence and pack while removing only Stripe's return markers.
       const url = new URL(window.location.href);
       url.searchParams.delete('checkout');
       url.searchParams.delete('session_id');
+      url.searchParams.delete('offer');
       window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     } else if (checkoutStatus === 'cancelled') {
       // User cancelled checkout
@@ -658,7 +681,8 @@ export default function PricingPage() {
           ['AVAILABLE', 'CHECKOUT_OPEN'].includes(personalOffer.current.status));
       const offerPlan = personalOffer.preview?.plans.find((candidate) => candidate.planCode === backendPlanCode);
       if (!continueWithoutOffer && (personalOffer.isLoading || personalOffer.isError)) {
-        return { success: false, error: tOffer('verifyUnavailable') };
+        const refused = personalOffer.isError ? personalOfferPreviewError(personalOffer.errorCode) : null;
+        return { success: false, error: tOffer(refused ?? 'verifyUnavailable') };
       }
       if (offerIntent && (personalOffer.isLoading || personalOffer.isError || !personalOffer.preview)) {
         return { success: false, error: tOffer('verifyUnavailable') };
@@ -755,7 +779,7 @@ export default function PricingPage() {
       }
     } catch (error) {
       trackCheckout('error');
-      if (error instanceof ApiError && ['OFFER_PREVIEW_STALE', 'OFFER_EXPIRED', 'OFFER_CONFLICT', 'OFFER_REVIEW_REQUIRED'].includes(error.code ?? '')) {
+      if (error instanceof ApiError && PERSONAL_OFFER_STALE_CODES.includes(error.code ?? '')) {
         void personalOffer.refresh();
       }
       const offerPaymentError = error instanceof ApiError ? personalOfferCheckoutApiError(error.code) : null;
@@ -1123,6 +1147,8 @@ export default function PricingPage() {
           self-hosted edition sells no plan here (it opens the cloud pricing page), so it has none.
           pt-4: this is the first thing in the page's scroll container, which clipped the top
           border (and focus ring) of the opened field when it sat flush against the edge. */}
+      {/* Mounted only for a partner's recommended link: an ordinary visit asks nothing. */}
+      {partnerRecommendation && <PartnerRecommendationBanner className="px-4 pt-4" />}
       {!isCeMode && <RewardCodeInline className="flex justify-center pt-4" subscriptionCheckout creditTierIndex={creditTierIndex} billingCycle={billingCycle} />}
       {!isCeMode && returnToWork && ['GRANTED', 'NO_BONUS'].includes(personalOffer.current?.status ?? '') && (
         <div className="mt-2 text-center text-sm"><Link className="underline underline-offset-2 text-theme-primary" href={returnToWork}>{tOffer('returnToWork')}</Link></div>
@@ -1304,6 +1330,8 @@ export default function PricingPage() {
                 personalOffer={personalOffer.preview?.plans.find((entry) => entry.planCode === plan.id.toUpperCase())}
                 nextEligibleMonthlyCredits={personalOffer.preview?.nextEligibleMonthlyCredits}
                 selectedPlanCode={selectedPlanCode}
+                partnerRecommendedPlanCode={partnerRecommendedPlan}
+                partnerRecommendedLabel={tPartnerRec('badge')}
               />
             ))}
           </div>
@@ -1337,6 +1365,8 @@ export default function PricingPage() {
                 personalOffer={personalOffer.preview?.plans.find((entry) => entry.planCode === plan.id.toUpperCase())}
                 nextEligibleMonthlyCredits={personalOffer.preview?.nextEligibleMonthlyCredits}
                 selectedPlanCode={selectedPlanCode}
+                partnerRecommendedPlanCode={partnerRecommendedPlan}
+                partnerRecommendedLabel={tPartnerRec('badge')}
               />
             ))}
           </div>
@@ -1627,8 +1657,16 @@ export default function PricingPage() {
       />
 
       {/* Unified Upgrade Modal */}
+      {offerWelcomeToken && showUpgradeModal && upgradeModalState !== 'confirm' && (
+        <PartnerOfferWelcomeModal
+          token={offerWelcomeToken}
+          planState={upgradeModalState}
+          planCode={newPlanCode || typedSubscription?.subscription?.planCode || ''}
+          onClose={() => { setOfferWelcomeToken(null); handleUpgradeModalClose(); }}
+        />
+      )}
       <UpgradeModal
-        open={showUpgradeModal}
+        open={showUpgradeModal && !offerWelcomeToken}
         state={upgradeModalState}
         currentPlan={typedSubscription?.subscription?.planCode || 'FREE'}
         targetPlan={newPlanCode?.toUpperCase() || 'UNKNOWN'}

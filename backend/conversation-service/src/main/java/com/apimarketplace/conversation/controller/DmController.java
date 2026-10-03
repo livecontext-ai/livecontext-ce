@@ -1,5 +1,7 @@
 package com.apimarketplace.conversation.controller;
 
+import com.apimarketplace.common.web.ContentDispositions;
+import com.apimarketplace.common.web.SafeFileServeHeaders;
 import com.apimarketplace.conversation.dto.DmMessageDto;
 import com.apimarketplace.conversation.dto.DmThreadDto;
 import com.apimarketplace.conversation.dto.OpenThreadRequest;
@@ -99,8 +101,11 @@ public class DmController {
                                                 @PathVariable String storageId) {
         var data = dmService.getAttachment(userId, threadId, storageId);
         String mimeType = data.mimeType() != null ? data.mimeType() : "application/octet-stream";
-        return ResponseEntity.ok()
+        // The sender chose the type: active types download, nosniff + sandboxed (LC-020).
+        return SafeFileServeHeaders.applyTo(ResponseEntity.ok(), mimeType)
                 .header(org.springframework.http.HttpHeaders.CONTENT_TYPE, mimeType)
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDispositions.of(SafeFileServeHeaders.dispositionType(mimeType, true), data.fileName()))
                 .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
                 .body(data.data());
     }

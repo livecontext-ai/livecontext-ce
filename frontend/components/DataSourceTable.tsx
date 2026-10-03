@@ -35,6 +35,8 @@ import { SelectionActionBar, BulkBarButton } from '@/components/ui/SelectionActi
 import { EmptyState } from '@/components/ui/EmptyState';
 import { CardSkeletonGrid } from '@/components/ui/CardSkeletonGrid';
 import { PaginationBar } from '@/components/ui/PaginationBar';
+import { useUrlListView } from '@/hooks/useUrlListView';
+import { useEffectOnChange } from '@/hooks/useEffectOnChange';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import PublishResourceModal from '@/components/marketplace/PublishResourceModal';
 import { DataSourceCard } from '@/components/data-table/DataSourceCard';
@@ -76,18 +78,22 @@ export default function DataSourceTable({
   // Per-datasource first-N row sample (id -> [row data…]) for each card's mini-table preview.
   const [sampleRows, setSampleRows] = useState<Record<string, Array<Record<string, unknown>>>>({});
   const [totalCount, setTotalCount] = useState(0);
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(20);
+  // The list's view lives in the address, so a reload reopens it as it was.
+  const {
+    searchQuery, setSearchQuery, sortBy, setSortBy, visibilityFilter, setVisibilityFilter,
+    page, setPage, pageSize, setPageSize,
+  } = useUrlListView<ListSortKey>({
+    sortKeys: ['lastModified', 'name'],
+    defaultSort: 'lastModified',
+    defaultPageSize: 20,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Bumped on workspace switch to force a reload; the load effect keys on it (and the search term)
   // rather than on the fetch callback identity, so an unstable callback can never re-fire the load.
   const [reloadKey, setReloadKey] = useState(0);
-  const [searchQuery, setSearchQuery] = useState('');
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
   // Default order = most-recently-modified first; visibility filter = no restriction.
-  const [sortBy, setSortBy] = useState<ListSortKey>('lastModified');
-  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>('all');
   // Monotonic id so only the latest page request applies its result - guards against an
   // out-of-order resolve when page / sort / visibility / search change in quick succession.
   const requestIdRef = useRef(0);
@@ -202,7 +208,7 @@ export default function DataSourceTable({
 
   // Reset to page 0 when the search term, sort, or visibility filter changes (a new page 0 fetch
   // then fires via the load effect below).
-  useEffect(() => {
+  useEffectOnChange(() => {
     setPage(0);
   }, [debouncedSearch, sortBy, visibilityFilter, folders.folderIdParam]);
 
@@ -381,8 +387,11 @@ export default function DataSourceTable({
 
   // Snap back if the active page fell out of range (e.g. a last-page deletion narrowed the total).
   useEffect(() => {
-    if (!loading && page > 0 && page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
-  }, [loading, page, totalPages]);
+    // Not after a failed load: the count is 0 then because nothing came back, not because the
+    // list is empty, and snapping would erase from the address the very page a reload after a
+    // dropped connection is meant to come back to.
+    if (!loading && !error && page > 0 && page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
+  }, [loading, error, page, totalPages, setPage]);
 
   // Initial load + reload on page / size / search / sort / visibility / workspace switch. The fetch
   // callback already closes over those inputs, so keying on its identity fires exactly one page load

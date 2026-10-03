@@ -2,6 +2,7 @@ package com.apimarketplace.agent.provider;
 
 import com.apimarketplace.agent.domain.*;
 import com.apimarketplace.agent.gemini.cache.GeminiCachedContentManager;
+import com.apimarketplace.common.logging.PayloadLogSafety;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -355,10 +356,8 @@ public class GeminiProvider extends AbstractLLMProvider {
 
             if (responseCode >= 400) {
                 String errorMessage = readErrorStream(connection);
-                log.error("🚨 [GEMINI] HTTP Error {} - {}", responseCode, errorMessage);
-                log.error("🚨 [GEMINI] Request body that caused error ({} chars):\n{}",
-                    requestJson.length(),
-                    requestJson.length() > 2000 ? requestJson.substring(0, 2000) + "..." : requestJson);
+                log.error("🚨 [GEMINI] HTTP Error {} - {}", responseCode, PayloadLogSafety.describeText(errorMessage, 300));
+                log.error("🚨 [GEMINI] Request body that caused error: {}", PayloadLogSafety.describeText(requestJson, 2000));
                 String ownKeyProblem = ownKeyRejection(request, responseCode);
                 callback.onError(ownKeyProblem != null
                     ? ownKeyProblem
@@ -376,9 +375,7 @@ public class GeminiProvider extends AbstractLLMProvider {
             log.error("🚨 [GEMINI] Exception during streaming: {}", e.getMessage(), e);
             log.error("🚨 [GEMINI] HTTP response code was: {}", responseCode);
             if (requestJson != null) {
-                log.error("🚨 [GEMINI] Request body ({} chars):\n{}",
-                    requestJson.length(),
-                    requestJson.length() > 2000 ? requestJson.substring(0, 2000) + "..." : requestJson);
+                log.error("🚨 [GEMINI] Request body: {}", PayloadLogSafety.describeText(requestJson, 2000));
             }
             callback.onError("Streaming error: " + e.getMessage());
         } finally {
@@ -465,7 +462,7 @@ public class GeminiProvider extends AbstractLLMProvider {
             List<ToolCall> lineToolCalls = parseGeminiToolCalls(line);
             if (lineToolCalls != null && !lineToolCalls.isEmpty()) {
                 for (ToolCall tc : lineToolCalls) {
-                    log.info("🔧 [GEMINI] Tool call: {} with args: {}", tc.toolName(), tc.arguments());
+                    log.info("🔧 [GEMINI] Tool call: {} with args: {}", tc.toolName(), PayloadLogSafety.describeAny(tc.arguments()));
                     toolCalls.add(tc);
                     callback.onToolCall(tc);
                 }
@@ -502,15 +499,11 @@ public class GeminiProvider extends AbstractLLMProvider {
             log.error("🚨 [GEMINI] ═══════════════════════════════════════════════════════════");
             log.error("🚨 [GEMINI] HTTP Response Code: {}", httpResponseCode);
             log.error("🚨 [GEMINI] Total lines received: {}, empty lines: {}", lineCount, emptyLineCount);
-            log.error("🚨 [GEMINI] Last line (raw): '{}'", lastLine);
-            log.error("🚨 [GEMINI] Last non-empty line: '{}'",
-                lastNonEmptyLine != null ? (lastNonEmptyLine.length() > 500 ? lastNonEmptyLine.substring(0, 500) + "..." : lastNonEmptyLine) : "null");
+            log.error("🚨 [GEMINI] Last line (raw): {}", PayloadLogSafety.describeText(lastLine, 500));
+            log.error("🚨 [GEMINI] Last non-empty line: {}", PayloadLogSafety.describeText(lastNonEmptyLine, 500));
             log.error("🚨 [GEMINI] Thinking content collected: {} chars", fullThinking.length());
             if (fullThinking.length() > 0) {
-                String thinkingPreview = fullThinking.length() > 1000
-                    ? fullThinking.substring(0, 1000) + "..."
-                    : fullThinking.toString();
-                log.error("🚨 [GEMINI] Thinking preview: {}", thinkingPreview);
+                log.error("🚨 [GEMINI] Thinking preview: {}", PayloadLogSafety.describeText(fullThinking.toString(), 1000));
             }
             log.error("🚨 [GEMINI] Content collected: {} chars", fullContent.length());
             log.error("🚨 [GEMINI] Tool calls collected: {}", toolCalls.size());
@@ -530,18 +523,12 @@ public class GeminiProvider extends AbstractLLMProvider {
             log.error("🚨 [GEMINI] Last {} lines of stream:", allLines.size() - startIdx);
             for (int i = startIdx; i < allLines.size(); i++) {
                 String l = allLines.get(i);
-                String truncated = l.length() > 300 ? l.substring(0, 300) + "..." : l;
-                log.error("🚨 [GEMINI]   Line {}: '{}'", i + 1, truncated);
+                log.error("🚨 [GEMINI]   Line {}: {}", i + 1, PayloadLogSafety.describeText(l, 300));
             }
 
             // Log request body for diagnosis
             if (requestJson != null) {
-                log.error("🚨 [GEMINI] Request body that caused issue ({} chars):", requestJson.length());
-                if (requestJson.length() > 3000) {
-                    log.error("🚨 [GEMINI] Request (first 3000 chars): {}", requestJson.substring(0, 3000));
-                } else {
-                    log.error("🚨 [GEMINI] Request: {}", requestJson);
-                }
+                log.error("🚨 [GEMINI] Request body that caused issue: {}", PayloadLogSafety.describeText(requestJson, 3000));
             }
             log.error("🚨 [GEMINI] ═══════════════════════════════════════════════════════════");
         }
@@ -557,16 +544,11 @@ public class GeminiProvider extends AbstractLLMProvider {
             log.error("🚨 [GEMINI] HTTP Response Code: {}", httpResponseCode);
             log.error("🚨 [GEMINI] Thinking only response: {} chars", fullThinking.length());
             if (fullThinking.length() > 0) {
-                log.error("🚨 [GEMINI] Full thinking content:\n{}", fullThinking.toString());
+                log.error("🚨 [GEMINI] Full thinking content: {}", PayloadLogSafety.describeText(fullThinking.toString(), 3000));
             }
             // Log request body for diagnosis
             if (requestJson != null) {
-                log.error("🚨 [GEMINI] Request body ({} chars):", requestJson.length());
-                if (requestJson.length() > 3000) {
-                    log.error("🚨 [GEMINI] Request (first 3000 chars): {}", requestJson.substring(0, 3000));
-                } else {
-                    log.error("🚨 [GEMINI] Request: {}", requestJson);
-                }
+                log.error("🚨 [GEMINI] Request body: {}", PayloadLogSafety.describeText(requestJson, 3000));
             }
             log.error("🚨 [GEMINI] ───────────────────────────────────────────────────────────");
         }

@@ -5,6 +5,7 @@ import java.time.Duration;
 
 import com.apimarketplace.common.security.CredentialEncryptionService;
 import com.apimarketplace.common.security.SensitiveJsonbBackfill;
+import com.apimarketplace.common.security.SensitiveJsonbBackfill.ColumnSpec;
 import com.apimarketplace.common.security.SensitiveJsonbBackfill.TableSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -19,6 +20,10 @@ import java.util.List;
  * the widened {@code SensitiveFieldDetector} now recognises as a secret but that was written in
  * clear under the previous 15-name allow-list (an AWS {@code secret_access_key}, a GCP
  * {@code private_key}, ...). Rows already fully encrypted are not touched and no timestamp moves.
+ *
+ * <p>The same pass re-encrypts legacy v1 values ({@code ENC:<hex>}) to the authenticated v2
+ * envelope once {@code credential.encryption.write-version=2}, in {@code credential_data} and in
+ * the single-value encrypted columns listed in {@link #COLUMNS}.
  */
 @Component
 public class CredentialDataEncryptionSweep {
@@ -26,6 +31,13 @@ public class CredentialDataEncryptionSweep {
     public static final TableSpec CREDENTIALS = new TableSpec("auth.credentials", "id", "credential_data");
 
     static final List<TableSpec> TABLES = List.of(CREDENTIALS);
+
+    /** Every text column auth-service writes through {@code CredentialEncryptionService.encrypt}. */
+    static final List<ColumnSpec> COLUMNS = List.of(
+            new ColumnSpec("auth.platform_credentials", "id", "client_secret"),
+            new ColumnSpec("auth.platform_credentials", "id", "api_key"),
+            new ColumnSpec("auth.platform_credentials", "id", "password"),
+            new ColumnSpec("auth.workflow_variables", "id", "value"));
 
     private final SensitiveJsonbBackfill sweep;
     private final Duration startupDelay;
@@ -39,7 +51,7 @@ public class CredentialDataEncryptionSweep {
 
     @EventListener(ApplicationReadyEvent.class)
     public void migrateOnStartup() {
-        sweep.scheduleMigrateAll(TABLES, startupDelay);
+        sweep.scheduleMigrateAll(TABLES, COLUMNS, startupDelay);
     }
 
     /** Drop a sweep that has not started when the context closes. */

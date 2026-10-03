@@ -36,7 +36,7 @@ export interface RenderVisualCellOptions {
   cellKey: string;
   progressTempValue?: number;
   onProgressTempChange: (cellKey: string, value: number) => void;
-  onProgressSave: (value: number) => void;
+  onProgressSave: (value: number) => void | Promise<boolean | void>;
 }
 
 /**

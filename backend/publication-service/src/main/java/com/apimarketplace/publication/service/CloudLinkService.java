@@ -2,6 +2,7 @@ package com.apimarketplace.publication.service;
 
 import com.apimarketplace.publication.domain.CeCloudLinkEntity;
 import com.apimarketplace.publication.repository.CeCloudLinkRepository;
+import com.apimarketplace.publication.repository.CloudLinkTokens;
 import com.apimarketplace.agent.cloud.CloudLlmSource;
 import com.apimarketplace.common.plan.CeLinkRefusal;
 import com.apimarketplace.common.plan.PlanTier;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.*;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
 import javax.crypto.Cipher;
@@ -45,6 +47,14 @@ public class CloudLinkService {
      * {@code cloud-link.pending-auth-ttl}.
      */
     static final Duration DEFAULT_PENDING_AUTH_FLOW_TTL = Duration.ofHours(2);
+    /** Connect timeout of every call to the cloud (Keycloak token endpoint, cloud API). */
+    static final int CLOUD_CONNECT_TIMEOUT_MS = 5_000;
+    /**
+     * Read timeout of every call to the cloud. Bounded because the token refresh runs while the
+     * per-tenant refresh lock is held: an unbounded read on a stalled Keycloak would block every
+     * other cloud call of that tenant (LLM relay, catalog sync, heartbeat) behind it for good.
+     */
+    static final int CLOUD_READ_TIMEOUT_MS = 15_000;
     /**
      * Error code the cloud answers (HTTP 403) on the paid relays (LLM, web search, catalog) when the
      * bound cloud account is not on a paid plan. Any plan may link, so the current cloud no longer
@@ -129,8 +139,20 @@ public class CloudLinkService {
                             String webUrl,
                             Duration pendingAuthFlowTtl) {
         this(cloudLinkRepository, keycloakUrl, clientId, redirectUri, encryptionKey,
-                cloudApiUrl, ceVersion, objectMapper, new RestTemplate(), Clock.systemUTC(),
+                cloudApiUrl, ceVersion, objectMapper, buildBoundedRestTemplate(), Clock.systemUTC(),
                 webUrl, pendingAuthFlowTtl);
+    }
+
+    /**
+     * The cloud client with explicit timeouts (see {@link #CLOUD_READ_TIMEOUT_MS}). Kept on
+     * {@link SimpleClientHttpRequestFactory}, i.e. {@code HttpsURLConnection}, so a CE install's
+     * custom trust store (CeCustomTrustStore) still applies to it.
+     */
+    static RestTemplate buildBoundedRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(CLOUD_CONNECT_TIMEOUT_MS);
+        factory.setReadTimeout(CLOUD_READ_TIMEOUT_MS);
+        return new RestTemplate(factory);
     }
 
     /** Test-friendly constructor - allows injecting a mocked RestTemplate. */
@@ -1033,11 +1055,14 @@ public class CloudLinkService {
             // so the UI surfaces "Reconnect cloud account" + paid acquires re-prompt OAuth.
             CeCloudLinkEntity fresh = cloudLinkRepository.findByTenantId(link.getTenantId()).orElse(link);
             fresh.setRegisteredAt(null);
-            fresh.setCachedAccessToken(null);
-            fresh.setTokenExpiresAt(null);
             fresh.setLlmSource(CloudLlmSource.BYOK.name());
             fresh.setCatalogSource(CloudLlmSource.BYOK.name());
             cloudLinkRepository.save(fresh);
+            // Token columns are not written by save(): drop the cached access token through the
+            // targeted update, under the refresh lock so a refresh in flight cannot race it.
+            synchronized (tokenRefreshLock(link.getTenantId())) {
+                cloudLinkRepository.clearCachedAccessToken(link.getTenantId());
+            }
             // Mirror onto the caller's instance so any test/caller observing it sees the
             // post-revoke state without needing to re-fetch.
             incomingLink.setRegisteredAt(null);
@@ -1094,23 +1119,56 @@ public class CloudLinkService {
     }
 
     /**
+     * One lock per tenant around {@link #getCloudAccessToken}. The cloud realm rotates refresh
+     * tokens (configure-keycloak.sh): each one is spent on use, and a reuse beyond the one Keycloak
+     * tolerates ends the link's session, after which only a reconnect brings the link back. Callers
+     * that found the cached access token expired at the same moment (the heartbeat, relayed LLM
+     * calls, the catalog sync) would all present the stored refresh token. Serialised, a waiting
+     * caller re-reads the row after the previous one saved, finds a valid cached token and never
+     * refreshes. The CE monolith is one JVM, so an in-process lock is enough.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<Long, Object> tokenRefreshLocks =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
      * Get a valid cloud access token for the linked account.
      * Returns cached token if still valid, otherwise refreshes from Keycloak.
      */
     public String getCloudAccessToken(Long tenantId) {
-        CeCloudLinkEntity link = cloudLinkRepository.findByTenantId(tenantId)
+        if (tenantId == null) {
+            return getCloudAccessTokenLocked(null); // no row to share: nothing to serialise
+        }
+        // The row is read INSIDE the lock: a caller that waited must see the token the previous
+        // holder stored, or it would present the refresh token that holder just spent.
+        synchronized (tokenRefreshLock(tenantId)) {
+            return getCloudAccessTokenLocked(tenantId);
+        }
+    }
+
+    private Object tokenRefreshLock(Long tenantId) {
+        return tokenRefreshLocks.computeIfAbsent(tenantId, id -> new Object());
+    }
+
+    /**
+     * The refresh path, the only code that writes the token columns after a link is created. It
+     * reads them as values ({@code findTokensByTenantId}) and writes them with a targeted UPDATE
+     * ({@code updateTokens}), never through an entity instance: any instance loaded before a
+     * refresh holds the refresh token that refresh spent, and the columns are
+     * {@code updatable = false} so the other writers' save() calls cannot put it back.
+     */
+    private String getCloudAccessTokenLocked(Long tenantId) {
+        CloudLinkTokens tokens = cloudLinkRepository.findTokensByTenantId(tenantId)
                 .orElseThrow(() -> new CloudAccountNotLinkedException("No cloud account linked"));
 
         // Check if cached access token is still valid
-        if (link.getCachedAccessToken() != null && link.getTokenExpiresAt() != null
-                && clock.instant().isBefore(link.getTokenExpiresAt())) {
-            link.setLastUsedAt(clock.instant());
-            cloudLinkRepository.save(link);
-            return link.getCachedAccessToken();
+        if (tokens.cachedAccessToken() != null && tokens.tokenExpiresAt() != null
+                && clock.instant().isBefore(tokens.tokenExpiresAt())) {
+            cloudLinkRepository.touchLastUsedAt(tenantId, clock.instant());
+            return tokens.cachedAccessToken();
         }
 
         // Refresh the access token
-        String refreshToken = decrypt(link.getEncryptedRefreshToken());
+        String refreshToken = decrypt(tokens.encryptedRefreshToken());
         Map<String, Object> tokenResponse = refreshAccessToken(refreshToken);
 
         String newAccessToken = (String) tokenResponse.get("access_token");
@@ -1122,14 +1180,12 @@ public class CloudLinkService {
             throw new RuntimeException("Failed to refresh cloud access token");
         }
 
-        // Update stored tokens
-        link.setCachedAccessToken(newAccessToken);
-        link.setTokenExpiresAt(clock.instant().plusSeconds(expiresIn - 30));
-        if (newRefreshToken != null) {
-            link.setEncryptedRefreshToken(encrypt(newRefreshToken));
-        }
-        link.setLastUsedAt(clock.instant());
-        cloudLinkRepository.save(link);
+        // Update stored tokens (keep the stored refresh token when Keycloak did not rotate it)
+        String encryptedRefreshToken = newRefreshToken != null
+                ? encrypt(newRefreshToken)
+                : tokens.encryptedRefreshToken();
+        cloudLinkRepository.updateTokens(tenantId, encryptedRefreshToken, newAccessToken,
+                clock.instant().plusSeconds(expiresIn - 30), clock.instant());
 
         return newAccessToken;
     }

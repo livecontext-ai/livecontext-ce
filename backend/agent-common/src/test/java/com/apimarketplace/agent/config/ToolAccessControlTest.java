@@ -440,4 +440,80 @@ class ToolAccessControlTest {
                 .containsExactly("i-1", "i-new");
     }
 
+
+    // ==================== LC-029: web_search fetch is an egress channel ====================
+
+    @Test
+    @DisplayName("LC-029: web_search:fetch is NOT a read action - it is an outbound channel")
+    void webSearchFetchIsNotAReadAction() {
+        // Pre-fix READ_ACTIONS held Set.of("search", "fetch"), so this returned true and
+        // checkWriteAccess short-circuited before it ever looked at the agent's mode.
+        assertThat(ToolAccessControl.isReadAction("web_search", "fetch")).isFalse();
+    }
+
+    @Test
+    @DisplayName("LC-029: a read-only agent is denied web_search:fetch")
+    void readOnlyAgentIsDeniedWebSearchFetch() {
+        for (String credentialKey : List.of("web_searchAccessMode", "__web_searchAccessMode__")) {
+            var denied = ToolAccessControl.checkWriteAccess(
+                    Map.of(credentialKey, "read"), "web_search", "fetch");
+
+            assertThat(denied).as("credential key '%s'", credentialKey).isPresent();
+            assertThat(denied.orElseThrow()).contains("read-only").contains("fetch");
+        }
+    }
+
+    @Test
+    @DisplayName("LC-029: web_search:search stays a read - it reaches the platform's own backend")
+    void webSearchSearchStaysAReadAction() {
+        assertThat(ToolAccessControl.isReadAction("web_search", "search")).isTrue();
+        assertThat(ToolAccessControl.checkWriteAccess(
+                Map.of("web_searchAccessMode", "read"), "web_search", "search")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("LC-029: an agent with no web_search mode keeps fetching (default = full access)")
+    void absentWebSearchModeStillAllowsFetch() {
+        // The reclassification must not break the ~all callers that pass no mode at all.
+        assertThat(ToolAccessControl.checkWriteAccess(
+                new HashMap<>(), "web_search", "fetch")).isEmpty();
+        assertThat(ToolAccessControl.checkWriteAccess(
+                null, "web_search", "fetch")).isEmpty();
+    }
+
+    // ==================== LC-055: receivers carry every <category>AccessMode ====================
+
+    @Test
+    @DisplayName("LC-055: copyAccessModesBySuffix carries axis-less modes the enforced list does not name")
+    void copyAccessModesBySuffixCarriesAxisLessModes() {
+        // Pre-fix the receivers iterated ACCESS_MODE_KEYS only, which does not contain
+        // catalogAccessMode: a scoped MCP key's read-only catalog mode was dropped at the hop and
+        // the tool then saw no mode at all, i.e. unrestricted.
+        assertThat(ToolAccessControl.ACCESS_MODE_KEYS).doesNotContain("catalogAccessMode");
+
+        Map<String, Object> request = new HashMap<>();
+        request.put("catalogAccessMode", "read");
+        request.put("generationAccessMode", "read");
+        request.put("tableAccessMode", "write");
+        request.put("AccessMode", "write");          // bare suffix: not a category
+        request.put("orgRole", "OWNER");             // not an access mode
+        request.put("web_searchAccessMode", null);   // null values are not copied
+        Map<String, Object> credentials = new HashMap<>();
+
+        ToolAccessControl.copyAccessModesBySuffix(request, credentials);
+
+        assertThat(credentials)
+                .containsEntry("catalogAccessMode", "read")
+                .containsEntry("generationAccessMode", "read")
+                .containsEntry("tableAccessMode", "write")
+                .doesNotContainKeys("AccessMode", "orgRole", "web_searchAccessMode");
+        assertThat(ToolAccessControl.checkWriteAccess(credentials, "catalog", "execute")).isPresent();
+    }
+
+    @Test
+    @DisplayName("LC-055: copyAccessModesBySuffix tolerates null maps")
+    void copyAccessModesBySuffixToleratesNulls() {
+        ToolAccessControl.copyAccessModesBySuffix(null, new HashMap<>());
+        ToolAccessControl.copyAccessModesBySuffix(Map.of("catalogAccessMode", "read"), null);
+    }
 }

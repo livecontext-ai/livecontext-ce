@@ -1,6 +1,7 @@
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
 import { PartnerBadgeIcon } from '@/components/profile/PartnerBadgeIcon';
-import { niceCeiling, wholeMoney } from '@/lib/partners/tiers';
+import { wholeMoney } from '@/lib/partners/tiers';
+import { PartnerEarningsArea } from './PartnerEarningsArea';
 
 /**
  * The hero's partner: their paying clients over twelve months, each on the example plan.
@@ -23,14 +24,6 @@ export interface HeroEarningsCopy {
   months: [string, string, string];
   badge: string;
 }
-
-const W = 420;
-const H = 170;
-const RIGHT = 8;
-/** Roughly the width of one character of an axis label, at the label font size. */
-const CHAR_W = 7;
-const TOP = 12;
-const BOTTOM = 28;
 
 /**
  * The hero's earnings card: what one partner earns per month, month after month, in money, on a
@@ -55,16 +48,7 @@ export function PartnerHeroEarnings({
   if (values.length < 2) return null;
   const last = values[values.length - 1];
   const total = values.reduce((a, b) => a + b, 0);
-  const top = niceCeiling(Math.max(...values));
-  const ticks = [0, top / 2, top];
   const money = (v: number) => wholeMoney(v, currency, locale);
-  // The axis makes room for its longest label: "$1,500" in English, "1 500 $US" in French.
-  const axisLeft = Math.max(...ticks.map((t) => money(t).length)) * CHAR_W + 12;
-  const x = (i: number) => axisLeft + (i * (W - axisLeft - RIGHT)) / (values.length - 1);
-  const y = (v: number) => TOP + (1 - v / top) * (H - TOP - BOTTOM);
-  const line = values.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-  const area = `${line} L${x(values.length - 1).toFixed(1)},${y(0)} L${x(0)},${y(0)} Z`;
-  const middle = Math.floor((values.length - 1) / 2);
 
   return (
     <figure
@@ -96,32 +80,7 @@ export function PartnerHeroEarnings({
       </div>
       <div className="mt-1 text-sm" style={{ color: 'rgba(255,255,255,0.6)' }}>{copy.fromClients}</div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} className="mt-4 w-full" role="img" aria-label={copy.chartLabel}>
-        <defs>
-          <linearGradient id="hero-earn-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#f2b640" stopOpacity="0.45" />
-            <stop offset="100%" stopColor="#f2b640" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id="hero-earn-line" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#fde68a" />
-            <stop offset="100%" stopColor="#f2b640" />
-          </linearGradient>
-        </defs>
-        {ticks.map((t) => (
-          <g key={t}>
-            <line x1={axisLeft} x2={W - RIGHT} y1={y(t)} y2={y(t)} stroke="rgba(255,255,255,0.08)" />
-            <text x={axisLeft - 8} y={y(t) + 4} textAnchor="end" fontSize="12" fill="rgba(255,255,255,0.5)">{money(t)}</text>
-          </g>
-        ))}
-        <path d={area} fill="url(#hero-earn-fill)" />
-        <path d={line} fill="none" stroke="url(#hero-earn-line)" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-        <circle cx={x(values.length - 1)} cy={y(last)} r="5" fill="#f2b640" stroke="#07080c" strokeWidth="2" />
-        {[0, middle, values.length - 1].map((i, k) => (
-          <text key={i} x={x(i)} y={H - 8} textAnchor={k === 0 ? 'start' : k === 2 ? 'end' : 'middle'} fontSize="12" fill="rgba(255,255,255,0.5)">
-            {copy.months[k]}
-          </text>
-        ))}
-      </svg>
+      <PartnerEarningsArea values={values} money={money} labels={copy.months} label={copy.chartLabel} idPrefix="hero-earn" />
 
       <div className="mt-4 grid grid-cols-2 gap-3">
         <div className="rounded-2xl p-3" style={{ background: 'rgba(255,255,255,0.06)' }}>

@@ -49,6 +49,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -564,6 +565,25 @@ class WorkflowBuilderProviderTest {
             when(creator.executeAddDecision(any(), any())).thenReturn(okMap());
             assertThat(exec(params("action", "add_node", "type", "decision", "label", "D")).success()).isTrue();
             verify(creator).executeAddDecision(eq(session), any());
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "type=''{0}''")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {"note", "note:note", "sticky_note", "annotation"})
+        @DisplayName("a note type routes to the note creator, never to the MCP default branch")
+        void noteRouting(String type) {
+            when(creator.executeAddNote(any(), any())).thenReturn(okMap());
+            assertThat(exec(params("action", "add_node", "type", type, "params", Map.of("text", "x"))).success()).isTrue();
+            verify(creator).executeAddNote(eq(session), any());
+            verify(creator, org.mockito.Mockito.never()).executeAddMcp(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("a note refuses an execution policy before it is created")
+        void noteRefusesNodePolicy() {
+            ToolExecutionResult r = exec(params("action", "add_node", "type", "note",
+                    "params", Map.of("text", "x"), "nodePolicy", Map.of("retryCount", 2)));
+            assertThat(r.success()).isFalse();
+            verify(creator, org.mockito.Mockito.never()).executeAddNote(any(), any());
         }
 
         @Test
@@ -1192,7 +1212,7 @@ class WorkflowBuilderProviderTest {
             assertThat(r.success()).isTrue();
             assertThat(data(r)).containsEntry("status", "COMPLETED");
             assertThat(r.metadata()).containsKey("visualization");
-            verify(agentWorkflowFireService).fire(eq(run), any(), any());
+            verify(agentWorkflowFireService).fire(eq(run), any(), any(), anyBoolean());
         }
 
         @Test
@@ -1212,7 +1232,7 @@ class WorkflowBuilderProviderTest {
             assertThat(r.success()).isTrue();
             assertThat(data(r)).containsEntry("status", "BOOTSTRAPPED").containsEntry("run_id", "seed-1");
             // The fire path must NOT run for a bootstrap-only workflow.
-            verify(agentWorkflowFireService, never()).fire(any(), any(), any());
+            verify(agentWorkflowFireService, never()).fire(any(), any(), any(), anyBoolean());
         }
     }
 

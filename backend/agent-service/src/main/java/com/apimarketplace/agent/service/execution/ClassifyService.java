@@ -147,6 +147,8 @@ public class ClassifyService {
             // speaks none of it. Linking one to a chat provider, or the reverse, could only
             // produce a call the target cannot answer, so there is nothing here to route.
             if (decision) {
+                // LC-004: the decision engine is a third-party API too.
+                RestrictedDataRouting.apply(request.dataSensitivity(), billedProvider, null);
                 return classifyWithDecisionModel(request, billedProvider, guard, startTime);
             }
 
@@ -156,6 +158,9 @@ public class ClassifyService {
             // away from - the failure shape being an upstream billing error on a key
             // the platform deliberately stopped using.
             var route = executionLinkRouter.runnableRoute(providerName, request.model(), ACTIVITY_SOURCE);
+            // LC-004: restricted content only reaches an allow-listed provider, judged on the one
+            // that will actually run it (a link can move the run). Throws the refusal otherwise.
+            route = RestrictedDataRouting.apply(request.dataSensitivity(), providerName, route);
             String execProvider = route != null ? route.executionProvider() : providerName;
             String execModel = route != null ? route.executionModel() : request.model();
 

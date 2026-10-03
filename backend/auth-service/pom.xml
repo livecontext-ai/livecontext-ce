@@ -163,7 +163,8 @@
         <dependency>
             <groupId>com.nimbusds</groupId>
             <artifactId>nimbus-jose-jwt</artifactId>
-            <version>9.37</version>
+            <!-- Version managed in the parent pom (9.37.4: CVE-2023-52428 and CVE-2025-53864,
+                 CASA LC-085). -->
         </dependency>
 
         <!-- Common Lib -->

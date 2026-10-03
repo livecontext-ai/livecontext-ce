@@ -39,6 +39,29 @@ public class TaskNode extends BaseNode {
     public void acceptServices(ServiceRegistry registry) {
         super.acceptServices(registry);
         this.agentClient = registry.getAgentClient();
+        this.stepPayloadService = registry.getStepPayloadService();
+    }
+
+    /** LC-004: tells whether this run already holds restricted (Gmail / Drive) data. */
+    private com.apimarketplace.orchestrator.services.persistence.StepPayloadService stepPayloadService;
+
+    /**
+     * Refusal for writing a task from a run that holds Gmail / Drive data. The task is later
+     * executed by an agent whose model is not known here, so the content cannot be routed to an
+     * allow-listed provider with any guarantee. Null when allowed.
+     */
+    String restrictedTaskRefusal(ExecutionContext context) {
+        if (stepPayloadService == null || context == null || context.runId() == null
+                || !com.apimarketplace.common.classification.RestrictedDataPolicy.isLlmAllowListEnforced()
+                || !stepPayloadService.isRunRestricted(context.runId())) {
+            return null;
+        }
+        return com.apimarketplace.common.classification.RestrictedDataPolicy.REFUSAL_CODE
+            + ": This workflow run contains data from Gmail or Google Drive, which cannot be passed to an "
+            + "agent task: the model that will work on the task is not known when it is created, so "
+            + "the data cannot be kept to the approved AI providers. Remove the Gmail or Google Drive "
+            + "content from the task, or process it with an agent node that uses an Anthropic or "
+            + "OpenAI model.";
     }
 
     @Override
@@ -77,9 +100,21 @@ public class TaskNode extends BaseNode {
 
         try {
             Map<String, Object> result = switch (operation) {
-                case "create_task" -> executeCreate(context, tenantId, earlyInputData);
+                case "create_task" -> {
+                    String refusal = restrictedTaskRefusal(context);
+                    if (refusal != null) {
+                        throw new IllegalStateException(refusal);
+                    }
+                    yield executeCreate(context, tenantId, earlyInputData);
+                }
                 case "get_task" -> executeGet(context, tenantId, earlyInputData);
-                case "update_task" -> executeUpdate(context, tenantId, earlyInputData);
+                case "update_task" -> {
+                    String refusal = restrictedTaskRefusal(context);
+                    if (refusal != null) {
+                        throw new IllegalStateException(refusal);
+                    }
+                    yield executeUpdate(context, tenantId, earlyInputData);
+                }
                 case "delete_task" -> executeDelete(context, tenantId, earlyInputData);
                 case "list_tasks" -> executeList(context, tenantId, earlyInputData);
                 default -> throw new IllegalArgumentException(
@@ -87,6 +122,7 @@ public class TaskNode extends BaseNode {
                     ". Valid: create_task, get_task, update_task, delete_task, list_tasks");
             };
 
+            liftRestrictedTag(result);
             result.put("resolved_params", ReportedParams.forReport(earlyInputData));
             logger.info("Task node completed: nodeId={}, operation={}, success={}",
                 nodeId, operation, result.get("success"));
@@ -98,6 +134,24 @@ public class TaskNode extends BaseNode {
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(),
                 Map.of("resolved_params", ReportedParams.forReport(earlyInputData)),
                 System.currentTimeMillis() - startTime);
+        }
+    }
+
+    /**
+     * LC-066: agent-service tags the body of a RESTRICTED task (its title or result may quote an
+     * email) with {@code __dataSensitivity__}. This node copies that body into its output under
+     * {@code task}, where the payload classification does not look, so the tag is lifted onto the
+     * output itself: the step is stored RESTRICTED and the run restricted, like any Gmail read (the
+     * same way {@code SubWorkflowNode} carries a child's restricted output). A list never carries
+     * the tag: agent-service lists a RESTRICTED task without its text.
+     */
+    static void liftRestrictedTag(Map<String, Object> result) {
+        if (result.get("task") instanceof Map<?, ?> task
+                && com.apimarketplace.common.classification.DataSensitivity
+                        .parse(task.get(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY))
+                        .isRestricted()) {
+            result.put(com.apimarketplace.common.classification.DataSensitivity.CREDENTIAL_KEY,
+                    com.apimarketplace.common.classification.DataSensitivity.RESTRICTED.name());
         }
     }
 

@@ -110,6 +110,14 @@ public class WorkflowPublicationEntity {
     private Instant showcaseSnapshotCapturedAt;
 
     /**
+     * LC-066: the snapshot this loaded instance already failed to verify (the orchestrator could not
+     * answer), so the rest of the same request answers "unverified" without asking again. Never
+     * persisted or serialized; a fresh load (the next request) asks again.
+     */
+    @Transient
+    private transient Map<String, Object> unverifiedShowcaseSnapshot;
+
+    /**
      * V273 - publisher's chosen epoch for the marketplace preview. When
      * non-null, {@code ShowcaseSnapshotReader} filters items[] +
      * aggregatedSteps to this single epoch so visitors see exactly one
@@ -865,6 +873,16 @@ public class WorkflowPublicationEntity {
 
     public void setShowcaseSnapshot(Map<String, Object> showcaseSnapshot) {
         this.showcaseSnapshot = showcaseSnapshot;
+    }
+
+    /** See {@link #unverifiedShowcaseSnapshot}. Not a bean accessor on purpose (never serialized). */
+    public Map<String, Object> unverifiedShowcaseSnapshot() {
+        return unverifiedShowcaseSnapshot;
+    }
+
+    /** See {@link #unverifiedShowcaseSnapshot}. */
+    public void rememberUnverifiedShowcaseSnapshot(Map<String, Object> snapshot) {
+        this.unverifiedShowcaseSnapshot = snapshot;
     }
 
     public Instant getShowcaseSnapshotCapturedAt() {

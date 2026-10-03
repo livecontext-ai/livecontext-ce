@@ -60,6 +60,13 @@ public class LoopExecutionState {
     private final LoopDetector loopDetector;
 
     /**
+     * True once this execution holds Google restricted-scope content (Gmail, Drive): tagged by
+     * the caller through the credentials, or set when an allowed provider received such a tool
+     * result. Only ratchets up. See AgentLoopExecutor's restricted-data gate (LC-004).
+     */
+    private boolean restrictedData;
+
+    /**
      * Default-thresholds constructor. The {@link LoopDetector} is built with the
      * hard-coded historical defaults (stop at 15 identical / 40 consecutive).
      */

@@ -69,10 +69,18 @@ export interface AIModel {
    */
   freeTierEnabled?: boolean;
   /**
+   * Where the admin ranked this model on the free tier's own list (1 = first). Only on a
+   * model opened to the free tier AND ranked there; absent, the model keeps its global
+   * {@code displayOrder} among the covered ones. Read through {@code freeTierFirst}, never
+   * compared by hand.
+   */
+  freeTierRank?: number;
+  /**
    * V554: the platform admin stopped offering this model but kept it available. It stays in
    * the raw catalogue (a stored selection on it must still resolve: its name, its price, its
    * provider), and {@link useVisibleModels} moves it out of `models` into `unlistedModels`,
-   * which only the chat composer shows, in a collapsed group.
+   * which the chat composer (collapsed group) and the model picker (a "Hidden models" group
+   * under the offered ones) list apart.
    */
   unlisted?: boolean;
   /** ISO-8601 instant. When set, model is end-of-life; UI should warn. */
@@ -392,8 +400,8 @@ export function filterVisibleModels(base: UseModelsResult, isAdmin: boolean): Us
  * Role-aware view of {@link useModels} for the model-PICKER surfaces.
  *
  * <p>Also takes the models the admin UNLISTED (V554) out of `models`/`providers` and hands them
- * back in `unlistedModels`, for the chat composer's collapsed group and for the checks that
- * must still recognise a stored selection on one.
+ * back in `unlistedModels`, for the hidden groups of the chat composer and the model picker and
+ * for the checks that must still recognise a stored selection on one.
  *
  * <p>Hides CLI-bridge models (claude-code/codex/gemini-cli/mistral-vibe) from
  * non-admin users on EVERY deployment - they are dispatch-blocked from them anyway

@@ -208,3 +208,24 @@ describe('InterfaceTable - web_search view keeps templates + data inline (no laz
     expect(mocks.getInterface).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The list's view lives in the address, so a reload reopens it as it was. "Back to the first
+ * page when a filter changes" used to be a plain effect, which also ran on mount: a list
+ * reloaded on page 3 fetched page 3 and then page 1.
+ */
+describe('the view is restored from the address and stays there', () => {
+  it('requests the search, sort, visibility, page and page size the address carries', async () => {
+    fakeFolderRouter.navigate('/en/app/list?q=alp&sort=name&visibility=private&page=3&size=50', 'replace');
+    mocks.getInterfacesPage.mockResolvedValue({ ...page([intf('i1', 'Alpha')]), totalCount: 500 });
+
+    render(<InterfaceTable interfaceTypeFilter="html" />);
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument());
+
+    expect(mocks.getInterfacesPage.mock.calls.length).toBeGreaterThan(0);
+    for (const [options] of mocks.getInterfacesPage.mock.calls) {
+      expect(options).toMatchObject({ page: 2, size: 50, q: 'alp', sort: 'name', visibility: 'private' });
+    }
+    expect(fakeFolderRouter.search()).toBe('q=alp&sort=name&visibility=private&page=3&size=50');
+  });
+});

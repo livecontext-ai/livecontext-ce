@@ -19,6 +19,9 @@ import { SelectionActionBar, BulkBarButton } from '@/components/ui/SelectionActi
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PaginationBar } from '@/components/ui/PaginationBar';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useUrlListView } from '@/hooks/useUrlListView';
+import { useEffectOnChange } from '@/hooks/useEffectOnChange';
+import { urlEnum, urlList, useUrlState } from '@/hooks/useUrlState';
 import { useCurrentOrgStore } from '@/lib/stores/current-org-store';
 import { ShareLinkDialog } from '@/components/sharing/ShareLinkDialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -77,21 +80,28 @@ function ApplicationsPageContent() {
   // Sub-workflow neighbourhood per application workflow, resolved for the whole grid in one
   // request (see fetchApplications). Absent id = no relation, and the card shows no indicator.
   const [relationsByWorkflow, setRelationsByWorkflow] = useState<Record<string, WorkflowRelations>>({});
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  // The list's view lives in the address, so a reload reopens it as it was.
+  // Default ordering = most recently executed first.
+  const {
+    searchQuery, setSearchQuery, sortBy, setSortBy, visibilityFilter, setVisibilityFilter,
+    page, setPage, pageSize, setPageSize,
+  } = useUrlListView<AppSortKey>({
+    sortKeys: ['execution', 'name', 'recent'],
+    defaultSort: 'execution',
+    defaultPageSize: 25,
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
-  // Default ordering = most recently executed first; provenance filter = all.
-  const [sortBy, setSortBy] = useState<AppSortKey>('execution');
-  const [sourceFilter, setSourceFilter] = useState<AppSourceFilter>('all');
-  // Visibility filter - narrows OWN published apps to Public / Private (all = no restriction).
-  const [visibilityFilter, setVisibilityFilter] = useState<AppVisibilityFilter>('all');
+  // Provenance filter = all by default. The visibility filter narrows OWN published apps to
+  // Public / Private (all = no restriction).
+  const [sourceFilter, setSourceFilter] = useUrlState<AppSourceFilter>('source', 'all', {
+    codec: urlEnum(['all', 'installed', 'published']),
+  });
   // Node-type filter. Client-side like every other refinement on this page: the
   // union of published + acquired apps is already fully loaded here, so both the
   // filter and its option counts are exact without another round-trip.
-  const [nodeTypeFilter, setNodeTypeFilter] = useState<string[]>([]);
+  const [nodeTypeFilter, setNodeTypeFilter] = useUrlState<string[]>('types', [], { codec: urlList() });
   // Applications are workspace-scoped (owner = active org). Key the fetch on the active org so
   // switching workspace re-fetches - otherwise the previous workspace's list stays cached and its
   // cards 404 on open (the detail fetch IS org-scoped). Mirrors the quota/storage pages.
@@ -264,7 +274,7 @@ function ApplicationsPageContent() {
 
   // Reset to page 0 when the search term, provenance/visibility filter, or sort
   // changes - the visible set is different so the current page index may be out of range.
-  useEffect(() => {
+  useEffectOnChange(() => {
     setPage(0);
   }, [debouncedSearch, sourceFilter, visibilityFilter, sortBy, nodeTypeFilter]);
 
@@ -442,9 +452,11 @@ function ApplicationsPageContent() {
   }, [atLevel, safePage, pageSize]);
 
   // Snap back if the active page becomes out-of-range (e.g. after delete reduces totalCount).
+  // Not while loading, nor after a failed load: the count is 0 then because nothing has come
+  // back, and snapping would throw away the page the address asked for.
   useEffect(() => {
-    if (page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
-  }, [page, totalPages]);
+    if (!isLoading && !error && page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
+  }, [isLoading, error, page, totalPages, setPage]);
 
   // Determine if selection contains acquired apps (to show "Remove" instead of "Unpublish")
   const selectionHasAcquired = useMemo(() => {

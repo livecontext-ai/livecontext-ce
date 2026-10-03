@@ -15,6 +15,7 @@ import com.apimarketplace.catalog.service.http.HttpExecutionService;
 import com.apimarketplace.catalog.util.CredentialTypeNormalizer;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.web.TenantResolver;
+import com.apimarketplace.common.web.UrlLogRedaction;
 import com.apimarketplace.common.web.UrlSafetyValidator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -146,9 +147,11 @@ public class CustomApiRegistrationService {
         // placed from one of them. A migration with no rows to fix and a real blast radius is
         // not worth writing.
         String canonicalSlug = deriveCanonicalSlug(apiJson, apiName);
-        if (needsCredential) {
-            rejectSlugOwnedByASharedIntegration(canonicalSlug, apiName, tenantId, keyAlreadyHeld);
-        }
+        // Checked for EVERY auth type (LC-057, CASA readiness). An authType:none API still carries
+        // the key as platform_credential_name/icon_slug, which is what the ownership predicate and
+        // the platform credential fallback both read; gating the check on needsCredential let a
+        // keyless custom API named "imap" claim the native imap template.
+        rejectSlugOwnedByASharedIntegration(canonicalSlug, apiName, tenantId, keyAlreadyHeld);
         if (canonicalSlug.isBlank() && needsCredential) {
             throw new IllegalArgumentException(
                     "apiName must contain at least one letter or digit when authType is not 'none': "
@@ -222,8 +225,13 @@ public class CustomApiRegistrationService {
         // for connection and the name execution requires can no longer disagree.
         if (needsCredential) {
             String apiIconUrl = apiJson.path("iconUrl").asText(null);
+            // The owner stamp makes the template provably this user's (LC-057); an existing
+            // template that is not theirs is never modified. The only tolerated case is an update
+            // re-linking the key the API already held, which links to the existing row untouched.
+            boolean reuseHeldTemplate = keyAlreadyHeld != null && keyAlreadyHeld.equalsIgnoreCase(canonicalSlug);
             catalogSeedCredentialService.linkCredentials(
-                    apiId, canonicalSlug, authType, canonicalSlug, apiIconUrl, apiKeyConfig, oauth2Config);
+                    apiId, canonicalSlug, authType, canonicalSlug, apiIconUrl, apiKeyConfig, oauth2Config,
+                    tenantId, reuseHeldTemplate);
         }
 
         return response;
@@ -605,7 +613,7 @@ public class CustomApiRegistrationService {
                     credentialName);
             return false;
         }
-        catalogSeedCredentialService.deleteCredentialByName(credentialName);
+        catalogSeedCredentialService.deleteCredentialsForApi(entity.getId(), credentialName);
         return true;
     }
 
@@ -1163,12 +1171,13 @@ public class CustomApiRegistrationService {
         try {
             ownedByCatalogue = apiRepository.existsSharedIntegrationWithCredentialKey(canonicalSlug, tenantId);
         } catch (Exception e) {
-            // Fail OPEN: a lookup that cannot run must not block a legitimate registration. The
-            // collision it guards against is rare and recoverable; refusing every registration
-            // because one query failed is neither.
+            // Fail CLOSED (LC-002, CASA readiness). This used to return, i.e. accept the key, on
+            // the reasoning that the collision is rare and recoverable. It is neither: a custom API
+            // registered over a shared key is handed that key's stored secret at execution and
+            // overwrites the installation-wide template. A transient refusal costs one retry.
             log.warn("Could not check whether credential key '{}' is owned by a catalogue integration: {}",
                     canonicalSlug, e.getMessage());
-            return;
+            throw new CredentialKeyUnverifiedException(canonicalSlug);
         }
         if (ownedByCatalogue) {
             throw new CollidingCredentialKeyException(canonicalSlug, apiName);
@@ -1184,9 +1193,10 @@ public class CustomApiRegistrationService {
         try {
             shipped = apiRepository.existsShippedIntegrationWithCredentialKey(canonicalSlug);
         } catch (Exception e) {
+            // Fail CLOSED, same reason as above.
             log.warn("Could not check whether credential key '{}' is held by a shipped integration: {}",
                     canonicalSlug, e.getMessage());
-            return;
+            throw new CredentialKeyUnverifiedException(canonicalSlug);
         }
         if (shipped) {
             throw new CollidingCredentialKeyException(canonicalSlug, apiName);
@@ -1203,6 +1213,14 @@ public class CustomApiRegistrationService {
      * integration there would be a statement the agent has no action available to verify, and
      * which is simply false in that case.
      */
+    /** The collision lookup could not run: refused, and the agent is told to retry. */
+    private static final class CredentialKeyUnverifiedException extends IllegalArgumentException {
+        CredentialKeyUnverifiedException(String key) {
+            super("Could not verify that the credential key '" + key + "' is free on this installation, "
+                    + "so the API was not registered. This is a temporary condition: retry the call.");
+        }
+    }
+
     private static final class CollidingCredentialKeyException extends IllegalArgumentException {
         CollidingCredentialKeyException(String key, String apiName) {
             super("The credential key '" + key + "' derived from apiName '" + apiName + "' is already "
@@ -1252,7 +1270,10 @@ public class CustomApiRegistrationService {
         if (cfg.hasNonNull("refreshUrl") && !cfg.path("refreshUrl").asText("").isBlank()) {
             requireOAuthUrl(cfg, "refreshUrl");
         }
-        log.debug("Custom API declares oauth2 against {} / {}", authorizationUrl, tokenUrl);
+        // LC-010: the origin only, never the full URL - authorizationUrl/tokenUrl are workflow-
+        // author-supplied and may carry a token or client id in their query string.
+        log.debug("Custom API declares oauth2 against {} / {}",
+                UrlLogRedaction.origin(authorizationUrl), UrlLogRedaction.origin(tokenUrl));
         return cfg;
     }
 

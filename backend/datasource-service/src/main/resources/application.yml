@@ -35,6 +35,13 @@ gateway:
   filter:
     secret-key: ${GATEWAY_SECRET_KEY:}
     verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    # CASA LC-013: /api/agent-tools is a public path (no gateway HMAC), so POST .../execute trusted
+    # a forgeable X-User-ID from anything with network reach. Every in-cluster caller now signs
+    # (RemoteToolExecutionService, RemoteToolGateway, the conversation relay). Arm the gate on the
+    # NEXT deploy, once no caller pod runs the previous image, by setting
+    # AGENT_TOOLS_EXECUTE_HMAC_REQUIRED_PATH=/api/agent-tools/execute. Blank = not armed.
+    hmac-required-paths:
+      - ${AGENT_TOOLS_EXECUTE_HMAC_REQUIRED_PATH:}
     public-paths:
       - /health
       - /actuator

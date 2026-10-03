@@ -37,6 +37,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -252,7 +253,7 @@ class CrudExecutorServiceAssetHydrationTest {
             .thenReturn(List.of(4549L));
         when(crudRepository.findRowsByIds(eq(1L), eq(TENANT), any()))
             .thenReturn(List.of(storedRow(Map.of("video", STORED_WORKFLOW_REF))));
-        when(crudRepository.updateRows(eq(1L), eq(TENANT), any(), any())).thenReturn(1);
+        when(crudRepository.updateRows(eq(1L), eq(TENANT), any(), any(), anyBoolean())).thenReturn(1);
 
         UpdateRowRequest request = new UpdateRowRequest();
         request.setDataSourceId(1L);
@@ -268,7 +269,7 @@ class CrudExecutorServiceAssetHydrationTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> before = ArgumentCaptor.forClass(Map.class);
         verify(rowEventPublisher).publishUpdated(eq(1L), eq(4549L), eq(TENANT), any(),
-            after.capture(), before.capture());
+            after.capture(), before.capture(), anyString());
         assertThat(asMap(after.getValue().get("video")))
             .containsEntry("_type", "file")
             .containsEntry("path", "1/wf/run/core:final_cut/clip.mp4");
@@ -286,7 +287,7 @@ class CrudExecutorServiceAssetHydrationTest {
         when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(table));
         when(dataSourceColumnRepository.loadMappingSpec(1L, TENANT)).thenReturn(table.mappingSpec());
         when(sqlSanitizer.sanitizeColumnName(anyString())).thenAnswer(inv -> inv.getArgument(0));
-        when(crudRepository.createRows(eq(1L), eq(TENANT), any())).thenReturn(List.of(4549L));
+        when(crudRepository.createRows(eq(1L), eq(TENANT), any(), any())).thenReturn(List.of(4549L));
         when(crudRepository.findRowsByIds(eq(1L), eq(TENANT), any()))
             .thenReturn(List.of(storedRow(Map.of("video", STORED_WORKFLOW_REF))));
 
@@ -305,7 +306,7 @@ class CrudExecutorServiceAssetHydrationTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> published = ArgumentCaptor.forClass(Map.class);
         verify(rowEventPublisher).publishCreated(eq(1L), eq(4549L), eq(TENANT), any(),
-            published.capture());
+            published.capture(), anyString());
         assertThat(asMap(published.getValue().get("video")))
             .containsEntry("_type", "file")
             .containsEntry("path", "1/wf/run/core:final_cut/clip.mp4");
@@ -332,7 +333,7 @@ class CrudExecutorServiceAssetHydrationTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> published = ArgumentCaptor.forClass(Map.class);
         verify(rowEventPublisher).publishDeleted(eq(1L), eq(4549L), eq(TENANT), any(),
-            published.capture());
+            published.capture(), anyString());
         assertThat(asMap(published.getValue().get("video"))).containsEntry("_type", "file");
     }
 

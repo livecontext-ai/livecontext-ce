@@ -26,7 +26,9 @@ import java.util.TimeZone;
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
-    @Value("${cors.allowed-origins:http://localhost:3000,http://localhost:8080}")
+    // Empty by default (LC-033): catalog-service has no browser ingress in cloud (the gateway owns
+    // CORS there). The CE monolith, where this is the only CORS config, sets it explicitly.
+    @Value("${cors.allowed-origins:}")
     private String[] allowedOrigins;
 
     @Value("${cors.allowed-methods:GET,POST,PUT,DELETE,OPTIONS,PATCH}")
@@ -35,11 +37,27 @@ public class WebConfig implements WebMvcConfigurer {
     @Value("${cors.allowed-headers:*}")
     private String[] allowedHeaders;
 
-    @Value("${cors.allow-credentials:true}")
+    // Auth is a Bearer header, never a cookie, so credentialed CORS is never needed by default.
+    @Value("${cors.allow-credentials:false}")
     private boolean allowCredentials;
 
     @Value("${cors.max-age:3600}")
     private long maxAge;
+
+    /**
+     * CASA LC-032: the ONLY browser-facing endpoint deliberately called from an origin this
+     * install does not control is the public chat widget - a script (`/widget.js`) a customer
+     * embeds on their own third-party site, whose embed page then calls back to
+     * {@code /api/internal/widget/{token}/*} (config, session, chat, history). Everything else
+     * behind {@code /**} is scoped to {@link #allowedOrigins}: the frontend never calls this
+     * backend directly from browser JS (it proxies server-side, see AGENTS.md
+     * "Never call backend directly"), so a wildcard there is not a feature, it is exposure.
+     * Origins here are never sent credentials (matches {@link WidgetSessionService}'s own
+     * anonymous, token-scoped session model - see also each widget handler's own
+     * {@code AgentWidgetConfigService.validateOrigin} allow-list, checked independently of CORS).
+     */
+    @Value("${cors.widget-allowed-origins:*}")
+    private String[] widgetAllowedOrigins;
 
     /**
      * Configure CORS globally for all endpoints.
@@ -47,12 +65,43 @@ public class WebConfig implements WebMvcConfigurer {
      */
     @Override
     public void addCorsMappings(CorsRegistry registry) {
+        String[] origins = explicitOrigins(allowedOrigins);
+        if (origins.length == 0) {
+            return; // no CORS grant at all
+        }
         registry.addMapping("/**")
-            .allowedOriginPatterns(allowedOrigins)
+            .allowedOriginPatterns(origins)
             .allowedMethods(allowedMethods)
             .allowedHeaders(allowedHeaders)
-            .allowCredentials(allowCredentials)
+            // A wildcard origin FORCES credentials off whatever the property says: the pair means
+            // "any site may read authenticated responses", and Spring does not refuse it for
+            // allowedOriginPatterns.
+            .allowCredentials(allowCredentials && !hasWildcard(origins))
             .maxAge(maxAge);
+
+        // CASA LC-032: the public widget stays reachable from any origin (that is the point of an
+        // embeddable widget) but NEVER with credentials, regardless of the global allow-credentials
+        // setting above - a widget visitor is always anonymous.
+        registry.addMapping("/api/internal/widget/**")
+            .allowedOriginPatterns(widgetAllowedOrigins)
+            .allowedMethods(allowedMethods)
+            .allowedHeaders(allowedHeaders)
+            .allowCredentials(false)
+            .maxAge(maxAge);
+    }
+
+    static String[] explicitOrigins(String[] configured) {
+        if (configured == null) {
+            return new String[0];
+        }
+        return java.util.Arrays.stream(configured)
+            .map(String::trim)
+            .filter(o -> !o.isEmpty())
+            .toArray(String[]::new);
+    }
+
+    static boolean hasWildcard(String[] origins) {
+        return java.util.Arrays.stream(origins).anyMatch(o -> o.contains("*"));
     }
 
     @Override

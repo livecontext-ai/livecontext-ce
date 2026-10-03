@@ -27,7 +27,7 @@ class ShowcaseSnapshotReaderTest {
     // Default rewriter passes items through unchanged so existing assertions
     // (which never inspect rewritten URLs) keep their original semantics.
     private final ShowcaseFileRefRewriter passthroughRewriter = passthroughRewriter();
-    private final ShowcaseSnapshotReader reader = new ShowcaseSnapshotReader(passthroughRewriter);
+    private final ShowcaseSnapshotReader reader = new ShowcaseSnapshotReader(passthroughRewriter, org.mockito.Mockito.mock(ShowcaseRestrictionGuard.class));
 
     private static ShowcaseFileRefRewriter passthroughRewriter() {
         ShowcaseFileRefRewriter m = mock(ShowcaseFileRefRewriter.class);
@@ -357,7 +357,7 @@ class ShowcaseSnapshotReaderTest {
         when(rewriter.rewriteItems(any(), any())).thenAnswer(inv -> {
             return List.of(Map.of("rewritten", true));
         });
-        ShowcaseSnapshotReader r = new ShowcaseSnapshotReader(rewriter);
+        ShowcaseSnapshotReader r = new ShowcaseSnapshotReader(rewriter, org.mockito.Mockito.mock(ShowcaseRestrictionGuard.class));
 
         Map<String, Object> defaultRender = new LinkedHashMap<>();
         defaultRender.put("htmlTemplate", "<img src=\"{{x}}\">");
@@ -579,7 +579,7 @@ class ShowcaseSnapshotReaderTest {
         private ShowcaseSnapshotReader readerSigning(Map<String, Object> signed) {
             ShowcaseFileRefRewriter m = mock(ShowcaseFileRefRewriter.class);
             when(m.rewriteStepFiles(any(), any())).thenReturn(signed);
-            return new ShowcaseSnapshotReader(m);
+            return new ShowcaseSnapshotReader(m, org.mockito.Mockito.mock(ShowcaseRestrictionGuard.class));
         }
 
         private WorkflowPublicationEntity pubWith(Map<String, Object> stepFiles) {
@@ -631,7 +631,7 @@ class ShowcaseSnapshotReaderTest {
 
             ShowcaseFileRefRewriter spy = mock(ShowcaseFileRefRewriter.class);
             when(spy.rewriteStepFiles(any(), any())).thenAnswer(inv -> inv.getArgument(0));
-            new ShowcaseSnapshotReader(spy).readStepFiles(pub);
+            new ShowcaseSnapshotReader(spy, org.mockito.Mockito.mock(ShowcaseRestrictionGuard.class)).readStepFiles(pub);
 
             org.mockito.ArgumentCaptor<Map<String, Object>> captor =
                     org.mockito.ArgumentCaptor.forClass(Map.class);
@@ -651,7 +651,7 @@ class ShowcaseSnapshotReaderTest {
 
             ShowcaseFileRefRewriter spy = mock(ShowcaseFileRefRewriter.class);
             when(spy.rewriteStepFiles(any(), any())).thenAnswer(inv -> inv.getArgument(0));
-            new ShowcaseSnapshotReader(spy).readStepFiles(pub);
+            new ShowcaseSnapshotReader(spy, org.mockito.Mockito.mock(ShowcaseRestrictionGuard.class)).readStepFiles(pub);
 
             org.mockito.ArgumentCaptor<Map<String, Object>> captor =
                     org.mockito.ArgumentCaptor.forClass(Map.class);

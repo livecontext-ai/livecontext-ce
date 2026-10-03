@@ -1,14 +1,16 @@
 import 'server-only';
 
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { routing, type Locale } from './routing';
+import { PAGE_LOCALE_HEADER } from '@/lib/seo/siteUrl';
 
 /**
  * Resolve the locale for route segments that live outside the `[locale]` tree
  * (e.g. `/workflows`, `/billing`, `/local-mcp`, the share/embed token routes).
  *
- * Resolution: the `NEXT_LOCALE` cookie if it is a known locale, else the app
- * default ('en'). This INTENTIONALLY mirrors the client-side `getClientLocale()`
+ * Resolution: the language a localized public page's URL names (`/fr/partners`, set by the
+ * proxy in `PAGE_LOCALE_HEADER`), else the `NEXT_LOCALE` cookie if it is a known locale, else
+ * the app default ('en'). This INTENTIONALLY mirrors the client-side `getClientLocale()`
  * (URL `[locale]` prefix -> `NEXT_LOCALE` cookie -> 'en') and the `[locale]`
  * tree's own default (the middleware sends a prefixless `/app` to `/en`). All
  * three now agree, so the provider locale that drives `useLocale()`/`t()` can no
@@ -21,6 +23,14 @@ import { routing, type Locale } from './routing';
  * formatters cannot read that header and so never matched it.
  */
 export async function resolveRequestLocale(): Promise<Locale> {
+  // A localized public page (/partners, /fr/partners...): its URL names the language, and the
+  // proxy passes it on. It wins over the cookie, or a crawler and a visitor would read the same
+  // URL in two languages.
+  const pageLocale = (await headers()).get(PAGE_LOCALE_HEADER);
+  if (pageLocale && routing.locales.includes(pageLocale as Locale)) {
+    return pageLocale as Locale;
+  }
+
   const cookieStore = await cookies();
   const cookieLocale = cookieStore.get('NEXT_LOCALE')?.value;
   if (cookieLocale && routing.locales.includes(cookieLocale as Locale)) {

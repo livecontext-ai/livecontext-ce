@@ -274,7 +274,12 @@ public class WorkflowBuilderHelpModule implements ToolModule {
             "interface stays a plain workflow listing. (application(action='create') is the equivalent app-first path and resolves the same things.) " +
             "RULE: PUBLIC workflow publications must be free (credits_per_use=0) - use PRIVATE or UNLISTED for paid workflows. " +
             "Response: status='PUBLISHED', publication_id, visibility, credits_per_use. " +
-            "PUBLIC publications go through a platform review before becoming visible to acquirers; PRIVATE/UNLISTED activate immediately.");
+            "PUBLIC publications go through a platform review before becoming visible to acquirers; PRIVATE/UNLISTED activate immediately. " +
+            "Refused with RESTRICTED_DATA_PROVIDER_NOT_ALLOWED once this conversation has read Gmail or Google Drive (a listing copies " +
+            "the workflow, its interfaces and its tables' rows); unpublish still works. Table rows that came from Gmail or Google Drive " +
+            "are never copied into a listing: acquirers get those tables without them. A run that read Gmail or Google Drive is never " +
+            "shown as the preview: the auto-selected run is the latest successful one without such data, and when the showcase run " +
+            "you pass (or every run) holds such data, the listing is still published, with no preview.");
         marketplace.put("unpublish", "Mark the marketplace listing inactive. Params: workflow_id (required). " +
             "Existing acquirers keep their copies - only new installs are blocked. Fails if the workflow has no active publication.");
         actions.put("marketplace", marketplace);
@@ -351,6 +356,10 @@ public class WorkflowBuilderHelpModule implements ToolModule {
         stepTypes.put("ssh", "Execute commands on remote servers via SSH");
         stepTypes.put("sftp", "File operations on remote servers via SFTP");
         stepTypes.put("database", "Execute SQL queries (PostgreSQL, MySQL, MSSQL)");
+        // Annotation
+        stepTypes.put("note", "Sticky note explaining the workflow to the user: params={text, attached_to: '<node label>'}. "
+            + "Never runs, takes no connection. Attached to a node, it sits next to it, shows when the user focuses it "
+            + "and is removed with it. Write the WHY the node does not say. Details: workflow(action='help', topics=['notes'])");
         docs.put("step_types", stepTypes);
 
         docs.put("table_crud_types", Map.ofEntries(

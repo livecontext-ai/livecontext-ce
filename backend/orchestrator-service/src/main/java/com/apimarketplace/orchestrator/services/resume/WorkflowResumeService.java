@@ -72,6 +72,10 @@ public class WorkflowResumeService {
     @Autowired(required = false)
     private com.apimarketplace.trigger.client.TriggerClient triggerClient;
 
+    /** Optional: without it a paused or cancelled workflow's incident closes by itself after a week. */
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.notification.delivery.NotificationDeliveryService notificationDelivery;
+
     /**
      * Used by {@link #updateRunPlan(String, Map)} to mirror in-run MOCK edits of
      * editor runs into the workflow's plan (their durable home - run.plan is
@@ -1022,6 +1026,12 @@ public class WorkflowResumeService {
                 logger.info("[{}] Trigger-suspend policy: suspended {} schedule trigger(s) " +
                                 "for workflowId={} after run termination (runId={})",
                         caller, suspended, workflowId, runIdPublic);
+                // The owner switched the workflow off: no "still failing" reminder about it. Only
+                // once a schedule really stopped (the client answers 0 on a failed call), as the
+                // schedule controllers only close on a confirmed stop.
+                if (suspended > 0 && notificationDelivery != null) {
+                    notificationDelivery.onWorkflowStopped(workflowId);
+                }
             } catch (Exception e) {
                 logger.warn("[{}] Failed to apply trigger-suspend policy for workflowId={} runId={}: {}",
                         caller, workflowId, runIdPublic, e.getMessage());

@@ -12,11 +12,15 @@ import { organizationApi } from '@/lib/api';
 import type { OrganizationRole } from '@/lib/api';
 import { useAuth } from '@/lib/providers/smart-providers';
 import { useAppVersion } from '@/hooks/useAppVersion';
+import { useHasPartnerSpace } from '@/hooks/usePartnerSpace';
 import { useHorizontalScrollHint } from '@/hooks/useHorizontalScrollHint';
 
 /**
  * Vertical navigation menu for settings pages
  * Displays in the central content area, left side
+ *
+ * Its breakpoint is the settings layout's CONTAINER (`@3xl`), not the viewport: beside the page
+ * only when the settings column has room for both, a scrollable strip above it otherwise.
  */
 export function SettingsNav() {
     const pathname = usePathname();
@@ -54,11 +58,13 @@ export function SettingsNav() {
     // BOTH modes. Org-OWNER is not enough - every regular user is OWNER of
     // their personal auto-org and would otherwise see these items.
     const isAdmin = isPlatformAdmin;
+    // The Partner program entry leads to a partner's own space: partners and applicants only.
+    const isPartner = useHasPartnerSpace();
 
     // Filter items based on admin role and CE mode
     const visibleItems = React.useMemo(() => {
-        return settingsNavItems.filter(item => isSettingsNavItemVisible(item, { isAdmin }));
-    }, [isAdmin]);
+        return settingsNavItems.filter(item => isSettingsNavItemVisible(item, { isAdmin, isPartner }));
+    }, [isAdmin, isPartner]);
 
     // Determine active nav item
     const activeHref = React.useMemo(() => {
@@ -89,9 +95,9 @@ export function SettingsNav() {
     }, [pathname, visibleItems]);
 
     return (
-        <div className="relative w-full md:w-48 flex-shrink-0 md:self-start md:sticky md:top-8">
-            <nav ref={scrollRef} onScroll={updateScrollHint} className="w-full overflow-x-auto md:overflow-visible pb-1 md:pb-0" style={{ scrollbarWidth: 'none' }}>
-            <div className="flex md:block min-w-max md:min-w-0 gap-1 md:gap-0 md:space-y-1 px-1 md:px-0">
+        <div className="relative w-full @3xl:w-48 flex-shrink-0 @3xl:self-start @3xl:sticky @3xl:top-8">
+            <nav ref={scrollRef} onScroll={updateScrollHint} className="w-full overflow-x-auto @3xl:overflow-visible pb-1 @3xl:pb-0" style={{ scrollbarWidth: 'none' }}>
+            <div className="flex @3xl:block min-w-max @3xl:min-w-0 gap-1 @3xl:gap-0 @3xl:space-y-1 px-1 @3xl:px-0">
                 {visibleItems.map((item) => {
                     const Icon = item.icon;
                     const isActive = activeHref === item.href;
@@ -109,7 +115,7 @@ export function SettingsNav() {
                             className={cn(
                                 // min-h-9 = the app standard control height; py-2 lets long
                                 // labels wrap to two lines on desktop without clipping.
-                                'group flex items-center gap-1.5 md:gap-2 min-h-9 px-2.5 md:px-3 py-2 rounded-lg text-sm transition-colors duration-150 md:w-full text-left whitespace-nowrap md:whitespace-normal flex-shrink-0',
+                                'group flex items-center gap-1.5 @3xl:gap-2 min-h-9 px-2.5 @3xl:px-3 py-2 rounded-lg text-sm transition-colors duration-150 @3xl:w-full text-left whitespace-nowrap @3xl:whitespace-normal flex-shrink-0',
                                 // Same tokens as the app sidebar rows: bg-surface-hover for
                                 // both the active state and the hover, so the two navs match.
                                 isActive
@@ -118,7 +124,7 @@ export function SettingsNav() {
                             )}
                         >
                             <Icon className="w-4 h-4 flex-shrink-0" />
-                            <span className="min-w-0 md:break-words">{item.label}</span>
+                            <span className="min-w-0 @3xl:break-words">{item.label}</span>
                             {item.href === '/app/settings/information' && showUpdateDot && (
                                 <span
                                     className={cn(
@@ -134,7 +140,7 @@ export function SettingsNav() {
             </div>
             </nav>
             {scrollHint.left && (
-                <div className="md:hidden pointer-events-none absolute inset-y-0 left-0 flex items-center bg-gradient-to-r from-[var(--bg-primary)] to-transparent pr-5 pb-1">
+                <div className="@3xl:hidden pointer-events-none absolute inset-y-0 left-0 flex items-center bg-gradient-to-r from-[var(--bg-primary)] to-transparent pr-5 pb-1">
                     <button
                         type="button"
                         onClick={() => nudge(-1)}
@@ -146,7 +152,7 @@ export function SettingsNav() {
                 </div>
             )}
             {scrollHint.right && (
-                <div className="md:hidden pointer-events-none absolute inset-y-0 right-0 flex items-center bg-gradient-to-l from-[var(--bg-primary)] to-transparent pl-5 pb-1">
+                <div className="@3xl:hidden pointer-events-none absolute inset-y-0 right-0 flex items-center bg-gradient-to-l from-[var(--bg-primary)] to-transparent pl-5 pb-1">
                     <button
                         type="button"
                         onClick={() => nudge(1)}

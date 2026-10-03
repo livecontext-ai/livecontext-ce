@@ -348,6 +348,15 @@ public class WorkflowListController {
             return ResponseEntity.notFound().build();
         }
         WorkflowEntity entity = entityOpt.get();
+        // CASA LC-037: this is the bare `GET /api/workflows/{uuid}` the gateway/CE share-token
+        // allow-list matches on PATH SHAPE ALONE. A share token resolves to the OWNER's identity,
+        // so the scope check below alone would authorize the visitor against EVERY workflow the
+        // owner has built. Serve only a workflow of the shared publication (every workflow of a
+        // multi-workflow application qualifies), BEFORE the scope check (fail closed: a share
+        // without a publication token is refused). Non-share requests are unaffected.
+        if (!WorkflowControllerHelper.shareContextPermitsWorkflow(entity)) {
+            return ResponseEntity.notFound().build();
+        }
         // Strict-isolation scope (2026-05-18, ScopeGuard alignment). CRITICAL
         // history: this handler used to shadow WorkflowCrudController.getWorkflow
         // (same @GetMapping path) and previously had NO security check at all -

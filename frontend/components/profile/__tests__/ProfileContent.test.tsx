@@ -119,8 +119,12 @@ describe('ProfileContent', () => {
 
     renderWithClient(<ProfileContent handle="alice_a" />);
 
-    expect(await screen.findByText(/profile\.founderMemberSince/)).toBeInTheDocument();
+    const founderLine = await screen.findByText(/profile\.founderMemberSince/);
+    expect(founderLine).toBeInTheDocument();
     expect(screen.queryByText(/profile\.memberSince/)).toBeNull();
+    // Same calendar icon as the plain member line (the sparkle was reverted on request).
+    expect(founderLine.querySelector('svg.lucide-calendar-days')).not.toBeNull();
+    expect(founderLine.querySelector('svg.lucide-sparkles')).toBeNull();
   });
 
   it('keeps the plain member label for accounts created on or after 1 January 2027 (UTC)', async () => {

@@ -61,6 +61,9 @@ public class OrchestratorFireClient {
         body.put("rowId", event.getRowId());
         body.put("row", event.getRow());
         body.put("previousRow", event.getPreviousRow());
+        // LC-066 re-audit item 1: forwarded so orchestrator's DatasourceTriggerDispatchService can
+        // mark the run this fire starts/advances restricted (see DatasourceEventDispatchRequest).
+        body.put("dataSensitivity", event.getDataSensitivity());
         body.put("triggeredAt", event.getTriggeredAt() != null
                 ? event.getTriggeredAt().toString()
                 : Instant.now().toString());

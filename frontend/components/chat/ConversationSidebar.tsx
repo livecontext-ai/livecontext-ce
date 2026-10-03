@@ -5,6 +5,7 @@ import { usePathname, useRouter } from '@/i18n/navigation';
 import { useSearchParams } from 'next/navigation';
 import { useSidebarConversations } from '@/hooks/conversation/useSidebarConversations';
 import { Conversation, conversationApi } from '@/lib/api/conversationApi';
+import { isAgentMainConversation, isTaskConversation } from '@/lib/api/conversation.types';
 // Keys live in one place: a raw array here collides by prefix with conversations.detail(id) and is
 // missed by the invalidation that heals the list after a conversation is created.
 import { queryKeys } from '@/lib/query-client';
@@ -25,7 +26,8 @@ import {
   ListFilter,
   Briefcase,
   Share2,
-  Eraser
+  Eraser,
+  ClipboardList
 } from 'lucide-react';
 import { getProjectIcon } from '@/components/project/ProjectMultiStepModal';
 import { conversationDisplayTitle } from '@/lib/utils/conversationTitle';
@@ -518,7 +520,9 @@ export const ConversationSidebar = memo(function ConversationSidebar({
 
     setIsDeleting(true);
     try {
-      if (conversationToDelete.agentId) {
+      // A task's own conversation carries the agent id too, but it is not the agent's chat:
+      // it is deleted like any other conversation.
+      if (isAgentMainConversation(conversationToDelete)) {
         // Agent conversations: clear messages only, keep the conversation.
         // clearMessages announces the wipe, so the surface actually SHOWING the
         // transcript empties it. The sidebar used to clear a private copy of the
@@ -589,12 +593,19 @@ export const ConversationSidebar = memo(function ConversationSidebar({
                 <Bot className="ml-1 w-3 h-3 text-theme-muted flex-shrink-0" />
               )
             )}
-            {conversation.agentId && agentTriggerMap.has(conversation.agentId) && (
+            {isTaskConversation(conversation) && (
+              <ClipboardList
+                className="ml-0.5 w-3 h-3 text-theme-muted flex-shrink-0"
+                aria-label={t('sidebar.taskConversation')}
+                data-testid="task-conversation-badge"
+              />
+            )}
+            {isAgentMainConversation(conversation) && agentTriggerMap.has(conversation.agentId!) && (
               <span className="ml-0.5 inline-flex items-center gap-0.5 flex-shrink-0">
-                {agentTriggerMap.get(conversation.agentId)!.hasSchedule && (
+                {agentTriggerMap.get(conversation.agentId!)!.hasSchedule && (
                   <CalendarClock className="w-3 h-3 text-theme-muted" aria-label={t('sidebar.scheduledAgent')} />
                 )}
-                {agentTriggerMap.get(conversation.agentId)!.hasWebhook && (
+                {agentTriggerMap.get(conversation.agentId!)!.hasWebhook && (
                   <Webhook className="w-3 h-3 text-theme-muted" aria-label={t('sidebar.webhookAgent')} />
                 )}
               </span>
@@ -636,7 +647,8 @@ export const ConversationSidebar = memo(function ConversationSidebar({
                     <span className="text-sm">{t('sidebar.navigateToWorkflow')}</span>
                   </button>
                 )}
-                {conversation.agentId && (
+                {/* The agent's own conversation only: a task conversation is not "the agent". */}
+                {isAgentMainConversation(conversation) && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -680,7 +692,7 @@ export const ConversationSidebar = memo(function ConversationSidebar({
                   }}
                   className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30"
                 >
-                  {conversation.agentId ? (
+                  {isAgentMainConversation(conversation) ? (
                     <>
                       <Eraser className="h-4 w-4" />
                       <span className="text-sm">{t('sidebar.clearMessages')}</span>
@@ -1130,7 +1142,7 @@ export const ConversationSidebar = memo(function ConversationSidebar({
         onConfirm={handleConfirmDelete}
         conversationTitle={conversationToDelete?.title}
         isLoading={isDeleting}
-        clearMode={!!conversationToDelete?.agentId}
+        clearMode={isAgentMainConversation(conversationToDelete)}
       />
 
       {/* Share Link Dialog */}

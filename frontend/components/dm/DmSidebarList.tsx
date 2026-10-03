@@ -15,6 +15,8 @@ import { useCurrentOrg } from '@/lib/stores/current-org-store';
 import { useChannel } from '@/lib/websocket/use-channel';
 import { AvatarDisplay } from '@/components/agents';
 import { VerifiedBadge } from '@/components/profile/VerifiedBadge';
+import { IS_CE } from '@/lib/edition';
+import { MY_PARTNER_QUERY_KEY, partnerProgramApi } from '@/lib/api/services/partner-program-api.service';
 
 /** Conversation-list filter driven by the sidebar-header filter button. */
 export type DmListFilter = 'all' | 'teammates' | 'others';
@@ -34,6 +36,9 @@ interface DmSidebarListProps {
  * filter narrows to one group; the search input filters conversations by name.
  * Clicking a row opens/navigates to that conversation; the open thread is highlighted.
  * Refreshes live on dm-inbox events.
+ *
+ * <p>A client who came through a partner finds that partner pinned on top ("Your partner"),
+ * thread or not, like a teammate: their avatar, their official-partner seal, one click to write.
  */
 export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarListProps) {
   const t = useTranslations('dm');
@@ -60,6 +65,17 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
     enabled: !!currentOrgId,
   });
 
+  // The partner this client came through (cloud only): a contact that is always there.
+  const { data: myPartnerData } = useQuery({
+    queryKey: MY_PARTNER_QUERY_KEY,
+    queryFn: () => partnerProgramApi.myPartner(),
+    enabled: !IS_CE,
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+  const myPartner = myPartnerData?.partner && myPartnerData.partner.user_id !== myUserId ? myPartnerData.partner : null;
+  const partnerId = myPartner?.user_id ?? null;
+
   // Live: a new incoming DM refreshes the thread list (unread counts + ordering).
   useChannel<DmInboxEvent>(myUserId ? `dm-inbox:${myUserId}` : null, () => {
     refetch();
@@ -82,12 +98,16 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
   // member of the ACTIVE workspace; everything else (left members, cross-workspace
   // contacts) falls in "other conversations".
   const teammateThreads = useMemo(
-    () => (threads ?? []).filter((th) => memberById.has(th.otherUserId)),
-    [threads, memberById],
+    () => (threads ?? []).filter((th) => th.otherUserId !== partnerId && memberById.has(th.otherUserId)),
+    [threads, memberById, partnerId],
   );
   const otherThreads = useMemo(
-    () => (threads ?? []).filter((th) => !memberById.has(th.otherUserId)),
-    [threads, memberById],
+    () => (threads ?? []).filter((th) => th.otherUserId !== partnerId && !memberById.has(th.otherUserId)),
+    [threads, memberById, partnerId],
+  );
+  const partnerThread = useMemo(
+    () => (partnerId ? (threads ?? []).find((th) => th.otherUserId === partnerId) ?? null : null),
+    [threads, partnerId],
   );
 
   // Teammates that don't already have a thread → shown as "start a conversation" rows.
@@ -95,7 +115,9 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
     () => new Set((threads ?? []).map((th) => th.otherUserId)),
     [threads],
   );
-  const teammatesWithoutThread = teammates.filter((m) => !threadOtherIds.has(String(m.userId)));
+  const teammatesWithoutThread = teammates.filter(
+    (m) => !threadOtherIds.has(String(m.userId)) && String(m.userId) !== partnerId,
+  );
 
   // Resolve display names for non-teammates (no org-member row to read from) via their
   // public profile. Bounded by the user's own thread list, cached per user id.
@@ -121,13 +143,26 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
     router.push(`/app/messages/${thread.id}`);
   };
 
+  const openPartner = async () => {
+    if (!partnerId) return;
+    try {
+      const thread = await dmApi.openThread(partnerId);
+      router.push(`/app/messages/${thread.id}`);
+    } catch {
+      // The row stays where it is: another click tries again.
+    }
+  };
+
   const labelFor = (otherUserId: string) => {
+    if (otherUserId === partnerId) return myPartner?.name || t('yourPartner');
     const m = memberById.get(otherUserId);
     if (m) return m.displayName || m.email;
     return otherNameById.get(otherUserId)?.name || t('unknownUser');
   };
 
   const avatarUrlFor = (otherUserId: string) => {
+    // The backend serves the partner's photo, or their initials when they have none.
+    if (otherUserId === partnerId) return `/api/users/${otherUserId}/avatar`;
     const m = memberById.get(otherUserId);
     if (m) return m.avatarUrl ? `/api/users/${otherUserId}/avatar` : undefined;
     return otherNameById.get(otherUserId)?.avatarUrl ? `/api/users/${otherUserId}/avatar` : undefined;
@@ -169,6 +204,8 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
     matches(m.displayName || m.email),
   );
   const visibleOtherThreads = otherThreads.filter((th) => matches(labelFor(th.otherUserId)));
+  // The partner reads as one of the "other" contacts (outside the workspace) for the filter.
+  const showPartner = !!partnerId && filter !== 'teammates' && matches(labelFor(partnerId));
 
   const showTeammatesGroup = filter !== 'others';
   const showOthersGroup = filter !== 'teammates';
@@ -178,6 +215,7 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
   // a real nested control - <button> inside <button> would be invalid HTML.
   const threadRow = (th: DmThread) => {
     const isTeammate = memberById.has(th.otherUserId);
+    const isPartner = th.otherUserId === partnerId;
     return (
       <div
         key={th.id}
@@ -200,6 +238,7 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
           className="!h-6 !w-6 flex-shrink-0"
         />
         <span className="min-w-0 truncate text-sm text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary transition-colors">{labelFor(th.otherUserId)}</span>
+        {/* Looked up, never assumed: a partner who leaves the program loses the seal here too. */}
         <VerifiedBadge userId={th.otherUserId} />
         {/* Spacer, so the unread count and the delete button keep hugging the right
             edge now that the name no longer flexes into the whole row. */}
@@ -209,8 +248,8 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
             {th.unreadCount}
           </span>
         )}
-        {/* Delete (soft, one-sided) - NEVER offered for workspace teammates. */}
-        {!isTeammate && (
+        {/* Delete (soft, one-sided) - NEVER offered for workspace teammates, nor the partner. */}
+        {!isTeammate && !isPartner && (
           <button
             type="button"
             data-testid={`dm-thread-delete-${th.id}`}
@@ -257,6 +296,31 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
         </div>
       ) : (
         <>
+          {showPartner && (
+            <div data-testid="dm-partner-group">
+              <p className="px-1 pb-1 pt-1 text-xs font-medium uppercase tracking-wide text-theme-muted">
+                {t('yourPartner')}
+              </p>
+              {partnerThread ? threadRow(partnerThread) : (
+                <button
+                  type="button"
+                  onClick={openPartner}
+                  data-testid="dm-partner-start"
+                  className="flex w-full items-center gap-2 rounded-lg px-1 py-2 text-left transition-colors hover:bg-surface-hover"
+                >
+                  <AvatarDisplay
+                    avatarUrl={avatarUrlFor(partnerId!)}
+                    name={labelFor(partnerId!)}
+                    size="sm"
+                    className="!h-6 !w-6 flex-shrink-0"
+                  />
+                  <span className="min-w-0 truncate text-sm text-theme-secondary">{labelFor(partnerId!)}</span>
+                  <VerifiedBadge userId={partnerId!} />
+                </button>
+              )}
+            </div>
+          )}
+
           {showTeammatesGroup && (
             <>
               {(visibleTeammateThreads.length > 0 || visibleTeammatesWithoutThread.length > 0) && (
@@ -303,7 +367,7 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
 
           {/* Feedback only for a fruitless SEARCH - the bare empty state stays silent
               (historical behaviour: teammates double as default contacts). */}
-          {q !== '' &&
+          {q !== '' && !showPartner &&
             (!showTeammatesGroup || (visibleTeammateThreads.length === 0 && visibleTeammatesWithoutThread.length === 0)) &&
             (!showOthersGroup || visibleOtherThreads.length === 0) && (
               <p className="px-1 pt-2 text-sm text-theme-muted">{t('noThreads')}</p>

@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -51,8 +52,15 @@ class OAuth2ServiceTest {
     private static final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new JavaTimeModule());
 
+    @org.junit.jupiter.api.AfterEach
+    void resetDns() {
+        com.apimarketplace.common.web.PublicDnsForTests.reset();
+    }
+
     @BeforeEach
     void setUp() {
+        // Fixture provider hosts are placeholders; the use-time endpoint check resolves them.
+        com.apimarketplace.common.web.PublicDnsForTests.install();
         // SimpleMeterRegistry is a no-op collector - fine for unit tests that only want to
         // verify the service behaves correctly when emitting metrics, without asserting on
         // the counter values themselves. Dedicated metrics assertions live in
@@ -71,8 +79,34 @@ class OAuth2ServiceTest {
                 new com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshErrorClassifier(),
                 new com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshBackoff(),
                 new com.apimarketplace.auth.credential.metrics.OAuth2RefreshMetrics(
-                        meterRegistry, mock(com.apimarketplace.auth.credential.repository.CredentialRepository.class))
+                        meterRegistry, mock(com.apimarketplace.auth.credential.repository.CredentialRepository.class)),
+                org.springframework.web.reactive.function.client.WebClient.builder()
         );
+    }
+
+    /** Raw value of the binding cookie the tests present at the callback (LC-005). */
+    static final String BINDING = "test-browser-binding-value";
+
+    /**
+     * Stub the state blob as initiate() now writes it: bound to {@link #BINDING} and read back
+     * through the atomic consume script. Decrypt is the identity, so the inline secret and the
+     * verifier the fixture carries in clear come back unchanged.
+     */
+    private void stubStoredState(String state, String json) throws Exception {
+        var s = objectMapper.readValue(json, com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State.class);
+        var bound = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State(
+                s.userId(), s.credentialTemplateId(), s.credentialName(), s.clientId(), s.clientSecret(),
+                s.authUrl(), s.accessTokenUrl(), s.scope(), s.environment(), s.integration(), s.iconUrl(),
+                s.returnUrl(), s.createdAt(), s.codeVerifier(), s.organizationId(), s.templateVars(),
+                OAuth2BrowserBinding.hash(BINDING), s.platformCredentialId());
+        lenient().when(redisTemplate.execute(eq(OAuth2Service.CONSUME_STATE_SCRIPT), eq(List.of("oauth2:state:" + state))))
+                .thenReturn(objectMapper.writeValueAsString(bound));
+        lenient().when(encryptionService.decrypt(anyString())).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    private void verifyConsumedAtomically(String state) {
+        verify(redisTemplate).execute(eq(OAuth2Service.CONSUME_STATE_SCRIPT), eq(List.of("oauth2:state:" + state)));
+        verify(redisTemplate, never()).delete("oauth2:state:" + state);
     }
 
     // ========== hasPlatformCredentials ==========
@@ -158,7 +192,7 @@ class OAuth2ServiceTest {
         @Test
         @DisplayName("returns refresh_in_progress when lock busy, does not touch credential store")
         void refreshToken_whenLockBusy_throwsRefreshInProgress() {
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             when(valueOperations.setIfAbsent(
                     eq("oauth2:refresh-lock:7"),
                     anyString(),
@@ -189,7 +223,7 @@ class OAuth2ServiceTest {
         @DisplayName("releases lock even when the refresh itself fails (compare-and-delete)")
         void refreshToken_releasesLockOnFailure() {
             ArgumentCaptor<String> valueCap = ArgumentCaptor.forClass(String.class);
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             when(valueOperations.setIfAbsent(
                     eq("oauth2:refresh-lock:99"),
                     valueCap.capture(),
@@ -1132,8 +1166,8 @@ class OAuth2ServiceTest {
                     "https://airtable.com/oauth2/v1/authorize", "https://airtable.com/oauth2/v1/token",
                     "data.records:read", "Production", "airtable", "/icons/services/airtable.svg",
                     "/app/settings/credentials", Instant.parse("2026-04-09T10:00:00Z"), null);
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state)).thenReturn(objectMapper.writeValueAsString(stateRecord));
+            // Consumed atomically and bound to the browser, as initiate() writes it (LC-089 / LC-005).
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
             return state;
         }
 
@@ -1167,7 +1201,7 @@ class OAuth2ServiceTest {
                             echoed.getBytes(java.nio.charset.StandardCharsets.UTF_8), null));
             var logs = capture();
             try {
-                String redirect = oAuth2Service.handleCallback("code-1", state);
+                String redirect = oAuth2Service.handleCallback("code-1", state, BINDING);
 
                 assertThat(redirect).contains("token_exchange_failed");
                 assertThat(logs.list).anySatisfy(e -> assertThat(e.getFormattedMessage()).contains("Token exchange HTTP error"));
@@ -1187,7 +1221,7 @@ class OAuth2ServiceTest {
                     .thenThrow(new IllegalStateException("connection pool exhausted"));
             var logs = capture();
             try {
-                String redirect = oAuth2Service.handleCallback("code-2", state);
+                String redirect = oAuth2Service.handleCallback("code-2", state, BINDING);
 
                 assertThat(redirect).contains("token_exchange_failed");
                 assertThat(logs.list).anySatisfy(e -> {
@@ -1226,8 +1260,8 @@ class OAuth2ServiceTest {
             String stateJson = objectMapper.writeValueAsString(stateRecord);
 
             // Redis returns our state when the callback looks it up.
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state)).thenReturn(stateJson);
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(state, stateJson);
 
             // Replace the internal RestTemplate with a mock so we can capture the POST body.
             org.springframework.web.client.RestTemplate mockRest =
@@ -1263,7 +1297,7 @@ class OAuth2ServiceTest {
                     .thenReturn(created);
 
             // Act
-            String redirect = oAuth2Service.handleCallback(code, state);
+            String redirect = oAuth2Service.handleCallback(code, state, BINDING);
 
             // Assert: redirect is success, NOT an error page.
             assertThat(redirect).contains("success=true");
@@ -1307,9 +1341,8 @@ class OAuth2ServiceTest {
                     null, Instant.parse("2026-04-09T10:00:00Z"),
                     null // no PKCE
             );
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
 
             org.springframework.web.client.RestTemplate mockRest =
                     mock(org.springframework.web.client.RestTemplate.class);
@@ -1335,7 +1368,7 @@ class OAuth2ServiceTest {
                     anyString(), anyString()))
                     .thenReturn(buildCredential(1L, USER_ID, Map.of()));
 
-            oAuth2Service.handleCallback("code", state);
+            oAuth2Service.handleCallback("code", state, BINDING);
 
             org.mockito.ArgumentCaptor<org.springframework.http.HttpEntity> captor =
                     org.mockito.ArgumentCaptor.forClass(org.springframework.http.HttpEntity.class);
@@ -1382,9 +1415,8 @@ class OAuth2ServiceTest {
                     null, Instant.parse("2026-04-17T10:00:00Z"),
                     null
             );
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
 
             org.springframework.web.client.RestTemplate mockRest =
                     mock(org.springframework.web.client.RestTemplate.class);
@@ -1414,7 +1446,7 @@ class OAuth2ServiceTest {
                     anyString(), anyString()))
                     .thenReturn(buildCredential(1L, USER_ID, Map.of()));
 
-            oAuth2Service.handleCallback("code", state);
+            oAuth2Service.handleCallback("code", state, BINDING);
 
             @SuppressWarnings("unchecked")
             org.mockito.ArgumentCaptor<List<String>> scopesCaptor =
@@ -1456,9 +1488,8 @@ class OAuth2ServiceTest {
                     null, Instant.parse("2026-09-09T10:00:00Z"),
                     null
             );
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
 
             org.springframework.web.client.RestTemplate mockRest =
                     mock(org.springframework.web.client.RestTemplate.class);
@@ -1488,7 +1519,7 @@ class OAuth2ServiceTest {
                     anyString(), anyString()))
                     .thenReturn(buildCredential(1L, USER_ID, Map.of()));
 
-            oAuth2Service.handleCallback("code", state);
+            oAuth2Service.handleCallback("code", state, BINDING);
 
             @SuppressWarnings("unchecked")
             org.mockito.ArgumentCaptor<List<String>> scopesCaptor =
@@ -1521,9 +1552,8 @@ class OAuth2ServiceTest {
                     null, Instant.parse("2026-04-17T10:00:00Z"),
                     null
             );
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
 
             org.springframework.web.client.RestTemplate mockRest =
                     mock(org.springframework.web.client.RestTemplate.class);
@@ -1550,7 +1580,7 @@ class OAuth2ServiceTest {
                     anyString(), anyString()))
                     .thenReturn(buildCredential(1L, USER_ID, Map.of()));
 
-            oAuth2Service.handleCallback("code", state);
+            oAuth2Service.handleCallback("code", state, BINDING);
 
             @SuppressWarnings("unchecked")
             org.mockito.ArgumentCaptor<List<String>> scopesCaptor =
@@ -1597,9 +1627,8 @@ class OAuth2ServiceTest {
                     null, // no PKCE
                     orgId // org-scope capture-at-initiate
             );
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
 
             org.springframework.web.client.RestTemplate mockRest =
                     mock(org.springframework.web.client.RestTemplate.class);
@@ -1628,7 +1657,7 @@ class OAuth2ServiceTest {
                     anyString(), anyString()))
                     .thenReturn(buildCredential(1L, USER_ID, Map.of()));
 
-            oAuth2Service.handleCallback("code", state);
+            oAuth2Service.handleCallback("code", state, BINDING);
 
             // Position 2 of the 12-arg createCredential is organizationId.
             org.mockito.ArgumentCaptor<String> orgCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
@@ -1661,9 +1690,8 @@ class OAuth2ServiceTest {
                     null,
                     null // no org context - personal-scope OAuth flow
             );
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
 
             org.springframework.web.client.RestTemplate mockRest =
                     mock(org.springframework.web.client.RestTemplate.class);
@@ -1689,7 +1717,7 @@ class OAuth2ServiceTest {
                     anyString(), anyString()))
                     .thenReturn(buildCredential(1L, USER_ID, Map.of()));
 
-            oAuth2Service.handleCallback("code", state);
+            oAuth2Service.handleCallback("code", state, BINDING);
 
             org.mockito.ArgumentCaptor<String> orgCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
             verify(credentialService).createCredential(
@@ -1736,9 +1764,8 @@ class OAuth2ServiceTest {
                     "/app/settings/credentials", Instant.parse("2026-05-01T10:00:00Z"),
                     null // no PKCE
             );
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
 
             // catalogClient is the real WebClient pointing at localhost:8081 (nothing listening in a
             // unit test), so fetchCredentialTemplate returns null -> the minimal-config fallback fires.
@@ -1765,7 +1792,7 @@ class OAuth2ServiceTest {
                     anyString(), anyString()))
                     .thenReturn(buildCredential(1L, USER_ID, Map.of()));
 
-            String redirect = oAuth2Service.handleCallback(code, state);
+            String redirect = oAuth2Service.handleCallback(code, state, BINDING);
 
             assertThat(redirect)
                     .as("the fallback still completes the exchange, just with the wrong auth method")
@@ -1819,9 +1846,8 @@ class OAuth2ServiceTest {
                     "Production", "github", "/icons/services/github.svg",
                     null, Instant.parse("2026-05-01T10:00:00Z"),
                     null);
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
 
             org.springframework.web.client.RestTemplate mockRest =
                     mock(org.springframework.web.client.RestTemplate.class);
@@ -1844,11 +1870,11 @@ class OAuth2ServiceTest {
                     anyString(), anyString()))
                     .thenReturn(buildCredential(1L, USER_ID, Map.of()));
 
-            String redirect = oAuth2Service.handleCallback("code", state);
+            String redirect = oAuth2Service.handleCallback("code", state, BINDING);
 
             assertThat(redirect).contains("success=true");
-            // A consumed state must be deleted so the auth code cannot be replayed.
-            verify(redisTemplate).delete("oauth2:state:" + state);
+            // The state is consumed atomically (read+delete in one script) so the code cannot be replayed.
+            verifyConsumedAtomically(state);
         }
 
         @Test
@@ -1864,9 +1890,8 @@ class OAuth2ServiceTest {
                     "Production", "github", "/icons/services/github.svg",
                     null, Instant.parse("2026-05-01T10:00:00Z"),
                     null);
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
 
             org.springframework.web.client.RestTemplate mockRest =
                     mock(org.springframework.web.client.RestTemplate.class);
@@ -1887,7 +1912,7 @@ class OAuth2ServiceTest {
                     eq(com.fasterxml.jackson.databind.JsonNode.class)))
                     .thenThrow(httpError);
 
-            String redirect = oAuth2Service.handleCallback("code", state);
+            String redirect = oAuth2Service.handleCallback("code", state, BINDING);
 
             assertThat(redirect)
                     .as("HttpClientErrorException maps to a stable opaque error code, not the raw failure")
@@ -1896,14 +1921,14 @@ class OAuth2ServiceTest {
             assertThat(redirect)
                     .as("the provider error body (with token-shaped substrings) must never reach the redirect")
                     .doesNotContain("ya29");
-            // State must be removed on the error path too, to prevent replay of the code.
-            verify(redisTemplate).delete("oauth2:state:" + state);
+            // Consumed before the exchange, so the error path leaves nothing to replay either.
+            verifyConsumedAtomically(state);
         }
 
         @Test
-        @DisplayName("state removal failure is swallowed: the callback still returns its result")
-        void stateRemovalFailureDoesNotMaskResult() throws Exception {
-            final String state = "state-remove-fails";
+        @DisplayName("LC-089: a replayed callback finds the state already consumed and never reaches the provider twice")
+        void replayedCallbackIsRefusedWithoutASecondExchange() throws Exception {
+            final String state = "state-replayed";
             var stateRecord = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State(
                     USER_ID, "template-github", "GitHub Credential",
                     "cid", "csec",
@@ -1913,12 +1938,11 @@ class OAuth2ServiceTest {
                     "Production", "github", "/icons/services/github.svg",
                     null, Instant.parse("2026-05-01T10:00:00Z"),
                     null);
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
-            // Redis DELETE blows up - removeStateFromRedis must swallow it (logged, not retried).
-            doThrow(new org.springframework.data.redis.RedisConnectionFailureException("redis down"))
-                    .when(redisTemplate).delete("oauth2:state:" + state);
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
+            // The consume script hands the blob out ONCE, then the key is gone.
+            String first = redisTemplate.execute(OAuth2Service.CONSUME_STATE_SCRIPT, List.of("oauth2:state:" + state));
+            when(redisTemplate.execute(eq(OAuth2Service.CONSUME_STATE_SCRIPT), eq(List.of("oauth2:state:" + state))))
+                    .thenReturn(first, (String) null);
 
             org.springframework.web.client.RestTemplate mockRest =
                     mock(org.springframework.web.client.RestTemplate.class);
@@ -1941,12 +1965,36 @@ class OAuth2ServiceTest {
                     anyString(), anyString()))
                     .thenReturn(buildCredential(1L, USER_ID, Map.of()));
 
-            String redirect = oAuth2Service.handleCallback("code", state);
+            String firstRedirect = oAuth2Service.handleCallback("code", state, BINDING);
+            String replayRedirect = oAuth2Service.handleCallback("code", state, BINDING);
 
-            assertThat(redirect)
-                    .as("a Redis DELETE failure during cleanup must not mask the successful callback result")
-                    .contains("success=true");
-            verify(redisTemplate).delete("oauth2:state:" + state);
+            assertThat(firstRedirect).contains("success=true");
+            assertThat(replayRedirect).contains("error=invalid_state");
+            verify(mockRest, times(1)).postForEntity(anyString(),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class));
+            verify(credentialService, times(1)).createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), anyList(), anyList(),
+                    anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("LC-089: a Redis failure while consuming the state fails closed (invalid_state, no exchange)")
+        void consumeFailureFailsClosed() {
+            final String state = "state-redis-down";
+            when(redisTemplate.execute(eq(OAuth2Service.CONSUME_STATE_SCRIPT), eq(List.of("oauth2:state:" + state))))
+                    .thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("redis down"));
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    oAuth2Service, "restTemplate", mockRest);
+
+            String redirect = oAuth2Service.handleCallback("code", state, BINDING);
+
+            assertThat(redirect).contains("error=invalid_state");
+            verifyNoInteractions(mockRest);
         }
     }
 
@@ -3181,7 +3229,7 @@ class OAuth2ServiceTest {
         @Test
         @DisplayName("disabled sentinel=terminal_user short-circuits before lock + DB load")
         void disabledSentinelTerminalUserSkipsLockAndDbLoad() {
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             when(valueOperations.get("oauth2:refresh-disabled:1")).thenReturn("terminal_user");
 
             assertThatThrownBy(() -> oAuth2Service.refreshToken(1L, USER_ID))
@@ -3203,7 +3251,7 @@ class OAuth2ServiceTest {
         @Test
         @DisplayName("disabled sentinel=terminal_config → TERMINAL_CONFIG bucket")
         void disabledSentinelTerminalConfigMapsCorrectly() {
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             when(valueOperations.get("oauth2:refresh-disabled:1")).thenReturn("terminal_config");
 
             assertThatThrownBy(() -> oAuth2Service.refreshToken(1L, USER_ID))
@@ -3224,7 +3272,7 @@ class OAuth2ServiceTest {
         @Test
         @DisplayName("cooldown sentinel → transient, no lock acquire, no DB load")
         void cooldownSentinelSkipsLockAndDbLoad() {
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             when(valueOperations.get("oauth2:refresh-disabled:1")).thenReturn(null);
             when(valueOperations.get("oauth2:refresh-cooldown:1")).thenReturn("until:some-iso");
 
@@ -3245,7 +3293,7 @@ class OAuth2ServiceTest {
         @Test
         @DisplayName("Redis down during fast-path → falls through to DB gate (status=needs_reauth)")
         void redisDownStillHitsDbAuthoritativeGate() {
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             // Redis GET blows up - e.g. connection refused.
             when(valueOperations.get(anyString()))
                     .thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("boom"));
@@ -3350,7 +3398,7 @@ class OAuth2ServiceTest {
         @Test
         @DisplayName("piped sentinel 'terminal_user|gmail' → still TERMINAL_USER, reason carries only the state")
         void pipedDisabledSentinelIsParsedCorrectly() {
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             when(valueOperations.get("oauth2:refresh-disabled:1")).thenReturn("terminal_user|gmail");
 
             assertThatThrownBy(() -> oAuth2Service.refreshToken(1L, USER_ID))
@@ -3370,7 +3418,7 @@ class OAuth2ServiceTest {
         @Test
         @DisplayName("piped cooldown sentinel '2026-01-01T00:00:00Z|slack' → TRANSIENT, no DB load")
         void pipedCooldownSentinelIsParsedCorrectly() {
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             when(valueOperations.get("oauth2:refresh-disabled:1")).thenReturn(null);
             when(valueOperations.get("oauth2:refresh-cooldown:1"))
                     .thenReturn("2026-01-01T00:00:00Z|slack");
@@ -3418,7 +3466,7 @@ class OAuth2ServiceTest {
                     com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshErrorBucket.TERMINAL_USER,
                     "invalid_grant", 400, "refresh token revoked");
             Credential cred = buildCredentialWithStatus(42L, USER_ID, CredentialStatus.active);
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             doThrow(new RuntimeException("db offline"))
                     .when(credentialService).scrubSensitiveFields(
                             anyLong(), anyString(), anySet(), any(), anyMap());
@@ -3450,7 +3498,7 @@ class OAuth2ServiceTest {
                     com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshErrorBucket.TERMINAL_CONFIG,
                     "invalid_scope", 400, "scope drift");
             Credential cred = buildCredentialWithStatus(42L, USER_ID, CredentialStatus.active);
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
             doThrow(new org.springframework.data.redis.RedisConnectionFailureException("redis down"))
                     .when(valueOperations).set(anyString(), anyString(), any(java.time.Duration.class));
 
@@ -3490,9 +3538,8 @@ class OAuth2ServiceTest {
                     "Production", "instagram_login", "/icons/services/instagram.svg",
                     "/app/settings/credentials", Instant.parse("2026-07-14T10:00:00Z"),
                     null);
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + STATE))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(STATE, objectMapper.writeValueAsString(stateRecord));
 
             com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
             com.fasterxml.jackson.databind.node.ObjectNode oauth2 =
@@ -3568,7 +3615,7 @@ class OAuth2ServiceTest {
                     anyString(), anyMap(), anyList(), anyList(), anyString(), anyString()))
                     .thenReturn(created);
 
-            String redirect = oAuth2Service.handleCallback("auth-code", STATE);
+            String redirect = oAuth2Service.handleCallback("auth-code", STATE, BINDING);
 
             assertThat(redirect).contains("success=true").doesNotContain("error=");
             @SuppressWarnings("unchecked")
@@ -3606,7 +3653,7 @@ class OAuth2ServiceTest {
                     anyString(), anyMap(), anyList(), anyList(), anyString(), anyString()))
                     .thenReturn(created);
 
-            String redirect = oAuth2Service.handleCallback("auth-code", STATE);
+            String redirect = oAuth2Service.handleCallback("auth-code", STATE, BINDING);
 
             assertThat(redirect).contains("success=true").doesNotContain("error=");
             @SuppressWarnings("unchecked")
@@ -3955,9 +4002,8 @@ class OAuth2ServiceTest {
                     "read_products", "Production", "shopify", "/icons/services/shopify.svg",
                     null, Instant.parse("2026-04-17T10:00:00Z"), null, null,
                     Map.of("shop", "acme"));
-            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-            when(valueOperations.get("oauth2:state:" + state))
-                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            stubStoredState(state, objectMapper.writeValueAsString(stateRecord));
 
             org.springframework.web.client.RestTemplate mockRest =
                     mock(org.springframework.web.client.RestTemplate.class);
@@ -3979,7 +4025,7 @@ class OAuth2ServiceTest {
                     anyString(), anyMap(), anyList(), anyList(), anyString(), anyString()))
                     .thenReturn(buildCredential(1L, USER_ID, Map.of()));
 
-            oAuth2Service.handleCallback("code", state);
+            oAuth2Service.handleCallback("code", state, BINDING);
 
             // The token URL from the state is already resolved; the callback stores the host var so
             // that HttpExecutionService.replaceUrlTemplateVariables can rebuild the base URL at runtime.
@@ -4035,6 +4081,125 @@ class OAuth2ServiceTest {
         @DisplayName("a single scope survives untouched")
         void singleScope() {
             assertThat(OAuth2Service.parseGrantedScopes("openid")).containsExactly("openid");
+        }
+    }
+
+    /**
+     * LC-065 (item 1): capturing the provider account subject at connect/refresh so a later
+     * disconnect can tell whether another credential (any tenant) shares the same grant.
+     */
+    @Nested
+    @DisplayName("rememberProviderSubject")
+    class RememberProviderSubjectTests {
+
+        private String sha256Base64Url(String raw) throws Exception {
+            return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+                    java.security.MessageDigest.getInstance("SHA-256")
+                            .digest(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        }
+
+        private String idTokenWithSub(String sub) {
+            String claims = "{\"sub\":\"" + sub + "\",\"aud\":\"client-x\"}";
+            String encodedClaims = java.util.Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(claims.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return "header." + encodedClaims + ".signature";
+        }
+
+        @Test
+        @DisplayName("id_token sub claim is hashed (SHA-256/base64url) into oauth_subject")
+        void capturesSubjectFromIdToken() throws Exception {
+            Map<String, Object> data = new java.util.HashMap<>();
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "at-1");
+            tokenBody.put("id_token", idTokenWithSub("google-account-42"));
+
+            oAuth2Service.rememberProviderSubject(data, tokenBody, null, "at-1");
+
+            assertThat(data.get(OAuth2RevocationService.SUBJECT_FIELD))
+                    .isEqualTo(sha256Base64Url("google-account-42"));
+        }
+
+        @Test
+        @DisplayName("no id_token: falls back to the template's subjectUrl, POSTing the access token")
+        void fallsBackToSubjectUrlEndpoint() throws Exception {
+            Map<String, Object> data = new java.util.HashMap<>();
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "at-2"); // no id_token: openid was not requested
+
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode oauth2 =
+                    template.putObject("metadata").putObject("oauth2Config");
+            oauth2.put("subjectUrl", "https://oauth2.googleapis.com/tokeninfo");
+
+            com.fasterxml.jackson.databind.node.ObjectNode tokenInfo = objectMapper.createObjectNode();
+            tokenInfo.put("sub", "google-account-99");
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "restTemplate", mockRest);
+            when(mockRest.postForEntity(eq("https://oauth2.googleapis.com/tokeninfo"), any(), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenInfo, org.springframework.http.HttpStatus.OK));
+
+            oAuth2Service.rememberProviderSubject(data, tokenBody, template, "at-2");
+
+            verify(mockRest).postForEntity(eq("https://oauth2.googleapis.com/tokeninfo"), any(), eq(com.fasterxml.jackson.databind.JsonNode.class));
+            assertThat(data.get(OAuth2RevocationService.SUBJECT_FIELD))
+                    .isEqualTo(sha256Base64Url("google-account-99"));
+        }
+
+        @Test
+        @DisplayName("no id_token and no subjectUrl: no field written, connect is unaffected")
+        void noSourceAvailable_leavesFieldUnset() {
+            Map<String, Object> data = new java.util.HashMap<>();
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "at-3");
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            template.putObject("metadata").putObject("oauth2Config"); // no subjectUrl
+
+            oAuth2Service.rememberProviderSubject(data, tokenBody, template, "at-3");
+
+            assertThat(data).doesNotContainKey(OAuth2RevocationService.SUBJECT_FIELD);
+        }
+
+        @Test
+        @DisplayName("subjectUrl endpoint failure is swallowed: best effort, never breaks the connect")
+        void endpointFailureDoesNotThrow() {
+            Map<String, Object> data = new java.util.HashMap<>();
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "at-4");
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            template.putObject("metadata").putObject("oauth2Config").put("subjectUrl", "https://oauth2.googleapis.com/tokeninfo");
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "restTemplate", mockRest);
+            when(mockRest.postForEntity(anyString(), any(), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenThrow(new org.springframework.web.client.ResourceAccessException("timeout"));
+
+            assertThatCode(() -> oAuth2Service.rememberProviderSubject(data, tokenBody, template, "at-4"))
+                    .doesNotThrowAnyException();
+            assertThat(data).doesNotContainKey(OAuth2RevocationService.SUBJECT_FIELD);
+        }
+
+        @Test
+        @DisplayName("an id_token with a sub claim always wins over subjectUrl, so no needless network call is made")
+        void idTokenPreferredOverEndpoint() throws Exception {
+            Map<String, Object> data = new java.util.HashMap<>();
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("id_token", idTokenWithSub("from-id-token"));
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            template.putObject("metadata").putObject("oauth2Config").put("subjectUrl", "https://oauth2.googleapis.com/tokeninfo");
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "restTemplate", mockRest);
+
+            oAuth2Service.rememberProviderSubject(data, tokenBody, template, "at-5");
+
+            verifyNoInteractions(mockRest);
+            assertThat(data.get(OAuth2RevocationService.SUBJECT_FIELD))
+                    .isEqualTo(sha256Base64Url("from-id-token"));
         }
     }
 }

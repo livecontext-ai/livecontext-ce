@@ -13,6 +13,7 @@ import NavigationLoader from "@/components/NavigationLoader";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { AlertCircle } from "lucide-react";
 import { useTabPersistence } from "@/hooks/useTabPersistence";
+import { urlEnum, urlNullable, useUrlState } from "@/hooks/useUrlState";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -60,6 +61,8 @@ interface UserTool {
   pricingModel?: string;
   apiStatus?: string;
 }
+
+const API_TABS = ["overview", "tools", "monetize"];
 
 export default function ApiDetailPage() {
   const t = useTranslations('mcp.overview.page');
@@ -113,11 +116,24 @@ export default function ApiDetailPage() {
   const [configError, setConfigError] = useState<string | null>(null);
 
   // etats de navigation avec persistance
-  const [currentTab, setCurrentTab] = useTabPersistence({
+  const [storedTab, setStoredTab] = useTabPersistence({
     apiId,
     defaultTab: "overview",
-    validTabs: ["overview", "tools", "monetize"],
+    validTabs: API_TABS,
   });
+  // The address wins when it names a tab (a reload, a shared link); without one the tab last
+  // opened for this API, kept in localStorage, still applies. The search and the sub-view of
+  // the tab being left go with it.
+  const [urlTab, setUrlTab] = useUrlState<string | null>("tab", null, {
+    codec: urlNullable(urlEnum(API_TABS)),
+    history: "push",
+    clears: ["q", "view"],
+  });
+  const currentTab = urlTab ?? storedTab;
+  const setCurrentTab = (tabId: string) => {
+    setStoredTab(tabId);
+    setUrlTab(tabId);
+  };
 
   // etats pour les configurations
   const [apiConfig, setApiConfig] = useState({
